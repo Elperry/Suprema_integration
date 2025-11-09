@@ -99,7 +99,7 @@ module.exports = (services) => {
      */
     router.post('/:deviceId/connect', async (req, res) => {
         try {
-            const { deviceId } = req.params;
+            const deviceId = parseInt(req.params.deviceId);
             
             // Get device from database
             const devices = await services.connection.getAllDevicesFromDB();
@@ -134,7 +134,7 @@ module.exports = (services) => {
      */
     router.post('/:deviceId/disconnect', async (req, res) => {
         try {
-            const { deviceId } = req.params;
+            const deviceId = req.params.deviceId; // deviceId can be string or number depending on service
             await services.connection.disconnectDevice(deviceId);
 
             res.json({
@@ -155,7 +155,7 @@ module.exports = (services) => {
      */
     router.get('/:deviceId/info', async (req, res) => {
         try {
-            const { deviceId } = req.params;
+            const deviceId = req.params.deviceId; // deviceId can be string or number depending on service
             const info = await services.connection.getDeviceInfo(deviceId);
 
             res.json({
