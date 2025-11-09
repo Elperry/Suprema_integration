@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,75 +7,67 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Device table - Suprema gate devices
 model Device {
-  id               Int       @id @default(autoincrement()) @db.UnsignedInt
-  name             String?   @db.VarChar(191)
-  ip               String?   @db.VarChar(191)
-  username         String?   @db.VarChar(191)
-  password         String?   @db.VarChar(191)
-  loc              String?   @db.VarChar(191)
-  channel          Int?      @db.UnsignedTinyInt
-  last_event_sync  DateTime  @default(now())
-  last_user_sync   DateTime  @default(now())
-
-  // Relations
-  gateEvents       GateEvent[]
+  id              Int      @id @default(autoincrement()) @db.UnsignedInt
+  name            String?
+  ip              String?
+  username        String?
+  password        String?
+  loc             String?
+  channel         Int?     @db.UnsignedTinyInt
+  last_event_sync DateTime @default(now())
+  last_user_sync  DateTime @default(now())
+  port            Int?     @default(51211) @db.UnsignedInt
 
   @@map("device")
 }
 
-// Gate Events table - Access control events from devices
 model GateEvent {
-  id               Int       @id @default(autoincrement()) @db.UnsignedInt
-  employee_id      String?   @db.Char(20)
-  door_no          Int?      @db.UnsignedInt
-  gate_id          Int?      @db.UnsignedInt
-  loc              String?   @db.Char(15)
-  dir              String?   @db.Char(5)
-  etime            DateTime?
-  etime_truncated  String?   @db.VarChar(16)
-  d                DateTime? @db.Date
-  t                DateTime? @db.Time(0)
+  id              Int       @id @default(autoincrement()) @db.UnsignedInt
+  employee_id     String?   @db.Char(20)
+  door_no         Int?      @db.UnsignedInt
+  gate_id         Int?      @db.UnsignedInt
+  loc             String?   @db.Char(15)
+  dir             String?   @db.Char(5)
+  etime           DateTime?
+  etime_truncated String?   @db.VarChar(16)
+  d               DateTime? @db.Date
+  t               DateTime? @db.Time(0)
 
-  // Relations
-  device           Device?   @relation(fields: [gate_id], references: [id])
-
-  @@index([gate_id])
-  @@index([employee_id])
-  @@index([etime])
+  @@index([etime], map: "etime")
+  @@index([gate_id], map: "gate_id")
+  @@index([employee_id], map: "index_foreignkey_gateevents_employee")
   @@map("gateevents")
 }
 
-// User table - System users (for authentication)
 model User {
-  id           Int     @id @default(autoincrement())
-  username     String  @db.VarChar(300)
-  userpassword String  @db.VarChar(300)
-  displayname  String  @db.VarChar(300)
+  id           Int    @id @default(autoincrement())
+  username     String @db.VarChar(300)
+  userpassword String @db.VarChar(300)
+  displayname  String @db.VarChar(300)
 
   @@map("user")
 }
 
-// Temporary Access table - Guest/temporary access management
 model TempAccess {
   id            Int      @id @default(autoincrement()) @db.UnsignedInt
-  solutionnname String?  @db.VarChar(191)
-  person_name   String?  @db.VarChar(191)
-  date          String?  @db.VarChar(191)
-  qrcode        Float?   @db.Double
-  email         String?  @db.VarChar(191)
+  solutionnname String?
+  person_name   String?
+  date          String?
+  qrcode        Float?
+  email         String?
   drive_id      String?  @db.VarChar(100)
-  done          Boolean  @default(false) @db.TinyInt
+  done          Boolean  @default(false)
   host          String?  @db.VarChar(5000)
   ts            DateTime @default(now())
 
   @@map("tempaccess")
 }
 
-// Employee view - Read-only view for employee data
-// Note: This is a database view, not a table. Prisma doesn't support views natively,
-// so we model it as a table with @@ignore to prevent migrations
+// Employee view - Read-only database view
+// Using @@ignore because views cannot be managed by Prisma migrations
+// Access via raw queries: prisma.$queryRaw
+/// @ignore
 model Employee {
   id                      Int       @id @db.UnsignedInt
   username                String?   @db.VarChar(191)
@@ -131,8 +120,10 @@ model Employee {
   @@ignore
 }
 
-// AllEmployees view - Read-only view for all employees with extended data
-// Note: This is a database view, modeled with @@ignore to prevent migrations
+// AllEmployees view - Read-only database view for extended employee data
+// Using @@ignore because views cannot be managed by Prisma migrations
+// Access via raw queries: prisma.$queryRaw
+/// @ignore
 model AllEmployees {
   id                  Int       @id @db.UnsignedInt
   firstname           String?   @db.VarChar(191)
@@ -185,7 +176,9 @@ model AllEmployees {
   @@ignore
 }
 
-// MailTemplates Body view - Read-only view for email templates
+// MailTemplates Body view - Read-only database view
+// Using @@ignore because views cannot be managed by Prisma migrations
+/// @ignore
 model MailTemplatesBody {
   id   Int     @id
   dir  String? @db.VarChar(3)

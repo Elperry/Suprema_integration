@@ -380,45 +380,74 @@ class DatabaseManager {
     /**
      * Get all employees from view
      */
+    /**
+     * Get all employees from view with optional filters
+     * Uses raw SQL because employee/allemployees are database views with @@ignore
+     */
     async getAllEmployees(filters = {}) {
-        const where = {};
-        
-        if (filters.company_id) {
-            where.company_id = filters.company_id;
-        }
-        if (filters.suspend === false || filters.suspend === true) {
-            where.suspend = filters.suspend ? 'yes' : 'no';
-        }
+        try {
+            let whereConditions = [];
+            let params = [];
 
-        return await this.prisma.allEmployees.findMany({
-            where,
-            orderBy: { displayname: 'asc' }
-        });
+            if (filters.company_id) {
+                whereConditions.push('company_id = ?');
+                params.push(filters.company_id);
+            }
+            if (filters.suspend === false || filters.suspend === true) {
+                whereConditions.push('suspend = ?');
+                params.push(filters.suspend ? 'yes' : 'no');
+            }
+
+            let query = 'SELECT * FROM allemployees';
+            if (whereConditions.length > 0) {
+                query += ' WHERE ' + whereConditions.join(' AND ');
+            }
+            query += ' ORDER BY displayname ASC';
+
+            const employees = await this.prisma.$queryRawUnsafe(query, ...params);
+            return employees;
+        } catch (error) {
+            this.logger.error('Error fetching all employees:', error);
+            throw error;
+        }
     }
 
     /**
      * Get employee by ID from view
+     * Uses raw SQL because employee is a database view with @@ignore
      */
     async getEmployeeById(id) {
-        return await this.prisma.employee.findUnique({
-            where: { id }
-        });
+        try {
+            const employees = await this.prisma.$queryRawUnsafe(
+                'SELECT * FROM employee WHERE id = ? LIMIT 1',
+                id
+            );
+            return employees[0] || null;
+        } catch (error) {
+            this.logger.error('Error fetching employee by ID:', error);
+            throw error;
+        }
     }
 
     /**
      * Search employees by name or email
+     * Uses raw SQL because allemployees is a database view with @@ignore
      */
     async searchEmployees(searchTerm) {
-        return await this.prisma.allEmployees.findMany({
-            where: {
-                OR: [
-                    { displayname: { contains: searchTerm } },
-                    { email: { contains: searchTerm } },
-                    { fullname: { contains: searchTerm } }
-                ]
-            },
-            take: 50
-        });
+        try {
+            const employees = await this.prisma.$queryRawUnsafe(
+                `SELECT * FROM allemployees 
+                 WHERE displayname LIKE ? OR email LIKE ? OR fullname LIKE ?
+                 LIMIT 50`,
+                `%${searchTerm}%`,
+                `%${searchTerm}%`,
+                `%${searchTerm}%`
+            );
+            return employees;
+        } catch (error) {
+            this.logger.error('Error searching employees:', error);
+            throw error;
+        }
     }
 
     /**
