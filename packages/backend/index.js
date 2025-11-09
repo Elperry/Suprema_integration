@@ -17,6 +17,7 @@ const SupremaEventService = require('./src/services/eventService');
 const SupremaDoorService = require('./src/services/doorService');
 const SupremaTNAService = require('./src/services/tnaService');
 const SupremaBiometricService = require('./src/services/biometricService');
+const SyncService = require('./src/services/syncService');
 
 // Import database
 const DatabaseManager = require('./src/models/database');
@@ -29,6 +30,9 @@ const doorRoutes = require('./src/routes/doorRoutes');
 const tnaRoutes = require('./src/routes/tnaRoutes');
 const biometricRoutes = require('./src/routes/biometricRoutes');
 const hrRoutes = require('./src/routes/hrRoutes');
+const gateEventRoutes = require('./src/routes/gateEventRoutes');
+const employeeRoutes = require('./src/routes/employeeRoutes');
+const cardRoutes = require('./src/routes/cardRoutes');
 
 class SupremaHRIntegrationApp {
     constructor() {
@@ -70,20 +74,13 @@ class SupremaHRIntegrationApp {
             this.database = new DatabaseManager(this.logger);
             await this.database.initialize();
 
-            // Try to get gateway configuration from database first
-            let gatewayConfig = await this.database.getGatewayConfig();
-            
-            if (!gatewayConfig) {
-                // Fall back to environment variables if not in database
-                this.logger.info('Gateway configuration not found in database, using environment variables');
-                gatewayConfig = {
-                    ip: process.env.GATEWAY_IP || '127.0.0.1',
-                    port: parseInt(process.env.GATEWAY_PORT) || 4000,
-                    caFile: process.env.GATEWAY_CA_FILE || './cert/gateway/ca.crt'
-                };
-            } else {
-                this.logger.info(`Gateway configuration loaded from database: ${gatewayConfig.ip}:${gatewayConfig.port}`);
-            }
+            // Get gateway configuration from environment variables
+            this.logger.info('Using gateway configuration from environment variables');
+            const gatewayConfig = {
+                ip: process.env.GATEWAY_IP || '127.0.0.1',
+                port: parseInt(process.env.GATEWAY_PORT) || 4000,
+                caFile: process.env.GATEWAY_CA_FILE || './cert/gateway/ca.crt'
+            };
 
             const config = {
                 gateway: gatewayConfig
@@ -103,6 +100,9 @@ class SupremaHRIntegrationApp {
             this.services.door = new SupremaDoorService(this.services.connection, this.database);
             this.services.tna = new SupremaTNAService(this.services.connection, this.services.event, this.database);
             this.services.biometric = new SupremaBiometricService(this.services.connection, this.database);
+            
+            // Initialize sync service for event/user synchronization
+            this.services.sync = new SyncService(this.services);
 
             // Setup event listeners for HR integration
             this.setupHREventListeners();
@@ -191,7 +191,8 @@ class SupremaHRIntegrationApp {
                         event: !!this.services.event,
                         door: !!this.services.door,
                         tna: !!this.services.tna,
-                        biometric: !!this.services.biometric
+                        biometric: !!this.services.biometric,
+                        sync: !!this.services.sync
                     }
                 };
 
@@ -214,6 +215,9 @@ class SupremaHRIntegrationApp {
         this.app.use('/api/tna', tnaRoutes(this.services));
         this.app.use('/api/biometric', biometricRoutes(this.services));
         this.app.use('/api/hr', hrRoutes(this.services));
+        this.app.use('/api/gate-events', gateEventRoutes(this.database, this.logger));
+        this.app.use('/api/employees', employeeRoutes(this.database, this.logger));
+        this.app.use('/api/cards', cardRoutes(this.services));
 
         // API documentation
         this.app.get('/api', (req, res) => {
@@ -228,7 +232,10 @@ class SupremaHRIntegrationApp {
                     doors: '/api/doors',
                     tna: '/api/tna',
                     biometric: '/api/biometric',
-                    hr: '/api/hr'
+                    hr: '/api/hr',
+                    gateEvents: '/api/gate-events',
+                    employees: '/api/employees',
+                    cards: '/api/cards'
                 },
                 health: '/health'
             });

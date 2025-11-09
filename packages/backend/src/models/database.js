@@ -93,12 +93,11 @@ class DatabaseManager {
                 const initialDevices = [
                     {
                         name: 'Main Entrance',
-                        description: 'Primary building entrance device',
                         ip: '192.168.0.110',
-                        port: 51211,
-                        useSSL: false,
-                        location: 'Building A - Main Entrance',
-                        deviceType: 'BioStation 3'
+                        username: 'admin',
+                        password: 'admin',
+                        loc: 'Building A',
+                        channel: 1
                     }
                 ];
 
@@ -144,25 +143,28 @@ class DatabaseManager {
                 create: (data) => this.prisma.device.create({ data }),
                 count: (options = {}) => this.prisma.device.count(options),
                 getActiveDevices: () => this.prisma.device.findMany({
-                    where: {
-                        isActive: true,
-                        status: { in: ['active', 'maintenance'] }
-                    },
                     orderBy: { name: 'asc' }
                 }),
                 getConnectedDevices: () => this.prisma.device.findMany({
-                    where: {
-                        isConnected: true,
-                        isActive: true
-                    },
                     orderBy: { name: 'asc' }
                 }),
-                findByConnection: (ip, port) => this.prisma.device.findFirst({
-                    where: { ip, port }
-                }),
-                findBySerialNumber: (serialNumber) => this.prisma.device.findFirst({
-                    where: { serialNumber }
+                findByConnection: (ip) => this.prisma.device.findFirst({
+                    where: { ip }
                 })
+            };
+        }
+        if (modelName === 'GateEvent') {
+            return {
+                findAll: (options = {}) => this.prisma.gateEvent.findMany(options),
+                create: (data) => this.prisma.gateEvent.create({ data }),
+                count: (options = {}) => this.prisma.gateEvent.count(options)
+            };
+        }
+        if (modelName === 'User') {
+            return {
+                findAll: (options = {}) => this.prisma.user.findMany(options),
+                findOne: (options) => this.prisma.user.findFirst(options),
+                create: (data) => this.prisma.user.create({ data })
             };
         }
         return null;
@@ -205,20 +207,12 @@ class DatabaseManager {
 
     async getActiveDevices() {
         return await this.prisma.device.findMany({
-            where: {
-                isActive: true,
-                status: { in: ['active', 'maintenance'] }
-            },
             orderBy: { name: 'asc' }
         });
     }
 
     async getConnectedDevices() {
         return await this.prisma.device.findMany({
-            where: {
-                isConnected: true,
-                isActive: true
-            },
             orderBy: { name: 'asc' }
         });
     }
@@ -242,27 +236,20 @@ class DatabaseManager {
         });
     }
 
-    async findDeviceByConnection(ip, port) {
+    async findDeviceByConnection(ip) {
         return await this.prisma.device.findFirst({
-            where: { ip, port }
+            where: { ip }
         });
     }
 
-    async updateDeviceConnectionStatus(id, isConnected, error = null) {
-        const updateData = {
-            isConnected,
-            lastConnected: isConnected ? new Date() : undefined
-        };
+    async updateDeviceConnectionStatus(id, last_event_sync = null, last_user_sync = null) {
+        const updateData = {};
 
-        if (error) {
-            updateData.lastError = error.message || error;
-            updateData.errorCount = { increment: 1 };
-            updateData.status = 'error';
-        } else if (isConnected) {
-            updateData.lastError = null;
-            updateData.errorCount = 0;
-            updateData.status = 'active';
-            updateData.connectionRetries = 0;
+        if (last_event_sync) {
+            updateData.last_event_sync = last_event_sync;
+        }
+        if (last_user_sync) {
+            updateData.last_user_sync = last_user_sync;
         }
 
         return await this.prisma.device.update({
@@ -271,141 +258,178 @@ class DatabaseManager {
         });
     }
 
-    async incrementDeviceRetries(id) {
-        const device = await this.prisma.device.update({
-            where: { id },
-            data: {
-                connectionRetries: { increment: 1 }
-            }
-        });
-
-        if (device.connectionRetries >= device.maxRetries) {
-            await this.prisma.device.update({
-                where: { id },
-                data: { status: 'error' }
-            });
-        }
-
-        return device.connectionRetries;
-    }
-
-    async resetDeviceRetries(id) {
-        return await this.prisma.device.update({
-            where: { id },
-            data: { connectionRetries: 0 }
-        });
-    }
-
-    // ================ SYSTEM CONFIGURATION ================
+    // ================ GATE EVENTS ================
 
     /**
-     * Get gateway configuration from database
-     * Returns null if not configured in database
+     * Add gate event
      */
-    async getGatewayConfig() {
-        try {
-            const configs = await this.prisma.systemConfig.findMany({
-                where: {
-                    category: 'gateway',
-                    isActive: true
-                }
-            });
+    async addGateEvent(eventData) {
+        return await this.prisma.gateEvent.create({
+            data: eventData
+        });
+    }
 
-            if (configs.length === 0) {
-                return null; // No gateway config in database
-            }
-
-            // Convert array of key-value pairs to object
-            const config = {};
-            configs.forEach(item => {
-                config[item.key] = item.value;
-            });
-
-            return {
-                ip: config.gateway_ip || config.ip,
-                port: config.gateway_port ? parseInt(config.gateway_port) : (config.port ? parseInt(config.port) : null),
-                caFile: config.gateway_ca_file || config.caFile || null
+    /**
+     * Get gate events with filters
+     */
+    async getGateEvents(filters = {}) {
+        const where = {};
+        
+        if (filters.employee_id) {
+            where.employee_id = filters.employee_id;
+        }
+        if (filters.gate_id) {
+            where.gate_id = filters.gate_id;
+        }
+        if (filters.startDate && filters.endDate) {
+            where.etime = {
+                gte: new Date(filters.startDate),
+                lte: new Date(filters.endDate)
             };
-        } catch (error) {
-            this.logger.error('Error getting gateway config from database:', error);
-            return null;
         }
-    }
 
-    /**
-     * Save gateway configuration to database
-     */
-    async saveGatewayConfig(ip, port, caFile = null) {
-        try {
-            const configs = [
-                { key: 'gateway_ip', value: ip, category: 'gateway', description: 'Gateway server IP address' },
-                { key: 'gateway_port', value: port.toString(), category: 'gateway', description: 'Gateway server port' }
-            ];
-
-            if (caFile) {
-                configs.push({ 
-                    key: 'gateway_ca_file', 
-                    value: caFile, 
-                    category: 'gateway', 
-                    description: 'Gateway TLS certificate file path' 
-                });
+        return await this.prisma.gateEvent.findMany({
+            where,
+            orderBy: { etime: 'desc' },
+            take: filters.limit || 100,
+            include: {
+                device: true
             }
+        });
+    }
 
-            for (const config of configs) {
-                await this.prisma.systemConfig.upsert({
-                    where: { key: config.key },
-                    update: { 
-                        value: config.value,
-                        updatedAt: new Date()
-                    },
-                    create: config
-                });
+    /**
+     * Get latest gate event for employee
+     */
+    async getLatestEmployeeEvent(employee_id) {
+        return await this.prisma.gateEvent.findFirst({
+            where: { employee_id },
+            orderBy: { etime: 'desc' }
+        });
+    }
+
+    // ================ USER MANAGEMENT ================
+
+    /**
+     * Authenticate user
+     */
+    async authenticateUser(username, password) {
+        return await this.prisma.user.findFirst({
+            where: {
+                username,
+                userpassword: password
             }
-
-            this.logger.info(`Gateway configuration saved: ${ip}:${port}`);
-            return true;
-        } catch (error) {
-            this.logger.error('Error saving gateway config:', error);
-            throw error;
-        }
+        });
     }
 
     /**
-     * Get system configuration value
+     * Get all system users
      */
-    async getConfig(key) {
-        try {
-            const config = await this.prisma.systemConfig.findUnique({
-                where: { key, isActive: true }
-            });
-            return config ? config.value : null;
-        } catch (error) {
-            this.logger.error(`Error getting config ${key}:`, error);
-            return null;
-        }
+    async getAllUsers() {
+        return await this.prisma.user.findMany({
+            select: {
+                id: true,
+                username: true,
+                displayname: true
+            }
+        });
     }
 
     /**
-     * Set system configuration value
+     * Add new user
      */
-    async setConfig(key, value, category = 'system', description = null) {
+    async addUser(userData) {
+        return await this.prisma.user.create({
+            data: userData
+        });
+    }
+
+    // ================ TEMPORARY ACCESS ================
+
+    /**
+     * Create temporary access
+     */
+    async createTempAccess(accessData) {
+        return await this.prisma.tempAccess.create({
+            data: accessData
+        });
+    }
+
+    /**
+     * Get pending temporary access entries
+     */
+    async getPendingTempAccess() {
+        return await this.prisma.tempAccess.findMany({
+            where: { done: false },
+            orderBy: { ts: 'desc' }
+        });
+    }
+
+    /**
+     * Mark temporary access as done
+     */
+    async markTempAccessDone(id) {
+        return await this.prisma.tempAccess.update({
+            where: { id },
+            data: { done: true }
+        });
+    }
+
+    // ================ EMPLOYEE QUERIES (Views) ================
+
+    /**
+     * Get all employees from view
+     */
+    async getAllEmployees(filters = {}) {
+        const where = {};
+        
+        if (filters.company_id) {
+            where.company_id = filters.company_id;
+        }
+        if (filters.suspend === false || filters.suspend === true) {
+            where.suspend = filters.suspend ? 'yes' : 'no';
+        }
+
+        return await this.prisma.allEmployees.findMany({
+            where,
+            orderBy: { displayname: 'asc' }
+        });
+    }
+
+    /**
+     * Get employee by ID from view
+     */
+    async getEmployeeById(id) {
+        return await this.prisma.employee.findUnique({
+            where: { id }
+        });
+    }
+
+    /**
+     * Search employees by name or email
+     */
+    async searchEmployees(searchTerm) {
+        return await this.prisma.allEmployees.findMany({
+            where: {
+                OR: [
+                    { displayname: { contains: searchTerm } },
+                    { email: { contains: searchTerm } },
+                    { fullname: { contains: searchTerm } }
+                ]
+            },
+            take: 50
+        });
+    }
+
+    /**
+     * Test database connection
+     */
+    async testConnection() {
         try {
-            return await this.prisma.systemConfig.upsert({
-                where: { key },
-                update: { 
-                    value,
-                    updatedAt: new Date()
-                },
-                create: {
-                    key,
-                    value,
-                    category,
-                    description
-                }
-            });
+            await this.prisma.$queryRaw`SELECT 1`;
+            return { success: true, message: 'Database connection is healthy' };
         } catch (error) {
-            this.logger.error(`Error setting config ${key}:`, error);
-            throw error;
+            return { success: false, message: error.message };
         }
     }
 }

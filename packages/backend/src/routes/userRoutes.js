@@ -328,5 +328,282 @@ module.exports = (services) => {
         }
     });
 
+    /**
+     * Get access groups for users
+     * GET /api/users/:deviceId/access-groups
+     * Query: userIds (comma-separated)
+     */
+    router.get('/:deviceId/access-groups', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { userIds } = req.query;
+
+            if (!userIds) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'userIds query parameter is required'
+                });
+            }
+
+            const userIdArray = userIds.split(',');
+            const accessGroups = await services.user.getAccessGroups(deviceId, userIdArray);
+
+            res.json({
+                success: true,
+                data: accessGroups
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Set access groups for users
+     * POST /api/users/:deviceId/access-groups
+     * Body: { userAccessGroups: [{userID, accessGroupIDs}] }
+     */
+    router.post('/:deviceId/access-groups', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { userAccessGroups } = req.body;
+
+            if (!userAccessGroups || !Array.isArray(userAccessGroups)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'userAccessGroups array is required'
+                });
+            }
+
+            await services.user.setAccessGroups(deviceId, userAccessGroups);
+
+            res.json({
+                success: true,
+                message: `Set access groups for ${userAccessGroups.length} users`
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Enroll users to multiple devices
+     * POST /api/users/enroll-multi
+     * Body: { deviceIds: [], users: [] }
+     */
+    router.post('/enroll-multi', async (req, res) => {
+        try {
+            const { deviceIds, users } = req.body;
+
+            if (!deviceIds || !Array.isArray(deviceIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'deviceIds array is required'
+                });
+            }
+
+            if (!users || !Array.isArray(users)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'users array is required'
+                });
+            }
+
+            await services.user.enrollUsersMulti(deviceIds, users);
+
+            res.json({
+                success: true,
+                message: `Enrolled ${users.length} users to ${deviceIds.length} devices`
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Update users on multiple devices
+     * PUT /api/users/update-multi
+     * Body: { deviceIds: [], users: [] }
+     */
+    router.put('/update-multi', async (req, res) => {
+        try {
+            const { deviceIds, users } = req.body;
+
+            if (!deviceIds || !Array.isArray(deviceIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'deviceIds array is required'
+                });
+            }
+
+            if (!users || !Array.isArray(users)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'users array is required'
+                });
+            }
+
+            await services.user.updateUsersMulti(deviceIds, users);
+
+            res.json({
+                success: true,
+                message: `Updated ${users.length} users on ${deviceIds.length} devices`
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Delete users from multiple devices
+     * DELETE /api/users/delete-multi
+     * Body: { deviceIds: [], userIds: [] }
+     */
+    router.delete('/delete-multi', async (req, res) => {
+        try {
+            const { deviceIds, userIds } = req.body;
+
+            if (!deviceIds || !Array.isArray(deviceIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'deviceIds array is required'
+                });
+            }
+
+            if (!userIds || !Array.isArray(userIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'userIds array is required'
+                });
+            }
+
+            await services.user.deleteUsersMulti(deviceIds, userIds);
+
+            res.json({
+                success: true,
+                message: `Deleted ${userIds.length} users from ${deviceIds.length} devices`
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Update user information on device
+     * PUT /api/users/:deviceId/:userId
+     * Body: { userInfo: {...} }
+     */
+    router.put('/:deviceId/:userId', async (req, res) => {
+        try {
+            const { deviceId, userId } = req.params;
+            const { userInfo } = req.body;
+
+            if (!userInfo) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'userInfo object is required'
+                });
+            }
+
+            await services.user.updateUser(deviceId, { ...userInfo, userID: userId });
+
+            res.json({
+                success: true,
+                message: `User ${userId} updated successfully`
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get specific user details from device
+     * GET /api/users/:deviceId/user/:userId
+     */
+    router.get('/:deviceId/user/:userId', async (req, res) => {
+        try {
+            const { deviceId, userId } = req.params;
+            const users = await services.user.getUsers(deviceId, [userId]);
+
+            if (!users || users.length === 0) {
+                return res.status(404).json({
+                    error: 'Not Found',
+                    message: 'User not found'
+                });
+            }
+
+            res.json({
+                success: true,
+                data: users[0]
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Sync users from device to database
+     * POST /api/users/:deviceId/sync
+     */
+    router.post('/:deviceId/sync', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const result = await services.user.syncUsersToDatabase(deviceId);
+
+            res.json({
+                success: true,
+                message: 'Users synchronized to database',
+                synced: result.synced,
+                deviceId: deviceId
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Sync users from all devices
+     * POST /api/users/sync-all
+     */
+    router.post('/sync-all', async (req, res) => {
+        try {
+            const results = await services.user.syncAllDevicesUsers();
+
+            res.json({
+                success: true,
+                message: 'All devices users synchronized',
+                results: results
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
     return router;
 };
