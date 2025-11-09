@@ -1,5 +1,5 @@
-const event = require('../../event');
-const util = require('../../util');
+import event from '../../event.js';
+import util from '../../util.js';
 
 const EVENT_QUEUE_SIZE = 16;
 

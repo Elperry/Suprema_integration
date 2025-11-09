@@ -1,4 +1,4 @@
-const finger = require('./finger');
+import finger from './finger.js';
 
 module.exports.initClient = finger.initClient;
 module.exports.scan = finger.scan;

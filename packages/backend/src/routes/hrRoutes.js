@@ -3,10 +3,10 @@
  * REST API endpoints for HR system integration
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Sync users from HR system to Suprema devices
      * POST /api/hr/users/sync

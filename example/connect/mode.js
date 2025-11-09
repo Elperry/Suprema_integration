@@ -1,5 +1,5 @@
-const connectMessage = require('../../biostar/service/connect_pb');
-const connect = require('./connect');
+import connectMessage from '../../biostar/service/connect_pb.js';
+import connect from './connect.js';
 
 function setConnectionMode(deviceIDs, mode) {
   var req = new connectMessage.SetConnectionModeMultiRequest();

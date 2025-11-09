@@ -1,7 +1,7 @@
-const apb = require('../apb');
-const menu = require('../../cli/menu');
-const util = require('../../util');
-const action = require('../../action');
+import apb from '../apb.js';
+import menu from '../../cli/menu.js';
+import util from '../../util.js';
+import action from '../../action.js';
 
 const TEST_ZONE_ID = 1;
 

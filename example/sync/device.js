@@ -1,5 +1,5 @@
-const config = require('./config');
-const connect = require('../connect');
+import config from './config.js';
+import connect from '../connect.js';
 
 const QUEUE_SIZE = 16;
 

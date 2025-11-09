@@ -3,8 +3,8 @@
  * Prisma setup for device and HR data management
  */
 
-const { PrismaClient } = require('@prisma/client');
-const winston = require('winston');
+import { PrismaClient } from '@prisma/client';
+import winston from 'winston';
 
 class DatabaseManager {
     constructor(logger = null) {
@@ -516,4 +516,4 @@ class DatabaseManager {
     }
 }
 
-module.exports = DatabaseManager;
+export default DatabaseManager;

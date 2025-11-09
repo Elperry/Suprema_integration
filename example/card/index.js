@@ -1,4 +1,4 @@
-const card = require('./card');
+import card from './card.js';
 
 module.exports.initClient = card.initClient;
 module.exports.scan = card.scan;

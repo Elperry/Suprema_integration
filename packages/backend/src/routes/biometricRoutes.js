@@ -3,10 +3,10 @@
  * REST API endpoints for biometric operations and template management
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Scan fingerprint
      * POST /api/biometric/scan/fingerprint

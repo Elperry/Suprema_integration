@@ -1,5 +1,5 @@
-const connectMasterMessage = require('../../biostar/service/connect_master_pb');
-const connectMasterService = require('../../biostar/service/connect_master_grpc_pb');
+import connectMasterMessage from '../../biostar/service/connect_master_pb.js';
+import connectMasterService from '../../biostar/service/connect_master_grpc_pb.js';
 
 var connMasterClient = null;
 

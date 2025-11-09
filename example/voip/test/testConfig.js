@@ -1,5 +1,5 @@
-const voip = require('../voip');
-const menu = require('../../cli/menu');
+import voip from '../voip.js';
+import menu from '../../cli/menu.js';
 
 async function test(devID, config) {
   try {

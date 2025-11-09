@@ -1,4 +1,4 @@
-const thermal = require('./thermal');
+import thermal from './thermal.js';
 
 module.exports.initClient = thermal.initClient;
 module.exports.getConfig = thermal.getConfig;

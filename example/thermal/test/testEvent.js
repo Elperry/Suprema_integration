@@ -1,6 +1,6 @@
-const event = require('../../event');
-const thermal = require('../thermal');
-const util = require('../../util');
+import event from '../../event.js';
+import thermal from '../thermal.js';
+import util from '../../util.js';
 
 const EVENT_QUEUE_SIZE = 16;
 

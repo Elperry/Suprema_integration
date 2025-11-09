@@ -1,4 +1,4 @@
-const display = require('../display');
+import display from '../display.js';
 
 async function test(devID) {
   try {

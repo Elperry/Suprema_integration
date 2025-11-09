@@ -1,4 +1,4 @@
-const access = require('./access');
+import access from './access.js';
 
 module.exports.initClient = access.initClient;
 module.exports.getClient = access.getClient;

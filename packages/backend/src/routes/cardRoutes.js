@@ -3,10 +3,10 @@
  * REST API endpoints for card management, scanning, blacklist, and configuration
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Scan card from device
      * POST /api/cards/scan

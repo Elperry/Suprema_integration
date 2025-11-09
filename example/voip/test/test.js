@@ -1,8 +1,8 @@
-const grpc = require('grpc');
-const fs = require('fs');
-const connect = require('../../connect');
-const voip = require('../voip');
-const testConfig = require('./testConfig');
+import grpc from '@grpc/grpc-js';
+import fs from 'fs';
+import connect from '../../connect.js';
+import voip from '../voip.js';
+import testConfig from './testConfig.js';
 
 const GATEWAY_CA_FILE = '../../../../cert/gateway/192.168.28.111/ca.crt';
 const GATEWAY_IP = '192.168.28.111';

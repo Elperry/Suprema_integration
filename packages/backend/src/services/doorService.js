@@ -3,8 +3,12 @@
  * Handles door configuration, access control, scheduling, and manual door operations
  */
 
-const EventEmitter = require('events');
-const winston = require('winston');
+import { EventEmitter } from 'events';
+import winston from 'winston';
+import { createRequire } from 'module';
+
+// Create require function for CommonJS modules
+const require = createRequire(import.meta.url);
 
 // Import protobuf services (these would come from the G-SDK)
 const doorService = require('../../biostar/service/door_grpc_pb');
@@ -887,4 +891,4 @@ class SupremaDoorService extends EventEmitter {
     }
 }
 
-module.exports = SupremaDoorService;
+export default SupremaDoorService;

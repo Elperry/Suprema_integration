@@ -1,5 +1,5 @@
-const wiegand = require('../wiegand');
-const menu = require('../../cli/menu');
+import wiegand from '../wiegand.js';
+import menu from '../../cli/menu.js';
 
 async function test(devID) {
   try {

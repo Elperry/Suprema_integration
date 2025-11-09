@@ -1,5 +1,5 @@
-const action = require('../action');
-const menu = require('../../cli/menu');
+import action from '../action.js';
+import menu from '../../cli/menu.js';
 
 const BS2_EVENT_VERIFY_FAIL = 0x1100;
 const BS2_EVENT_IDENTIFY_FAIL = 0x1400;

@@ -1,4 +1,4 @@
-const rtsp = require('./rtsp');
+import rtsp from './rtsp.js';
 
 module.exports.initClient = rtsp.initClient;
 module.exports.getConfig = rtsp.getConfig;

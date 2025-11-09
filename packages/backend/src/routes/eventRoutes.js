@@ -3,10 +3,10 @@
  * REST API endpoints for event monitoring and log management
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Subscribe to real-time events
      * POST /api/events/subscribe

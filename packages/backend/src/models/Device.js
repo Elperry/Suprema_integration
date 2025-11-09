@@ -3,7 +3,7 @@
  * Database model for managing Suprema device configurations
  */
 
-const { DataTypes } = require('sequelize');
+import { DataTypes } from 'sequelize';
 
 module.exports = (sequelize) => {
     const Device = sequelize.define('Device', {

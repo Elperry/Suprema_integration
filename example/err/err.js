@@ -1,5 +1,5 @@
-const errMessage = require('../../biostar/service/err_pb');
-const grpcExt= require('../../biostar/service/ext/status_pb.js');
+import errMessage from '../../biostar/service/err_pb.js';
+import grpcExt from '../../biostar/service/ext/status_pb.js';
 
 function getMultiError(err) {
   const buffer = err.metadata.get('grpc-status-details-bin')[0];

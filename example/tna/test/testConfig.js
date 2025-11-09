@@ -1,5 +1,5 @@
-const tna = require('../tna');
-const menu = require('../../cli/menu');
+import tna from '../tna.js';
+import menu from '../../cli/menu.js';
 
 async function test(devID) {
   try {

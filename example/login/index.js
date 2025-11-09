@@ -1,4 +1,4 @@
-const login = require('./login');
+import login from './login.js';
 
 module.exports.initClient = login.initClient;
 module.exports.login = login.login;

@@ -1,7 +1,7 @@
-const mainMenu = require('./mainMenu');
-const deviceMenu = require('./deviceMenu');
-const asyncMenu = require('./asyncMenu');
-const acceptMenu = require('./acceptMenu');
+import mainMenu from './mainMenu.js';
+import deviceMenu from './deviceMenu.js';
+import asyncMenu from './asyncMenu.js';
+import acceptMenu from './acceptMenu.js';
 
 module.exports.showMainMenu = mainMenu.showMenu;
 module.exports.setSubChannel = mainMenu.setSubChannel;

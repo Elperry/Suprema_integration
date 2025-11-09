@@ -1,5 +1,5 @@
-const faceMessage = require('../../biostar/service/face_pb');
-const faceService = require('../../biostar/service/face_grpc_pb');
+import faceMessage from '../../biostar/service/face_pb.js';
+import faceService from '../../biostar/service/face_grpc_pb.js';
 
 var faceClient = null;
 

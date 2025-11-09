@@ -1,8 +1,8 @@
-const fs = require('fs');
-const util = require('util');
-const eventMessage = require('../../biostar/service/event_pb');
-const eventService = require('../../biostar/service/event_grpc_pb');
-const { resolve } = require('dns');
+import fs from 'fs';
+import util from 'util';
+import eventMessage from '../../biostar/service/event_pb.js';
+import eventService from '../../biostar/service/event_grpc_pb.js';
+import { resolve } from 'dns';
 
 var eventClient = null;
 var codeMap = null;

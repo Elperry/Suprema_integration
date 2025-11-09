@@ -3,10 +3,10 @@
  * API endpoints for managing gate access events
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (database, logger) => {
+export default (database, logger) => {
     /**
      * GET /api/gate-events
      * Get gate events with optional filters

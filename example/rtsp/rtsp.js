@@ -1,5 +1,5 @@
-const rtspMessage = require('../../biostar/service/rtsp_pb');
-const rtspService = require('../../biostar/service/rtsp_grpc_pb');
+import rtspMessage from '../../biostar/service/rtsp_pb.js';
+import rtspService from '../../biostar/service/rtsp_grpc_pb.js';
 
 var rtspClient = null;
 

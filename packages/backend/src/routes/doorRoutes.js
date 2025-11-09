@@ -3,10 +3,10 @@
  * REST API endpoints for door management and access control
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Get all doors
      * GET /api/doors

@@ -1,5 +1,5 @@
-const thermal = require('../thermal');
-const menu = require('../../cli/menu');
+import thermal from '../thermal.js';
+import menu from '../../cli/menu.js';
 
 async function test(devID, config) {
   try {

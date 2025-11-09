@@ -3,8 +3,8 @@
  * Enhanced logging helpers and formatters
  */
 
-const winston = require('winston');
-const path = require('path');
+import winston from 'winston';
+import path from 'path';
 
 /**
  * Create application logger with custom configuration

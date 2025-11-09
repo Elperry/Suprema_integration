@@ -1,7 +1,7 @@
-const status = require('../status');
-const action = require('../../action');
-const device = require('../../device');
-const menu = require('../../cli/menu');
+import status from '../status.js';
+import action from '../../action.js';
+import device from '../../device.js';
+import menu from '../../cli/menu.js';
 
 async function test(devID) {
   try {

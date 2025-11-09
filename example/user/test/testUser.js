@@ -1,8 +1,8 @@
-const user = require('../user');
-const device = require('../../device');
-const auth = require('../../auth');
-const util = require('../../util');
-const util_ = require('util');
+import user from '../user.js';
+import device from '../../device.js';
+import auth from '../../auth.js';
+import util from '../../util.js';
+import util_ from 'util';
 
 async function enrollUser(devID, extendedAuthSupported) {
   try {

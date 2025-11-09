@@ -1,7 +1,7 @@
-const menu = require('../../../cli/menu');
-const util = require('../../../util');
-const connect = require('../../../connect');
-const mainMenu = require('./mainMenu');
+import menu from '../../../cli/menu.js';
+import util from '../../../util.js';
+import connect from '../../../connect.js';
+import mainMenu from './mainMenu.js';
 
 async function showPendingList() {
   try {

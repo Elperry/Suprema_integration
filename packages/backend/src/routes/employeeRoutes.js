@@ -3,10 +3,10 @@
  * API endpoints for querying employee data from views
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (database, logger) => {
+export default (database, logger) => {
     /**
      * GET /api/employees
      * Get all employees with optional filters
