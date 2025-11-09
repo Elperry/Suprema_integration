@@ -10,6 +10,7 @@ import Users from './components/Users'
 import CardScanning from './components/CardScanning'
 import Events from './components/Events'
 import Settings from './components/Settings'
+import Debugger from './components/Debugger'
 import {API_CONFIG,API_ENDPOINTS } from './config/constants'
 
 function App() {
@@ -73,6 +74,10 @@ function App() {
             <span className="icon">📋</span>
             Events
           </Link>
+          <Link to="/debugger" className="nav-link">
+            <span className="icon">🔧</span>
+            Debugger
+          </Link>
           <Link to="/settings" className="nav-link">
             <span className="icon">⚙️</span>
             Settings
@@ -89,6 +94,7 @@ function App() {
               <Route path="/users" element={<Users />} />
               <Route path="/scanning" element={<CardScanning />} />
               <Route path="/events" element={<Events />} />
+              <Route path="/debugger" element={<Debugger />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           )}

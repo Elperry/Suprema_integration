@@ -114,12 +114,12 @@ class SupremaConnectionService extends EventEmitter {
             return new Promise((resolve, reject) => {
                 this.connClient.searchDevice(req, (err, response) => {
                     if (err) {
-                        this.logger.error('Device search failed:', err);
+                        this.logger.error('Cannot search device:', err);
                         reject(err);
                         return;
                     }
 
-                    const devices = response.toObject().deviceinfosList;
+                    const devices = response.getDeviceinfosList();
                     this.logger.info(`Found ${devices.length} devices`);
                     this.emit('devices:discovered', devices);
                     resolve(devices);
@@ -196,7 +196,7 @@ class SupremaConnectionService extends EventEmitter {
             return new Promise((resolve, reject) => {
                 this.connClient.disconnect(req, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to disconnect device ${deviceId}:`, err);
+                        this.logger.error(`Cannot disconnect: ${deviceId}`, err);
                         reject(err);
                         return;
                     }
@@ -209,6 +209,38 @@ class SupremaConnectionService extends EventEmitter {
             });
         } catch (error) {
             this.logger.error('Error disconnecting device:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Disconnect all devices
+     * @returns {Promise<boolean>} Success status
+     */
+    async disconnectAll() {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.DisconnectAllRequest();
+
+            return new Promise((resolve, reject) => {
+                this.connClient.disconnectAll(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot disconnect all:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.connectedDevices.clear();
+                    this.logger.info('Disconnected all devices');
+                    this.emit('devices:disconnectedAll');
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error disconnecting all devices:', error);
             throw error;
         }
     }
@@ -228,12 +260,12 @@ class SupremaConnectionService extends EventEmitter {
             return new Promise((resolve, reject) => {
                 this.connClient.getDeviceList(req, (err, response) => {
                     if (err) {
-                        this.logger.error('Failed to get device list:', err);
+                        this.logger.error('Cannot get device list:', err);
                         reject(err);
                         return;
                     }
 
-                    const devices = response.toObject().deviceinfosList;
+                    const devices = response.getDeviceinfosList();
                     resolve(devices);
                 });
             });
@@ -260,12 +292,12 @@ class SupremaConnectionService extends EventEmitter {
             return new Promise((resolve, reject) => {
                 this.deviceClient.getInfo(req, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to get device info for ${deviceId}:`, err);
+                        this.logger.error(`Cannot get the device info: ${deviceId}`, err);
                         reject(err);
                         return;
                     }
 
-                    const deviceInfo = response.toObject().info;
+                    const deviceInfo = response.getInfo();
                     resolve(deviceInfo);
                 });
             });
@@ -286,18 +318,18 @@ class SupremaConnectionService extends EventEmitter {
                 throw new Error('Gateway not connected');
             }
 
-            const req = new deviceMessage.GetCapabilityInfoRequest();
+            const req = new deviceMessage.GetCapabilityRequest();
             req.setDeviceid(deviceId);
 
             return new Promise((resolve, reject) => {
-                this.deviceClient.getCapabilityInfo(req, (err, response) => {
+                this.deviceClient.getCapability(req, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to get device capabilities for ${deviceId}:`, err);
+                        this.logger.error(`Cannot get the device capability: ${deviceId}`, err);
                         reject(err);
                         return;
                     }
 
-                    const capabilities = response.toObject().capinfo;
+                    const capabilities = response.getDevicecapability();
                     resolve(capabilities);
                 });
             });
@@ -335,6 +367,283 @@ class SupremaConnectionService extends EventEmitter {
             });
         } catch (error) {
             this.logger.error('Error enabling device SSL:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Enable SSL for multiple devices
+     * @param {Array<string>} deviceIds - Array of device IDs
+     * @returns {Promise<boolean>} Success status
+     */
+    async enableSSLMulti(deviceIds) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.EnableSSLMultiRequest();
+            req.setDeviceidsList(deviceIds);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.enableSSLMulti(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot enable SSL:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`SSL enabled for ${deviceIds.length} devices`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error enabling SSL for multiple devices:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Disable SSL for multiple devices
+     * @param {Array<string>} deviceIds - Array of device IDs
+     * @returns {Promise<boolean>} Success status
+     */
+    async disableSSLMulti(deviceIds) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.DisableSSLMultiRequest();
+            req.setDeviceidsList(deviceIds);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.disableSSLMulti(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot disable SSL:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`SSL disabled for ${deviceIds.length} devices`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error disabling SSL for multiple devices:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Add async connection for devices
+     * @param {Array<Object>} connInfos - Array of connection info objects
+     * @returns {Promise<boolean>} Success status
+     */
+    async addAsyncConnection(connInfos) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.AddAsyncConnectionRequest();
+            req.setConnectinfosList(connInfos);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.addAsyncConnection(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot add async connection:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Added async connection for ${connInfos.length} devices`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error adding async connection:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete async connection for devices
+     * @param {Array<string>} deviceIds - Array of device IDs
+     * @returns {Promise<boolean>} Success status
+     */
+    async deleteAsyncConnection(deviceIds) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.DeleteAsyncConnectionRequest();
+            req.setDeviceidsList(deviceIds);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.deleteAsyncConnection(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot delete async connection:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Deleted async connection for ${deviceIds.length} devices`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error deleting async connection:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set connection mode for multiple devices
+     * @param {Array<string>} deviceIds - Array of device IDs
+     * @param {number} mode - Connection mode
+     * @returns {Promise<boolean>} Success status
+     */
+    async setConnectionMode(deviceIds, mode) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.SetConnectionModeMultiRequest();
+            req.setDeviceidsList(deviceIds);
+            req.setConnectionmode(mode);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.setConnectionModeMulti(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot set the connection mode:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Connection mode set for ${deviceIds.length} devices`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting connection mode:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get pending device list
+     * @returns {Promise<Array>} List of pending devices
+     */
+    async getPendingList() {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.GetPendingListRequest();
+
+            return new Promise((resolve, reject) => {
+                this.connClient.getPendingList(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot get the pending list:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    const pendingDevices = response.getDeviceinfosList();
+                    resolve(pendingDevices);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting pending list:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get accept filter
+     * @returns {Promise<Object>} Accept filter
+     */
+    async getAcceptFilter() {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.GetAcceptFilterRequest();
+
+            return new Promise((resolve, reject) => {
+                this.connClient.getAcceptFilter(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot get the accept filter:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    const filter = response.getFilter();
+                    resolve(filter);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting accept filter:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set accept filter
+     * @param {Object} filter - Accept filter configuration
+     * @returns {Promise<boolean>} Success status
+     */
+    async setAcceptFilter(filter) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.SetAcceptFilterRequest();
+            req.setFilter(filter);
+
+            return new Promise((resolve, reject) => {
+                this.connClient.setAcceptFilter(req, (err, response) => {
+                    if (err) {
+                        this.logger.error('Cannot set the accept filter:', err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info('Accept filter updated');
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting accept filter:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Subscribe to device status changes
+     * @param {number} queueSize - Queue size for status events
+     * @returns {Stream} Status subscription stream
+     */
+    subscribeStatus(queueSize = 100) {
+        try {
+            if (!this.connClient) {
+                throw new Error('Gateway not connected');
+            }
+
+            const req = new connectMessage.SubscribeStatusRequest();
+            req.setQueuesize(queueSize);
+
+            const stream = this.connClient.subscribeStatus(req);
+            this.logger.info('Subscribed to device status changes');
+            return stream;
+        } catch (error) {
+            this.logger.error('Error subscribing to status:', error);
             throw error;
         }
     }
