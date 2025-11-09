@@ -150,11 +150,33 @@ class SupremaConnectionService extends EventEmitter {
             const req = new connectMessage.ConnectRequest();
             req.setConnectinfo(connInfo);
 
+            // Set gRPC deadline (timeout) - default 30 seconds
+            const timeout = deviceConfig.timeout || 30000; // milliseconds
+            const deadline = new Date();
+            deadline.setMilliseconds(deadline.getMilliseconds() + timeout);
+
             return new Promise((resolve, reject) => {
-                this.connClient.connect(req, (err, response) => {
+                this.connClient.connect(req, { deadline }, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to connect to device ${deviceConfig.ip}:`, err);
-                        reject(err);
+                        this.logger.error(`Failed to connect to device ${deviceConfig.ip}:${deviceConfig.port}`, {
+                            error: err.message,
+                            code: err.code,
+                            details: err.details
+                        });
+                        
+                        // Enhanced error handling for common issues
+                        if (err.code === 14 || err.message.includes('UNAVAILABLE')) {
+                            const errorMsg = `Device unreachable at ${deviceConfig.ip}:${deviceConfig.port}. ` +
+                                           `Please check: 1) Device is powered on, 2) Network connectivity, ` +
+                                           `3) IP and port are correct, 4) Firewall settings`;
+                            reject(new Error(errorMsg));
+                        } else if (err.message.includes('Timeout') || err.message.includes('timeout')) {
+                            const errorMsg = `Connection timeout to ${deviceConfig.ip}:${deviceConfig.port}. ` +
+                                           `Device may be busy or network is slow. Try increasing timeout.`;
+                            reject(new Error(errorMsg));
+                        } else {
+                            reject(err);
+                        }
                         return;
                     }
 
@@ -664,6 +686,53 @@ class SupremaConnectionService extends EventEmitter {
     }
 
     /**
+     * Test network connectivity to a device before connecting
+     * @param {string} ip - Device IP address
+     * @param {number} port - Device port
+     * @returns {Promise<Object>} Connectivity test results
+     */
+    async testNetworkConnectivity(ip, port = 51211) {
+        const results = {
+            ip,
+            port,
+            reachable: false,
+            latency: null,
+            error: null,
+            recommendations: []
+        };
+
+        try {
+            // Simple connectivity test using searchDevice with very short timeout
+            const startTime = Date.now();
+            
+            // Try to search for the specific device
+            const devices = await this.searchDevices(3); // 3 second timeout
+            const latency = Date.now() - startTime;
+            
+            // Check if our target device was found
+            const foundDevice = devices.find(d => d.ipaddr === ip && d.port === port);
+            
+            if (foundDevice) {
+                results.reachable = true;
+                results.latency = latency;
+                results.deviceInfo = foundDevice;
+            } else {
+                results.error = 'Device not found in network scan';
+                results.recommendations.push('Verify device IP address is correct');
+                results.recommendations.push('Ensure device is powered on');
+                results.recommendations.push('Check device is on the same network');
+            }
+        } catch (error) {
+            results.error = error.message;
+            results.recommendations.push('Check network connectivity');
+            results.recommendations.push('Verify gateway is running and accessible');
+            results.recommendations.push('Ensure port 51211 is not blocked by firewall');
+        }
+
+        return results;
+    }
+
+    /**
      * Setup automatic reconnection for devices
      */
     setupAutoReconnect() {
@@ -766,48 +835,71 @@ class SupremaConnectionService extends EventEmitter {
     }
 
     /**
-     * Connect to device using database configuration
+     * Connect to device using database configuration with retry logic
      */
     async connectToDeviceFromDB(deviceRecord) {
-        try {
-            const config = {
-                ip: deviceRecord.ip,
-                port: deviceRecord.port,
-                useSSL: deviceRecord.useSSL,
-                timeout: deviceRecord.timeout
-            };
-            const deviceId = await this.connectToDevice(config);
-            
-            // Reset device retry counter after successful connection
-            await this.database.resetDeviceRetries(deviceRecord.id);
-            
-            // Store device info
+        const maxRetries = 3;
+        const retryDelay = 2000; // 2 seconds between retries
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const deviceInfo = await this.getDeviceInfo(deviceId);
+                const config = {
+                    ip: deviceRecord.ip,
+                    port: deviceRecord.port,
+                    useSSL: deviceRecord.useSSL || false,
+                    timeout: deviceRecord.timeout || 30000 // Default 30 seconds
+                };
                 
-                // Update device details in database
-                const updates = {};
-                if (deviceInfo.serialNumber && deviceInfo.serialNumber !== deviceRecord.serialNumber) {
-                    updates.serialNumber = deviceInfo.serialNumber;
-                }
-                if (deviceInfo.type && deviceInfo.type !== deviceRecord.deviceType) {
-                    updates.deviceType = deviceInfo.type;
-                }
-                if (deviceInfo.firmwareVersion && deviceInfo.firmwareVersion !== deviceRecord.firmwareVersion) {
-                    updates.firmwareVersion = deviceInfo.firmwareVersion;
+                this.logger.info(`Connecting to device ${deviceRecord.name} (${deviceRecord.ip}:${deviceRecord.port}) - Attempt ${attempt}/${maxRetries}`);
+                
+                const deviceId = await this.connectToDevice(config);
+                
+                // Reset device retry counter after successful connection
+                if (this.database) {
+                    await this.database.resetDeviceRetries(deviceRecord.id);
                 }
                 
-                if (Object.keys(updates).length > 0) {
-                    await this.database.updateDevice(deviceRecord.id, updates);
+                // Store device info
+                try {
+                    const deviceInfo = await this.getDeviceInfo(deviceId);
+                    
+                    // Update device details in database
+                    if (this.database) {
+                        const updates = {};
+                        if (deviceInfo.serialNumber && deviceInfo.serialNumber !== deviceRecord.serialNumber) {
+                            updates.serialNumber = deviceInfo.serialNumber;
+                        }
+                        if (deviceInfo.type && deviceInfo.type !== deviceRecord.deviceType) {
+                            updates.deviceType = deviceInfo.type;
+                        }
+                        if (deviceInfo.firmwareVersion && deviceInfo.firmwareVersion !== deviceRecord.firmwareVersion) {
+                            updates.firmwareVersion = deviceInfo.firmwareVersion;
+                        }
+                        
+                        if (Object.keys(updates).length > 0) {
+                            await this.database.updateDevice(deviceRecord.id, updates);
+                        }
+                    }
+                } catch (infoError) {
+                    this.logger.warn(`Could not retrieve device info for ${deviceRecord.name}:`, infoError.message);
                 }
-            } catch (infoError) {
-                this.logger.warn(`Could not retrieve device info for ${deviceRecord.name}:`, infoError);
+                
+                return deviceId;
+                
+            } catch (error) {
+                this.logger.warn(`Connection attempt ${attempt}/${maxRetries} failed for ${deviceRecord.name}: ${error.message}`);
+                
+                if (attempt === maxRetries) {
+                    // Final attempt failed
+                    if (this.database) {
+                        await this.database.incrementDeviceRetries(deviceRecord.id);
+                    }
+                    throw new Error(`Failed to connect after ${maxRetries} attempts: ${error.message}`);
+                }
+                
+                // Wait before retry
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
             }
-            
-            return deviceId;
-        } catch (error) {
-            await this.database.incrementDeviceRetries(deviceRecord.id);
-            throw error;
         }
     }
 

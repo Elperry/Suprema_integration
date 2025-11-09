@@ -214,6 +214,36 @@ module.exports = (services) => {
     });
 
     /**
+     * Test network connectivity to a device before connecting
+     * POST /api/devices/test-network
+     * Body: { ip, port }
+     */
+    router.post('/test-network', async (req, res) => {
+        try {
+            const { ip, port } = req.body;
+
+            if (!ip) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'IP address is required'
+                });
+            }
+
+            const results = await services.connection.testNetworkConnectivity(ip, port);
+
+            res.json({
+                success: true,
+                data: results
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
      * Update device in database
      * PUT /api/devices/:deviceId
      */
