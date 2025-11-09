@@ -405,7 +405,9 @@ class DatabaseManager {
             query += ' ORDER BY displayname ASC';
 
             const employees = await this.prisma.$queryRawUnsafe(query, ...params);
-            return employees;
+            
+            // Convert BigInt values to Number for JSON serialization
+            return this.convertBigIntToNumber(employees);
         } catch (error) {
             this.logger.error('Error fetching all employees:', error);
             throw error;
@@ -422,7 +424,10 @@ class DatabaseManager {
                 'SELECT * FROM employee WHERE id = ? LIMIT 1',
                 id
             );
-            return employees[0] || null;
+            const employee = employees[0] || null;
+            
+            // Convert BigInt values to Number for JSON serialization
+            return employee ? this.convertBigIntToNumber([employee])[0] : null;
         } catch (error) {
             this.logger.error('Error fetching employee by ID:', error);
             throw error;
@@ -443,11 +448,36 @@ class DatabaseManager {
                 `%${searchTerm}%`,
                 `%${searchTerm}%`
             );
-            return employees;
+            
+            // Convert BigInt values to Number for JSON serialization
+            return this.convertBigIntToNumber(employees);
         } catch (error) {
             this.logger.error('Error searching employees:', error);
             throw error;
         }
+    }
+
+    /**
+     * Convert BigInt values to Number in objects/arrays
+     * Required for JSON serialization of MySQL BIGINT columns
+     */
+    convertBigIntToNumber(data) {
+        if (Array.isArray(data)) {
+            return data.map(item => this.convertBigIntToNumber(item));
+        } else if (data !== null && typeof data === 'object') {
+            const converted = {};
+            for (const [key, value] of Object.entries(data)) {
+                if (typeof value === 'bigint') {
+                    converted[key] = Number(value);
+                } else if (typeof value === 'object' && value !== null) {
+                    converted[key] = this.convertBigIntToNumber(value);
+                } else {
+                    converted[key] = value;
+                }
+            }
+            return converted;
+        }
+        return data;
     }
 
     /**
