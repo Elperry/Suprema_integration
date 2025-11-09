@@ -1,0 +1,822 @@
+/**
+ * Suprema User Management Service
+ * Handles user enrollment, credential management, and access control
+ */
+
+const EventEmitter = require('events');
+const winston = require('winston');
+
+// Import protobuf services (these would come from the G-SDK)
+const userService = require('../../biostar/service/user_grpc_pb');
+const fingerService = require('../../biostar/service/finger_grpc_pb');
+const cardService = require('../../biostar/service/card_grpc_pb');
+const faceService = require('../../biostar/service/face_grpc_pb');
+const accessService = require('../../biostar/service/access_grpc_pb');
+const authService = require('../../biostar/service/auth_grpc_pb');
+
+const userMessage = require('../../biostar/service/user_pb');
+const fingerMessage = require('../../biostar/service/finger_pb');
+const cardMessage = require('../../biostar/service/card_pb');
+const faceMessage = require('../../biostar/service/face_pb');
+const accessMessage = require('../../biostar/service/access_pb');
+const authMessage = require('../../biostar/service/auth_pb');
+
+class SupremaUserService extends EventEmitter {
+    constructor(connectionService) {
+        super();
+        this.connectionService = connectionService;
+        this.userClient = null;
+        this.fingerClient = null;
+        this.cardClient = null;
+        this.faceClient = null;
+        this.accessClient = null;
+        this.authClient = null;
+        
+        this.logger = winston.createLogger({
+            level: 'info',
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                winston.format.json()
+            ),
+            transports: [
+                new winston.transports.Console(),
+                new winston.transports.File({ filename: 'logs/user-service.log' })
+            ]
+        });
+
+        this.initializeClients();
+    }
+
+    /**
+     * Initialize all service clients
+     */
+    initializeClients() {
+        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const credentials = this.connectionService.sslCreds;
+
+        this.userClient = new userService.UserClient(gatewayAddress, credentials);
+        this.fingerClient = new fingerService.FingerClient(gatewayAddress, credentials);
+        this.cardClient = new cardService.CardClient(gatewayAddress, credentials);
+        this.faceClient = new faceService.FaceClient(gatewayAddress, credentials);
+        this.accessClient = new accessService.AccessClient(gatewayAddress, credentials);
+        this.authClient = new authService.AuthClient(gatewayAddress, credentials);
+
+        this.logger.info('User service clients initialized');
+    }
+
+    // ================ USER MANAGEMENT ================
+
+    /**
+     * Get list of users from device
+     * @param {string|number} deviceId - Device ID
+     * @returns {Promise<Array>} List of user headers
+     */
+    async getUserList(deviceId) {
+        try {
+            // Convert deviceId to number if it's a string
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            
+            const req = new userMessage.GetListRequest();
+            req.setDeviceid(numericDeviceId);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.getList(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get user list for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const users = response.toObject().hdrsList;
+                    this.logger.info(`Retrieved ${users.length} users from device ${deviceId}`);
+                    resolve(users);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting user list:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get detailed user information
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} userIds - Array of user IDs
+     * @returns {Promise<Array>} User information array
+     */
+    async getUsers(deviceId, userIds) {
+        try {
+            // Convert deviceId to number if it's a string
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            
+            const req = new userMessage.GetRequest();
+            req.setDeviceid(numericDeviceId);
+            req.setUseridsList(userIds || []);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.get(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get users for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const users = response.toObject().usersList;
+                    resolve(users);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting users:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Enroll new users to device
+     * @param {string} deviceId - Device ID
+     * @param {Array} users - Array of user objects
+     * @returns {Promise<boolean>} Success status
+     */
+    async enrollUsers(deviceId, users) {
+        try {
+            const userInfos = users.map(userData => {
+                const userHdr = new userMessage.UserHdr();
+                userHdr.setId(userData.id);
+                if (userData.numOfCard) userHdr.setNumofcard(userData.numOfCard);
+                if (userData.numOfFinger) userHdr.setNumoffinger(userData.numOfFinger);
+                if (userData.numOfFace) userHdr.setNumofface(userData.numOfFace);
+
+                const userInfo = new userMessage.UserInfo();
+                userInfo.setHdr(userHdr);
+                
+                if (userData.name) userInfo.setName(userData.name);
+                if (userData.jobCode) userInfo.setJobcode(userData.jobCode);
+                if (userData.department) userInfo.setDepartment(userData.department);
+                if (userData.photo) userInfo.setPhoto(Buffer.from(userData.photo, 'base64'));
+
+                // Set user settings if provided
+                if (userData.settings) {
+                    const userSetting = new userMessage.UserSetting();
+                    if (userData.settings.cardAuthMode) {
+                        userSetting.setCardauthmode(userData.settings.cardAuthMode);
+                    }
+                    if (userData.settings.biometricAuthMode) {
+                        userSetting.setBiometricauthmode(userData.settings.biometricAuthMode);
+                    }
+                    if (userData.settings.startTime) {
+                        userSetting.setStarttime(userData.settings.startTime);
+                    }
+                    if (userData.settings.endTime) {
+                        userSetting.setEndtime(userData.settings.endTime);
+                    }
+                    userInfo.setSetting(userSetting);
+                }
+
+                return userInfo;
+            });
+
+            const req = new userMessage.EnrollRequest();
+            req.setDeviceid(deviceId);
+            req.setUsersList(userInfos);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.enroll(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to enroll users to device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Successfully enrolled ${users.length} users to device ${deviceId}`);
+                    this.emit('users:enrolled', { deviceId, users: users.map(u => u.id) });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error enrolling users:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete users from device
+     * @param {string} deviceId - Device ID
+     * @param {Array} userIds - Array of user IDs to delete
+     * @returns {Promise<boolean>} Success status
+     */
+    async deleteUsers(deviceId, userIds) {
+        try {
+            const req = new userMessage.DeleteRequest();
+            req.setDeviceid(deviceId);
+            req.setUseridsList(userIds);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.delete(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to delete users from device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Successfully deleted ${userIds.length} users from device ${deviceId}`);
+                    this.emit('users:deleted', { deviceId, userIds });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error deleting users:', error);
+            throw error;
+        }
+    }
+
+    // ================ FINGERPRINT MANAGEMENT ================
+
+    /**
+     * Scan fingerprint from device
+     * @param {string} deviceId - Device ID
+     * @param {number} templateFormat - Template format (default: 1)
+     * @param {number} qualityThreshold - Quality threshold (default: 50)
+     * @returns {Promise<Buffer>} Fingerprint template data
+     */
+    async scanFingerprint(deviceId, templateFormat = 1, qualityThreshold = 50) {
+        try {
+            const req = new fingerMessage.ScanRequest();
+            req.setDeviceid(deviceId);
+            req.setTemplateformat(templateFormat);
+            req.setQualitythreshold(qualityThreshold);
+
+            return new Promise((resolve, reject) => {
+                this.fingerClient.scan(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to scan fingerprint on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const templateData = response.getTemplatedata();
+                    this.logger.info(`Fingerprint scanned successfully on device ${deviceId}`);
+                    resolve(templateData);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error scanning fingerprint:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get fingerprint image from device
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<Buffer>} BMP image data
+     */
+    async getFingerprintImage(deviceId) {
+        try {
+            const req = new fingerMessage.GetImageRequest();
+            req.setDeviceid(deviceId);
+
+            return new Promise((resolve, reject) => {
+                this.fingerClient.getImage(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get fingerprint image from device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const imageData = response.getBmpimage();
+                    resolve(imageData);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting fingerprint image:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set fingerprint for users
+     * @param {string} deviceId - Device ID
+     * @param {Array} userFingerData - Array of user finger data objects
+     * @returns {Promise<boolean>} Success status
+     */
+    async setUserFingerprints(deviceId, userFingerData) {
+        try {
+            const userFingers = userFingerData.map(data => {
+                const fingerData = new fingerMessage.FingerData();
+                
+                // Add templates
+                data.templates.forEach((template, index) => {
+                    fingerData.addTemplates(template, index);
+                });
+
+                const userFinger = new userMessage.UserFinger();
+                userFinger.setUserid(data.userId);
+                userFinger.addFingers(fingerData, data.fingerIndex || 0);
+
+                return userFinger;
+            });
+
+            const req = new userMessage.SetFingerRequest();
+            req.setDeviceid(deviceId);
+            req.setUserfingersList(userFingers);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.setFinger(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to set fingerprints for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Successfully set fingerprints for ${userFingerData.length} users on device ${deviceId}`);
+                    this.emit('fingerprints:set', { deviceId, users: userFingerData.map(d => d.userId) });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting user fingerprints:', error);
+            throw error;
+        }
+    }
+
+    // ================ CARD MANAGEMENT ================
+
+    /**
+     * Scan card from device
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<Object>} Card data
+     */
+    async scanCard(deviceId) {
+        try {
+            const req = new cardMessage.ScanRequest();
+            req.setDeviceid(deviceId);
+
+            return new Promise((resolve, reject) => {
+                this.cardClient.scan(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to scan card on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const cardData = response.toObject().carddata;
+                    this.logger.info(`Card scanned successfully on device ${deviceId}`);
+                    resolve(cardData);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error scanning card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set cards for users
+     * @param {string} deviceId - Device ID
+     * @param {Array} userCardData - Array of user card data objects
+     * @returns {Promise<boolean>} Success status
+     */
+    async setUserCards(deviceId, userCardData) {
+        try {
+            const userCards = userCardData.map(data => {
+                const userCard = new userMessage.UserCard();
+                userCard.setUserid(data.userId);
+                
+                // Create CSNCardData protobuf message
+                const csnCardData = new cardMessage.CSNCardData();
+                
+                // Set card data from the provided data
+                if (data.cardData) {
+                    // If cardData is a string (card number), convert to bytes
+                    if (typeof data.cardData === 'string') {
+                        csnCardData.setData(Buffer.from(data.cardData, 'hex'));
+                    } else if (Buffer.isBuffer(data.cardData)) {
+                        csnCardData.setData(data.cardData);
+                    } else if (data.cardData.data) {
+                        // If it's already a structured object with data property
+                        csnCardData.setData(Buffer.from(data.cardData.data));
+                    }
+                }
+                
+                // Set card type and size if provided
+                if (data.cardType !== undefined) {
+                    csnCardData.setType(data.cardType);
+                }
+                if (data.cardSize !== undefined) {
+                    csnCardData.setSize(data.cardSize);
+                }
+                
+                // Add the protobuf message object
+                userCard.addCards(csnCardData);
+
+                return userCard;
+            });
+
+            // Convert deviceId to number if it's a string
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+
+            const req = new userMessage.SetCardRequest();
+            req.setDeviceid(numericDeviceId);
+            req.setUsercardsList(userCards);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.setCard(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to set cards for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Successfully set cards for ${userCardData.length} users on device ${deviceId}`);
+                    this.emit('cards:set', { deviceId, users: userCardData.map(d => d.userId) });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting user cards:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Manage card blacklist
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} cardInfos - Array of card info objects
+     * @param {string} action - 'add' or 'delete'
+     * @returns {Promise<boolean>} Success status
+     */
+    async manageCardBlacklist(deviceId, cardInfos, action = 'add') {
+        try {
+            // Convert deviceId to number if it's a string
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            
+            const blacklistItems = cardInfos.map(cardInfo => {
+                const item = new cardMessage.BlacklistItem();
+                item.setCardid(Buffer.from(cardInfo.cardId, 'utf-8'));
+                item.setIssuecount(cardInfo.issueCount || 1);
+                return item;
+            });
+
+            let req;
+            if (action === 'add') {
+                req = new cardMessage.AddBlacklistRequest();
+                req.setDeviceid(numericDeviceId);
+                req.setCardinfosList(blacklistItems);
+
+                return new Promise((resolve, reject) => {
+                    this.cardClient.addBlacklist(req, (err, response) => {
+                        if (err) {
+                            this.logger.error(`Failed to add cards to blacklist on device ${deviceId}:`, err);
+                            reject(err);
+                            return;
+                        }
+
+                        this.logger.info(`Added ${cardInfos.length} cards to blacklist on device ${deviceId}`);
+                        resolve(true);
+                    });
+                });
+            } else if (action === 'delete') {
+                req = new cardMessage.DeleteBlacklistRequest();
+                req.setDeviceid(numericDeviceId);
+                req.setCardinfosList(blacklistItems);
+
+                return new Promise((resolve, reject) => {
+                    this.cardClient.deleteBlacklist(req, (err, response) => {
+                        if (err) {
+                            this.logger.error(`Failed to remove cards from blacklist on device ${deviceId}:`, err);
+                            reject(err);
+                            return;
+                        }
+
+                        this.logger.info(`Removed ${cardInfos.length} cards from blacklist on device ${deviceId}`);
+                        resolve(true);
+                    });
+                });
+            } else {
+                throw new Error(`Invalid blacklist action: ${action}`);
+            }
+        } catch (error) {
+            this.logger.error('Error managing card blacklist:', error);
+            throw error;
+        }
+    }
+
+    // ================ FACE MANAGEMENT ================
+
+    /**
+     * Scan face from device
+     * @param {string} deviceId - Device ID
+     * @param {number} enrollThreshold - Enrollment threshold
+     * @returns {Promise<Object>} Face data
+     */
+    async scanFace(deviceId, enrollThreshold = 4) {
+        try {
+            const req = new faceMessage.ScanRequest();
+            req.setDeviceid(deviceId);
+            req.setEnrollthreshold(enrollThreshold);
+
+            return new Promise((resolve, reject) => {
+                this.faceClient.scan(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to scan face on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const faceData = response.toObject().facedata;
+                    this.logger.info(`Face scanned successfully on device ${deviceId}`);
+                    resolve(faceData);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error scanning face:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set faces for users
+     * @param {string} deviceId - Device ID
+     * @param {Array} userFaceData - Array of user face data objects
+     * @returns {Promise<boolean>} Success status
+     */
+    async setUserFaces(deviceId, userFaceData) {
+        try {
+            const userFaces = userFaceData.map(data => {
+                const userFace = new userMessage.UserFace();
+                userFace.setUserid(data.userId);
+                userFace.addFaces(data.faceData, data.faceIndex || 0);
+
+                return userFace;
+            });
+
+            const req = new userMessage.SetFaceRequest();
+            req.setDeviceid(deviceId);
+            req.setUserfacesList(userFaces);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.setFace(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to set faces for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Successfully set faces for ${userFaceData.length} users on device ${deviceId}`);
+                    this.emit('faces:set', { deviceId, users: userFaceData.map(d => d.userId) });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting user faces:', error);
+            throw error;
+        }
+    }
+
+    // ================ ACCESS GROUP MANAGEMENT ================
+
+    /**
+     * Create access level
+     * @param {string} deviceId - Device ID
+     * @param {Object} accessLevel - Access level configuration
+     * @returns {Promise<boolean>} Success status
+     */
+    async createAccessLevel(deviceId, accessLevel) {
+        try {
+            const doorSchedules = accessLevel.doorSchedules.map(ds => {
+                const doorSchedule = new accessMessage.DoorSchedule();
+                doorSchedule.setDoorid(ds.doorId);
+                doorSchedule.setScheduleid(ds.scheduleId);
+                return doorSchedule;
+            });
+
+            const level = new accessMessage.AccessLevel();
+            level.setId(accessLevel.id);
+            level.setName(accessLevel.name);
+            doorSchedules.forEach(ds => level.addDoorschedules(ds));
+
+            const req = new accessMessage.AddLevelRequest();
+            req.setDeviceid(deviceId);
+            req.setLevelsList([level]);
+
+            return new Promise((resolve, reject) => {
+                this.accessClient.addLevel(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to create access level on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Created access level ${accessLevel.id} on device ${deviceId}`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error creating access level:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Create access group
+     * @param {string} deviceId - Device ID
+     * @param {Object} accessGroup - Access group configuration
+     * @returns {Promise<boolean>} Success status
+     */
+    async createAccessGroup(deviceId, accessGroup) {
+        try {
+            const group = new accessMessage.AccessGroup();
+            group.setId(accessGroup.id);
+            group.setName(accessGroup.name);
+            accessGroup.levelIds.forEach(levelId => group.addLevelids(levelId));
+
+            const req = new accessMessage.AddRequest();
+            req.setDeviceid(deviceId);
+            req.setGroupsList([group]);
+
+            return new Promise((resolve, reject) => {
+                this.accessClient.add(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to create access group on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Created access group ${accessGroup.id} on device ${deviceId}`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error creating access group:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set access groups for users
+     * @param {string} deviceId - Device ID
+     * @param {Array} userAccessGroups - Array of user access group assignments
+     * @returns {Promise<boolean>} Success status
+     */
+    async setUserAccessGroups(deviceId, userAccessGroups) {
+        try {
+            const userGroups = userAccessGroups.map(data => {
+                const userAccessGroup = new userMessage.UserAccessGroup();
+                userAccessGroup.setUserid(data.userId);
+                data.accessGroupIds.forEach(groupId => userAccessGroup.addAccessgroupids(groupId));
+                return userAccessGroup;
+            });
+
+            const req = new userMessage.SetAccessGroupRequest();
+            req.setDeviceid(deviceId);
+            req.setUseraccessgroupsList(userGroups);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.setAccessGroup(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to set access groups for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Set access groups for ${userAccessGroups.length} users on device ${deviceId}`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting user access groups:', error);
+            throw error;
+        }
+    }
+
+    // ================ AUTHENTICATION CONFIGURATION ================
+
+    /**
+     * Get authentication configuration
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<Object>} Authentication configuration
+     */
+    async getAuthConfig(deviceId) {
+        try {
+            const req = new authMessage.GetConfigRequest();
+            req.setDeviceid(deviceId);
+
+            return new Promise((resolve, reject) => {
+                this.authClient.getConfig(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get auth config for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const config = response.toObject().config;
+                    resolve(config);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting auth config:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Set authentication configuration
+     * @param {string} deviceId - Device ID
+     * @param {Object} authConfig - Authentication configuration
+     * @returns {Promise<boolean>} Success status
+     */
+    async setAuthConfig(deviceId, authConfig) {
+        try {
+            const config = new authMessage.AuthConfig();
+            config.setMatchtimeout(authConfig.matchTimeout || 10);
+            config.setAuthtimeout(authConfig.authTimeout || 15);
+            config.setUseprivateauth(authConfig.usePrivateAuth || false);
+
+            // Set authentication schedules
+            if (authConfig.authSchedules) {
+                authConfig.authSchedules.forEach((scheduleData, index) => {
+                    const authSchedule = new authMessage.AuthSchedule();
+                    authSchedule.setMode(scheduleData.mode);
+                    authSchedule.setScheduleid(scheduleData.scheduleId);
+                    config.addAuthschedules(authSchedule, index);
+                });
+            }
+
+            const req = new authMessage.SetConfigRequest();
+            req.setDeviceid(deviceId);
+            req.setConfig(config);
+
+            return new Promise((resolve, reject) => {
+                this.authClient.setConfig(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to set auth config for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Set auth config for device ${deviceId}`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error setting auth config:', error);
+            throw error;
+        }
+    }
+
+    // ================ UTILITY METHODS ================
+
+    /**
+     * Synchronize users between devices
+     * @param {string} sourceDeviceId - Source device ID
+     * @param {Array} targetDeviceIds - Target device IDs
+     * @returns {Promise<boolean>} Success status
+     */
+    async synchronizeUsers(sourceDeviceId, targetDeviceIds) {
+        try {
+            // Get users from source device
+            const userHeaders = await this.getUserList(sourceDeviceId);
+            const userIds = userHeaders.map(header => header.id);
+            const users = await this.getUsers(sourceDeviceId, userIds);
+
+            // Enroll users to target devices
+            for (const targetDeviceId of targetDeviceIds) {
+                await this.enrollUsers(targetDeviceId, users);
+            }
+
+            this.logger.info(`Synchronized ${users.length} users from device ${sourceDeviceId} to ${targetDeviceIds.length} target devices`);
+            this.emit('users:synchronized', { sourceDeviceId, targetDeviceIds, userCount: users.length });
+            
+            return true;
+        } catch (error) {
+            this.logger.error('Error synchronizing users:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get user statistics
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<Object>} User statistics
+     */
+    async getUserStatistics(deviceId) {
+        try {
+            const users = await this.getUserList(deviceId);
+            
+            const stats = {
+                totalUsers: users.length,
+                usersWithCards: users.filter(u => u.numofcard > 0).length,
+                usersWithFingers: users.filter(u => u.numoffinger > 0).length,
+                usersWithFaces: users.filter(u => u.numofface > 0).length,
+                deviceId: deviceId,
+                timestamp: new Date().toISOString()
+            };
+
+            return stats;
+        } catch (error) {
+            this.logger.error('Error getting user statistics:', error);
+            throw error;
+        }
+    }
+}
+
+module.exports = SupremaUserService;

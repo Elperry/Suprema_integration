@@ -1,0 +1,60 @@
+{
+  "name": "suprema-hr-integration",
+  "version": "1.0.0",
+  "description": "Suprema BioStar device integration for HR systems using G-SDK",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "main": "index.js",
+  "scripts": {
+    "dev:frontend": "npm run dev --workspace=@suprema-hr/frontend",
+    "dev:backend": "npm run dev --workspace=@suprema-hr/backend",
+    "build:frontend": "npm run build --workspace=@suprema-hr/frontend",
+    "start:frontend": "npm run start --workspace=@suprema-hr/frontend",
+    "start:backend": "npm run start --workspace=@suprema-hr/backend",
+    "db:generate": "npm run db:generate --workspace=@suprema-hr/backend",
+    "db:push": "npm run db:push --workspace=@suprema-hr/backend",
+    "db:migrate": "npm run db:migrate --workspace=@suprema-hr/backend",
+    "db:studio": "npm run db:studio --workspace=@suprema-hr/backend"
+  },
+  "keywords": [
+    "suprema",
+    "biostar",
+    "access-control",
+    "biometric",
+    "hr-system",
+    "time-attendance"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.9.7",
+    "@grpc/proto-loader": "^0.7.10",
+    "@prisma/client": "^5.22.0",
+    "axios": "^1.12.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "google-protobuf": "^4.0.0",
+    "helmet": "^7.1.0",
+    "lodash": "^4.17.21",
+    "moment": "^2.29.4",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.6.3",
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.8.7",
+    "jest": "^29.7.0",
+    "lerna": "^9.0.0",
+    "nodemon": "^3.0.1",
+    "prisma": "^5.22.0",
+    "supertest": "^6.3.3"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

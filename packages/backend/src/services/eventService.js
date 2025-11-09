@@ -1,0 +1,655 @@
+/**
+ * Suprema Event Monitoring Service
+ * Handles real-time event monitoring, event log retrieval, and event processing
+ */
+
+const EventEmitter = require('events');
+const winston = require('winston');
+const fs = require('fs');
+const path = require('path');
+
+// Import protobuf services (these would come from the G-SDK)
+const eventService = require('../../biostar/service/event_grpc_pb');
+const eventMessage = require('../../biostar/service/event_pb');
+
+class SupremaEventService extends EventEmitter {
+    constructor(connectionService) {
+        super();
+        this.connectionService = connectionService;
+        this.eventClient = null;
+        this.eventSubscriptions = new Map(); // deviceId -> subscription
+        this.eventCodeMap = new Map();
+        this.isMonitoring = false;
+        
+        this.logger = winston.createLogger({
+            level: 'info',
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                winston.format.json()
+            ),
+            transports: [
+                new winston.transports.Console(),
+                new winston.transports.File({ filename: 'logs/event-service.log' })
+            ]
+        });
+
+        this.initializeClient();
+        this.loadEventCodeMap();
+    }
+
+    /**
+     * Initialize event service client
+     */
+    initializeClient() {
+        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const credentials = this.connectionService.sslCreds;
+
+        this.eventClient = new eventService.EventClient(gatewayAddress, credentials);
+        this.logger.info('Event service client initialized');
+    }
+
+    /**
+     * Load event code map for event description lookup
+     * @param {string} codeMapFile - Path to event code map JSON file
+     */
+    loadEventCodeMap(codeMapFile = './data/event_code.json') {
+        try {
+            if (fs.existsSync(codeMapFile)) {
+                const jsonData = fs.readFileSync(codeMapFile, 'utf8');
+                const codeMapData = JSON.parse(jsonData);
+                
+                codeMapData.entries.forEach(entry => {
+                    const key = `${entry.event_code}_${entry.sub_code}`;
+                    this.eventCodeMap.set(key, entry.desc);
+                });
+
+                this.logger.info(`Loaded ${this.eventCodeMap.size} event code mappings`);
+            } else {
+                this.logger.warn(`Event code map file not found: ${codeMapFile}`);
+                this.createDefaultEventCodeMap();
+            }
+        } catch (error) {
+            this.logger.error('Error loading event code map:', error);
+            this.createDefaultEventCodeMap();
+        }
+    }
+
+    /**
+     * Create default event code map with common event types
+     */
+    createDefaultEventCodeMap() {
+        const defaultEvents = [
+            { event_code: 0x1000, sub_code: 0x0, desc: 'Verify Success' },
+            { event_code: 0x1001, sub_code: 0x0, desc: 'Verify Fail' },
+            { event_code: 0x1100, sub_code: 0x0, desc: 'Identify Success' },
+            { event_code: 0x1101, sub_code: 0x0, desc: 'Identify Fail' },
+            { event_code: 0x2000, sub_code: 0x0, desc: 'Door Opened' },
+            { event_code: 0x2001, sub_code: 0x0, desc: 'Door Closed' },
+            { event_code: 0x2002, sub_code: 0x0, desc: 'Door Locked' },
+            { event_code: 0x2003, sub_code: 0x0, desc: 'Door Unlocked' },
+            { event_code: 0x3000, sub_code: 0x0, desc: 'Zone APB Violation' },
+            { event_code: 0x4000, sub_code: 0x0, desc: 'Device Started' },
+            { event_code: 0x4001, sub_code: 0x0, desc: 'Device Stopped' },
+            { event_code: 0x5000, sub_code: 0x0, desc: 'User Enrolled' },
+            { event_code: 0x5001, sub_code: 0x0, desc: 'User Deleted' },
+            { event_code: 0x6000, sub_code: 0x0, desc: 'Time Attendance' }
+        ];
+
+        defaultEvents.forEach(event => {
+            const key = `${event.event_code}_${event.sub_code}`;
+            this.eventCodeMap.set(key, event.desc);
+        });
+
+        this.logger.info('Created default event code map');
+    }
+
+    /**
+     * Get event description from event codes
+     * @param {number} eventCode - Event code
+     * @param {number} subCode - Sub code
+     * @returns {string} Event description
+     */
+    getEventDescription(eventCode, subCode) {
+        const key = `${eventCode}_${subCode}`;
+        return this.eventCodeMap.get(key) || `Unknown Event (0x${(eventCode | subCode).toString(16)})`;
+    }
+
+    // ================ REAL-TIME MONITORING ================
+
+    /**
+     * Enable monitoring for a device
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<boolean>} Success status
+     */
+    async enableMonitoring(deviceId) {
+        try {
+            const req = new eventMessage.EnableMonitoringRequest();
+            req.setDeviceid(deviceId);
+
+            return new Promise((resolve, reject) => {
+                this.eventClient.enableMonitoring(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to enable monitoring for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`Monitoring enabled for device ${deviceId}`);
+                    this.emit('monitoring:enabled', { deviceId });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error enabling monitoring:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Disable monitoring for a device
+     * @param {string} deviceId - Device ID
+     * @returns {Promise<boolean>} Success status
+     */
+    async disableMonitoring(deviceId) {
+        try {
+            const req = new eventMessage.DisableMonitoringRequest();
+            req.setDeviceid(deviceId);
+
+            return new Promise((resolve, reject) => {
+                this.eventClient.disableMonitoring(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to disable monitoring for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    // Cancel subscription if exists
+                    if (this.eventSubscriptions.has(deviceId)) {
+                        const subscription = this.eventSubscriptions.get(deviceId);
+                        subscription.cancel();
+                        this.eventSubscriptions.delete(deviceId);
+                    }
+
+                    this.logger.info(`Monitoring disabled for device ${deviceId}`);
+                    this.emit('monitoring:disabled', { deviceId });
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error disabling monitoring:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Subscribe to real-time events
+     * @param {number} queueSize - Event queue size
+     * @param {Array} deviceIds - Device IDs to monitor (optional, for filtering)
+     * @returns {Object} Event subscription
+     */
+    subscribeToEvents(queueSize = 100, deviceIds = null) {
+        try {
+            const req = new eventMessage.SubscribeRealtimeLogRequest();
+            req.setQueuesize(queueSize);
+
+            const subscription = this.eventClient.subscribeRealtimeLog(req);
+
+            subscription.on('data', (eventData) => {
+                const event = eventData.toObject();
+                
+                // Filter by device IDs if specified
+                if (deviceIds && !deviceIds.includes(event.deviceid)) {
+                    return;
+                }
+
+                // Enhance event with description
+                const enhancedEvent = this.enhanceEvent(event);
+                
+                this.logger.info('Real-time event received:', enhancedEvent);
+                this.emit('event:received', enhancedEvent);
+                
+                // Emit specific event types
+                this.emitSpecificEventTypes(enhancedEvent);
+            });
+
+            subscription.on('end', () => {
+                this.logger.info('Event subscription ended');
+                this.emit('subscription:ended');
+            });
+
+            subscription.on('error', (err) => {
+                if (err.details === 'Cancelled') {
+                    this.logger.info('Event subscription cancelled');
+                    this.emit('subscription:cancelled');
+                } else {
+                    this.logger.error('Event subscription error:', err);
+                    this.emit('subscription:error', err);
+                }
+            });
+
+            this.isMonitoring = true;
+            this.logger.info('Subscribed to real-time events');
+            this.emit('subscription:started', { queueSize, deviceIds });
+
+            return subscription;
+        } catch (error) {
+            this.logger.error('Error subscribing to events:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Start monitoring multiple devices
+     * @param {Array} deviceIds - Array of device IDs to monitor
+     * @param {number} queueSize - Event queue size
+     * @returns {Promise<Object>} Subscription object
+     */
+    async startMonitoring(deviceIds, queueSize = 100) {
+        try {
+            // Enable monitoring for all devices
+            for (const deviceId of deviceIds) {
+                await this.enableMonitoring(deviceId);
+            }
+
+            // Subscribe to events
+            const subscription = this.subscribeToEvents(queueSize, deviceIds);
+            
+            // Store subscription reference
+            deviceIds.forEach(deviceId => {
+                this.eventSubscriptions.set(deviceId, subscription);
+            });
+
+            this.logger.info(`Started monitoring ${deviceIds.length} devices`);
+            return subscription;
+        } catch (error) {
+            this.logger.error('Error starting monitoring:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Stop monitoring for all devices
+     * @returns {Promise<boolean>} Success status
+     */
+    async stopMonitoring() {
+        try {
+            const deviceIds = Array.from(this.eventSubscriptions.keys());
+            
+            for (const deviceId of deviceIds) {
+                await this.disableMonitoring(deviceId);
+            }
+
+            this.isMonitoring = false;
+            this.logger.info('Stopped monitoring all devices');
+            this.emit('monitoring:stopped');
+            
+            return true;
+        } catch (error) {
+            this.logger.error('Error stopping monitoring:', error);
+            throw error;
+        }
+    }
+
+    // ================ EVENT LOG RETRIEVAL ================
+
+    /**
+     * Get event logs from device
+     * @param {string} deviceId - Device ID
+     * @param {number} startEventId - Starting event ID
+     * @param {number} maxEvents - Maximum number of events to retrieve
+     * @returns {Promise<Array>} Array of events
+     */
+    async getEventLogs(deviceId, startEventId = 0, maxEvents = 1000) {
+        try {
+            const req = new eventMessage.GetLogRequest();
+            req.setDeviceid(deviceId);
+            req.setStarteventid(startEventId);
+            req.setMaxnumoflog(maxEvents);
+
+            return new Promise((resolve, reject) => {
+                this.eventClient.getLog(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get event logs for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const events = response.toObject().eventsList;
+                    const enhancedEvents = events.map(event => this.enhanceEvent(event));
+                    
+                    this.logger.info(`Retrieved ${enhancedEvents.length} events from device ${deviceId}`);
+                    resolve(enhancedEvents);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting event logs:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get image logs from device (for devices that support image logging)
+     * @param {string} deviceId - Device ID
+     * @param {number} startEventId - Starting event ID
+     * @param {number} maxEvents - Maximum number of events to retrieve
+     * @returns {Promise<Array>} Array of image events
+     */
+    async getImageLogs(deviceId, startEventId = 0, maxEvents = 100) {
+        try {
+            const req = new eventMessage.GetImageLogRequest();
+            req.setDeviceid(deviceId);
+            req.setStarteventid(startEventId);
+            req.setMaxnumoflog(maxEvents);
+
+            return new Promise((resolve, reject) => {
+                this.eventClient.getImageLog(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get image logs for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const imageEvents = response.toObject().imageEventsList;
+                    this.logger.info(`Retrieved ${imageEvents.length} image events from device ${deviceId}`);
+                    resolve(imageEvents);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting image logs:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get filtered event logs
+     * @param {string} deviceId - Device ID
+     * @param {Object} filters - Event filters
+     * @returns {Promise<Array>} Filtered events
+     */
+    async getFilteredEventLogs(deviceId, filters = {}) {
+        try {
+            const events = await this.getEventLogs(deviceId, filters.startEventId, filters.maxEvents);
+            
+            let filteredEvents = events;
+
+            // Filter by event codes
+            if (filters.eventCodes && filters.eventCodes.length > 0) {
+                filteredEvents = filteredEvents.filter(event => 
+                    filters.eventCodes.includes(event.eventcode));
+            }
+
+            // Filter by user IDs
+            if (filters.userIds && filters.userIds.length > 0) {
+                filteredEvents = filteredEvents.filter(event => 
+                    filters.userIds.includes(event.userid));
+            }
+
+            // Filter by date range
+            if (filters.startDate || filters.endDate) {
+                filteredEvents = filteredEvents.filter(event => {
+                    const eventDate = new Date(event.datetime * 1000);
+                    if (filters.startDate && eventDate < new Date(filters.startDate)) return false;
+                    if (filters.endDate && eventDate > new Date(filters.endDate)) return false;
+                    return true;
+                });
+            }
+
+            this.logger.info(`Filtered ${filteredEvents.length} events from ${events.length} total events`);
+            return filteredEvents;
+        } catch (error) {
+            this.logger.error('Error getting filtered event logs:', error);
+            throw error;
+        }
+    }
+
+    // ================ EVENT PROCESSING ================
+
+    /**
+     * Enhance event with additional information
+     * @param {Object} event - Raw event object
+     * @returns {Object} Enhanced event object
+     */
+    enhanceEvent(event) {
+        const enhanced = { ...event };
+        
+        // Add event description
+        enhanced.description = this.getEventDescription(event.eventcode, event.subcode);
+        
+        // Add readable timestamp
+        enhanced.timestamp = new Date(event.datetime * 1000).toISOString();
+        
+        // Add event type classification
+        enhanced.eventType = this.classifyEventType(event.eventcode);
+        
+        // Add severity level
+        enhanced.severity = this.getEventSeverity(event.eventcode, event.subcode);
+
+        return enhanced;
+    }
+
+    /**
+     * Classify event type based on event code
+     * @param {number} eventCode - Event code
+     * @returns {string} Event type
+     */
+    classifyEventType(eventCode) {
+        if (eventCode >= 0x1000 && eventCode < 0x2000) return 'authentication';
+        if (eventCode >= 0x2000 && eventCode < 0x3000) return 'door';
+        if (eventCode >= 0x3000 && eventCode < 0x4000) return 'zone';
+        if (eventCode >= 0x4000 && eventCode < 0x5000) return 'system';
+        if (eventCode >= 0x5000 && eventCode < 0x6000) return 'user';
+        if (eventCode >= 0x6000 && eventCode < 0x7000) return 'attendance';
+        return 'other';
+    }
+
+    /**
+     * Get event severity level
+     * @param {number} eventCode - Event code
+     * @param {number} subCode - Sub code
+     * @returns {string} Severity level
+     */
+    getEventSeverity(eventCode, subCode) {
+        // Failure events are typically warnings or errors
+        if (eventCode === 0x1001 || eventCode === 0x1101) return 'warning'; // Auth failures
+        if (eventCode >= 0x3000 && eventCode < 0x4000) return 'error'; // Zone violations
+        if (eventCode === 0x4001) return 'warning'; // Device stopped
+        
+        // Success events are informational
+        if (eventCode === 0x1000 || eventCode === 0x1100) return 'info'; // Auth success
+        if (eventCode >= 0x2000 && eventCode < 0x3000) return 'info'; // Door events
+        if (eventCode >= 0x6000 && eventCode < 0x7000) return 'info'; // Attendance
+        
+        return 'info';
+    }
+
+    /**
+     * Emit specific event types for easier handling
+     * @param {Object} event - Enhanced event object
+     */
+    emitSpecificEventTypes(event) {
+        // Emit based on event type
+        this.emit(`event:${event.eventType}`, event);
+        
+        // Emit specific authentication events
+        if (event.eventcode === 0x1000) this.emit('auth:success', event);
+        if (event.eventcode === 0x1001) this.emit('auth:failure', event);
+        
+        // Emit door events
+        if (event.eventcode === 0x2000) this.emit('door:opened', event);
+        if (event.eventcode === 0x2001) this.emit('door:closed', event);
+        if (event.eventcode === 0x2002) this.emit('door:locked', event);
+        if (event.eventcode === 0x2003) this.emit('door:unlocked', event);
+        
+        // Emit attendance events
+        if (event.eventcode === 0x6000) this.emit('attendance:event', event);
+        
+        // Emit system events
+        if (event.eventcode === 0x4000) this.emit('system:started', event);
+        if (event.eventcode === 0x4001) this.emit('system:stopped', event);
+        
+        // Emit user management events
+        if (event.eventcode === 0x5000) this.emit('user:enrolled', event);
+        if (event.eventcode === 0x5001) this.emit('user:deleted', event);
+    }
+
+    // ================ EVENT ANALYTICS ================
+
+    /**
+     * Get event statistics for a device
+     * @param {string} deviceId - Device ID
+     * @param {Object} timeRange - Time range for statistics
+     * @returns {Promise<Object>} Event statistics
+     */
+    async getEventStatistics(deviceId, timeRange = {}) {
+        try {
+            const events = await this.getFilteredEventLogs(deviceId, {
+                startDate: timeRange.startDate,
+                endDate: timeRange.endDate,
+                maxEvents: 10000
+            });
+
+            const stats = {
+                deviceId,
+                totalEvents: events.length,
+                eventsByType: {},
+                eventsBySeverity: {},
+                authenticationEvents: {
+                    total: 0,
+                    successful: 0,
+                    failed: 0,
+                    successRate: 0
+                },
+                doorEvents: {
+                    total: 0,
+                    opened: 0,
+                    closed: 0
+                },
+                attendanceEvents: {
+                    total: 0,
+                    uniqueUsers: new Set()
+                },
+                timeRange: timeRange,
+                generatedAt: new Date().toISOString()
+            };
+
+            // Process events for statistics
+            events.forEach(event => {
+                // Count by type
+                stats.eventsByType[event.eventType] = (stats.eventsByType[event.eventType] || 0) + 1;
+                
+                // Count by severity
+                stats.eventsBySeverity[event.severity] = (stats.eventsBySeverity[event.severity] || 0) + 1;
+                
+                // Authentication statistics
+                if (event.eventType === 'authentication') {
+                    stats.authenticationEvents.total++;
+                    if (event.eventcode === 0x1000 || event.eventcode === 0x1100) {
+                        stats.authenticationEvents.successful++;
+                    } else {
+                        stats.authenticationEvents.failed++;
+                    }
+                }
+                
+                // Door statistics
+                if (event.eventType === 'door') {
+                    stats.doorEvents.total++;
+                    if (event.eventcode === 0x2000) stats.doorEvents.opened++;
+                    if (event.eventcode === 0x2001) stats.doorEvents.closed++;
+                }
+                
+                // Attendance statistics
+                if (event.eventType === 'attendance') {
+                    stats.attendanceEvents.total++;
+                    if (event.userid) {
+                        stats.attendanceEvents.uniqueUsers.add(event.userid);
+                    }
+                }
+            });
+
+            // Calculate success rate
+            if (stats.authenticationEvents.total > 0) {
+                stats.authenticationEvents.successRate = 
+                    (stats.authenticationEvents.successful / stats.authenticationEvents.total * 100).toFixed(2);
+            }
+
+            // Convert Set to count
+            stats.attendanceEvents.uniqueUsers = stats.attendanceEvents.uniqueUsers.size;
+
+            return stats;
+        } catch (error) {
+            this.logger.error('Error getting event statistics:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Save image from image event
+     * @param {Object} imageEvent - Image event object
+     * @param {string} outputPath - Output path for image file
+     * @returns {Promise<string>} Saved file path
+     */
+    async saveEventImage(imageEvent, outputPath) {
+        try {
+            if (!imageEvent.jpgimage) {
+                throw new Error('No image data in event');
+            }
+
+            const imageBuffer = Buffer.from(imageEvent.jpgimage, 'base64');
+            const fileName = `event_${imageEvent.id}_${Date.now()}.jpg`;
+            const fullPath = path.join(outputPath, fileName);
+
+            // Ensure directory exists
+            if (!fs.existsSync(outputPath)) {
+                fs.mkdirSync(outputPath, { recursive: true });
+            }
+
+            fs.writeFileSync(fullPath, imageBuffer);
+            
+            this.logger.info(`Saved event image to ${fullPath}`);
+            return fullPath;
+        } catch (error) {
+            this.logger.error('Error saving event image:', error);
+            throw error;
+        }
+    }
+
+    // ================ UTILITY METHODS ================
+
+    /**
+     * Get monitoring status
+     * @returns {Object} Monitoring status
+     */
+    getMonitoringStatus() {
+        return {
+            isMonitoring: this.isMonitoring,
+            monitoredDevices: Array.from(this.eventSubscriptions.keys()),
+            eventCodeMapSize: this.eventCodeMap.size
+        };
+    }
+
+    /**
+     * Export events to JSON file
+     * @param {Array} events - Events to export
+     * @param {string} filePath - Output file path
+     * @returns {Promise<string>} Exported file path
+     */
+    async exportEvents(events, filePath) {
+        try {
+            const exportData = {
+                exportedAt: new Date().toISOString(),
+                eventCount: events.length,
+                events: events
+            };
+
+            fs.writeFileSync(filePath, JSON.stringify(exportData, null, 2));
+            
+            this.logger.info(`Exported ${events.length} events to ${filePath}`);
+            return filePath;
+        } catch (error) {
+            this.logger.error('Error exporting events:', error);
+            throw error;
+        }
+    }
+}
+
+module.exports = SupremaEventService;
