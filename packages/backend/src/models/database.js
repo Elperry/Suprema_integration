@@ -245,17 +245,43 @@ class DatabaseManager {
     async updateDeviceConnectionStatus(id, last_event_sync = null, last_user_sync = null) {
         const updateData = {};
 
-        if (last_event_sync) {
+        // Handle DateTime values properly
+        if (last_event_sync && last_event_sync instanceof Date) {
             updateData.last_event_sync = last_event_sync;
         }
-        if (last_user_sync) {
+        if (last_user_sync && last_user_sync instanceof Date) {
             updateData.last_user_sync = last_user_sync;
+        }
+
+        // Only update if there's actual data to update
+        if (Object.keys(updateData).length === 0) {
+            return await this.prisma.device.findUnique({ where: { id } });
         }
 
         return await this.prisma.device.update({
             where: { id },
             data: updateData
         });
+    }
+
+    /**
+     * Increment device retry counter (for failed connection attempts)
+     */
+    async incrementDeviceRetries(id) {
+        // For now, just log the retry attempt
+        // You can add a retries column to the Device model if needed
+        this.logger.warn(`Device ${id} connection retry incremented`);
+        return;
+    }
+
+    /**
+     * Reset device retry counter (after successful connection)
+     */
+    async resetDeviceRetries(id) {
+        // For now, just log the reset
+        // You can add a retries column to the Device model if needed
+        this.logger.info(`Device ${id} connection retries reset`);
+        return;
     }
 
     // ================ GATE EVENTS ================
@@ -291,10 +317,7 @@ class DatabaseManager {
         return await this.prisma.gateEvent.findMany({
             where,
             orderBy: { etime: 'desc' },
-            take: filters.limit || 100,
-            include: {
-                device: true
-            }
+            take: filters.limit || 100
         });
     }
 

@@ -3,6 +3,37 @@
 ## Overview
 Modern, user-friendly React frontend for the Suprema HR Integration System.
 
+## Configuration
+
+### Environment Variables
+
+The frontend uses environment variables for configuration. Create or modify `.env` files:
+
+**`.env` (Base configuration)**
+```env
+VITE_API_URL=http://localhost:3000
+VITE_APP_NAME=Suprema HR Integration
+VITE_APP_VERSION=1.0.0
+```
+
+**`.env.development` (Development mode)**
+- Backend URL: `http://localhost:3000`
+- DevTools enabled
+
+**`.env.production` (Production mode)**
+- Update `VITE_API_URL` with your production backend URL
+- DevTools disabled
+
+### Global Constants
+
+All application constants are centralized in `src/config/constants.js`:
+- API endpoints
+- UI configuration (refresh intervals, limits)
+- Device status constants
+- Event types
+- HTTP status codes
+- Feature flags
+
 ## Features
 
 ### 📊 Dashboard

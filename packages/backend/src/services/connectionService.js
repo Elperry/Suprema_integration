@@ -439,7 +439,8 @@ class SupremaConnectionService extends EventEmitter {
                     });
                 } catch (error) {
                     this.logger.error(`Failed to connect to device ${device.name} (${device.ip}:${device.port}):`, error);
-                    await this.database.updateDeviceConnectionStatus(device.id, false, error);
+                    // Increment retry counter for failed connection
+                    await this.database.incrementDeviceRetries(device.id);
                     connectionResults.push({
                         device: device,
                         success: false,
@@ -468,8 +469,7 @@ class SupremaConnectionService extends EventEmitter {
             };
             const deviceId = await this.connectToDevice(config);
             
-            // Update device status in database
-            await this.database.updateDeviceConnectionStatus(deviceRecord.id, true);
+            // Reset device retry counter after successful connection
             await this.database.resetDeviceRetries(deviceRecord.id);
             
             // Store device info
@@ -629,10 +629,8 @@ class SupremaConnectionService extends EventEmitter {
             for (const device of dbDevices) {
                 const isActuallyConnected = this.connectedDevices.has(device.id);
                 
-                if (device.isConnected !== isActuallyConnected) {
-                    await this.database.updateDeviceConnectionStatus(device.id, isActuallyConnected);
-                    this.logger.info(`Synced connection status for device ${device.name}: ${isActuallyConnected}`);
-                }
+                // Log connection status (no isConnected field in DB to update)
+                this.logger.debug(`Device ${device.name} connection status: ${isActuallyConnected}`);
             }
         } catch (error) {
             this.logger.error('Failed to sync device status:', error);

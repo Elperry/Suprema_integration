@@ -10,6 +10,7 @@ import Users from './components/Users'
 import CardScanning from './components/CardScanning'
 import Events from './components/Events'
 import Settings from './components/Settings'
+import {API_CONFIG,API_ENDPOINTS } from './config/constants'
 
 function App() {
   const [health, setHealth] = useState(null)
@@ -23,7 +24,7 @@ function App() {
 
   const checkHealth = async () => {
     try {
-      const response = await axios.get('/api/health')
+      const response = await axios.get(`${API_CONFIG.BASE_URL}${API_ENDPOINTS.HEALTH}`)
       setHealth(response.data)
       setLoading(false)
     } catch (error) {

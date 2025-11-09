@@ -1,16 +1,16 @@
 import axios from 'axios';
-
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000/api';
+import { API_CONFIG, API_ENDPOINTS } from '../config/constants';
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_CONFIG.API_BASE_URL,
+  timeout: API_CONFIG.TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
 // Health check
-export const checkHealth = () => axios.get('http://localhost:3000/health');
+export const checkHealth = () => axios.get(`${API_CONFIG.BASE_URL}${API_ENDPOINTS.HEALTH}`);
 
 // ==================== DEVICE ENDPOINTS ====================
 
