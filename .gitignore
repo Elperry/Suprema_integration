@@ -65,4 +65,3 @@ temp/
 *.zip
 .env*
 package-lock.json
-example/
