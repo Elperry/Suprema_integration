@@ -65,3 +65,6 @@ temp/
 *.zip
 .env*
 package-lock.json
+
+
+biostar/
