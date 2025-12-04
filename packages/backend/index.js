@@ -522,10 +522,8 @@ class SupremaHRIntegrationApp {
 }
 
 // Create and start application if run directly
-const isMainModule = import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`;
-if (isMainModule) {
-    const app = new SupremaHRIntegrationApp();
-    app.start();
-}
+// Always start the app when this file is executed
+const app = new SupremaHRIntegrationApp();
+app.start();
 
 export default SupremaHRIntegrationApp;
