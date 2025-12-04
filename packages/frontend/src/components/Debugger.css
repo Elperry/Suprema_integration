@@ -24,12 +24,70 @@
   opacity: 0.9;
 }
 
+/* Tab Navigation */
+.debugger-tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tab-btn {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: #e0e0e0;
+  color: #666;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+  background: #d0d0d0;
+}
+
+.tab-btn.active {
+  background: white;
+  color: #667eea;
+  box-shadow: 0 -2px 4px rgba(0,0,0,0.1);
+}
+
+/* Section Info */
+.section-info {
+  font-size: 0.85rem;
+  color: #666;
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  background: #f0f7ff;
+  border-radius: 4px;
+  border-left: 3px solid #667eea;
+}
+
+/* Highlight Section */
+.sidebar-section.highlight {
+  background: linear-gradient(135deg, #f0f7ff 0%, #fff5f0 100%);
+  padding: 1rem;
+  border-radius: 8px;
+  border: 1px solid #e0e8ff;
+}
+
+/* Primary Button Style */
+.btn-test.btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.btn-test.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #5a6fd6 0%, #6a4190 100%);
+}
+
 /* Content Layout */
 .debugger-content {
   display: grid;
   grid-template-columns: 350px 1fr;
   gap: 1.5rem;
-  height: calc(100vh - 250px);
+  height: calc(100vh - 300px);
   overflow: hidden;
 }
 
@@ -96,6 +154,24 @@
 
 .form-group input[type="checkbox"] {
   width: auto;
+}
+
+/* Connected Badge */
+.connected-badge {
+  background: linear-gradient(135deg, #d4edda 0%, #c3e6cb 100%);
+  color: #155724;
+  padding: 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  border: 1px solid #28a745;
+}
+
+.connected-badge strong {
+  font-family: monospace;
+  background: rgba(0,0,0,0.1);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
 }
 
 /* Buttons */

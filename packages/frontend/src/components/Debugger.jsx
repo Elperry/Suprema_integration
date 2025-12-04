@@ -8,7 +8,13 @@ const Debugger = () => {
   const [selectedDevice, setSelectedDevice] = useState('')
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState([])
-  const [formData, setFormData] = useState({})
+  const [formData, setFormData] = useState({
+    // Direct device connection defaults
+    directIp: '192.168.1.100',
+    directPort: '51211',
+    directUseSSL: false
+  })
+  const [activeTab, setActiveTab] = useState('direct') // 'direct' or 'database'
 
   useEffect(() => {
     loadDevices()
@@ -45,6 +51,128 @@ const Debugger = () => {
   const clearResults = () => {
     setResults([])
   }
+
+  // =====================================================
+  // DIRECT DEVICE COMMUNICATION FUNCTIONS
+  // These communicate directly with devices using IP address
+  // =====================================================
+
+  const testDirectConnect = async () => {
+    setLoading(true)
+    const requestData = {
+      ip: formData.directIp,
+      port: parseInt(formData.directPort) || 51211,
+      useSSL: formData.directUseSSL || false
+    }
+    try {
+      const endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/connect`
+      const response = await axios.post(endpoint, requestData)
+      addResult('POST', endpoint, requestData, response.data)
+      // If connection successful, store the device ID
+      if (response.data.data?.deviceId) {
+        setFormData(prev => ({ ...prev, connectedDeviceId: response.data.data.deviceId }))
+      }
+    } catch (error) {
+      addResult('POST', `${API_CONFIG.API_BASE_URL}/devices/direct/connect`, requestData, null, error.response?.data || error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testDirectGetInfo = async () => {
+    setLoading(true)
+    // Use deviceId if available, otherwise use IP
+    const useDeviceId = formData.connectedDeviceId
+    let endpoint, params
+    
+    if (useDeviceId) {
+      params = { deviceId: useDeviceId }
+      endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/info?deviceId=${useDeviceId}`
+    } else {
+      params = { ip: formData.directIp, port: formData.directPort || 51211 }
+      endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/info?ip=${params.ip}&port=${params.port}`
+    }
+    
+    try {
+      const response = await axios.get(endpoint)
+      addResult('GET', endpoint, params, response.data)
+    } catch (error) {
+      addResult('GET', endpoint, params, null, error.response?.data || error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testDirectGetCapabilities = async () => {
+    setLoading(true)
+    // Use deviceId if available, otherwise use IP
+    const useDeviceId = formData.connectedDeviceId
+    let endpoint, params
+    
+    if (useDeviceId) {
+      params = { deviceId: useDeviceId }
+      endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/capabilities?deviceId=${useDeviceId}`
+    } else {
+      params = { ip: formData.directIp, port: formData.directPort || 51211 }
+      endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/capabilities?ip=${params.ip}&port=${params.port}`
+    }
+    
+    try {
+      const response = await axios.get(endpoint)
+      addResult('GET', endpoint, params, response.data)
+    } catch (error) {
+      addResult('GET', endpoint, params, null, error.response?.data || error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testDirectGetConnected = async () => {
+    setLoading(true)
+    try {
+      const endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/connected`
+      const response = await axios.get(endpoint)
+      addResult('GET', endpoint, {}, response.data)
+      
+      // If we get connected devices, auto-populate the device ID if available
+      if (response.data.data?.length > 0) {
+        const firstDevice = response.data.data[0]
+        setFormData(prev => ({
+          ...prev,
+          connectedDeviceId: firstDevice.deviceid,
+          directIp: firstDevice.ipaddr,
+          directPort: firstDevice.port.toString()
+        }))
+      }
+    } catch (error) {
+      addResult('GET', `${API_CONFIG.API_BASE_URL}/devices/direct/connected`, {}, null, error.response?.data || error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const testDirectDisconnect = async () => {
+    setLoading(true)
+    const deviceIdToDisconnect = formData.disconnectDeviceId || formData.connectedDeviceId
+    const requestData = { deviceId: deviceIdToDisconnect }
+    try {
+      const endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/disconnect`
+      const response = await axios.post(endpoint, requestData)
+      addResult('POST', endpoint, requestData, response.data)
+      // Clear the connected device ID on successful disconnect
+      if (response.data.success) {
+        setFormData(prev => ({ ...prev, connectedDeviceId: '', disconnectDeviceId: '' }))
+      }
+    } catch (error) {
+      addResult('POST', `${API_CONFIG.API_BASE_URL}/devices/direct/disconnect`, requestData, null, error.response?.data || error.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // =====================================================
+  // DATABASE-BASED FUNCTIONS (Original)
+  // =====================================================
 
   // Device Connection Functions
   const testSearchDevices = async () => {
@@ -278,150 +406,256 @@ const Debugger = () => {
         <p>Test all device connection functions and view JSON responses</p>
       </div>
 
+      {/* Tab Navigation */}
+      <div className="debugger-tabs">
+        <button 
+          className={`tab-btn ${activeTab === 'direct' ? 'active' : ''}`}
+          onClick={() => setActiveTab('direct')}
+        >
+          📡 Direct Device Communication
+        </button>
+        <button 
+          className={`tab-btn ${activeTab === 'database' ? 'active' : ''}`}
+          onClick={() => setActiveTab('database')}
+        >
+          🗄️ Database-Based Operations
+        </button>
+      </div>
+
       <div className="debugger-content">
         <div className="debugger-sidebar">
-          <div className="sidebar-section">
-            <h3>Device Selection</h3>
-            <select
-              value={selectedDevice}
-              onChange={(e) => setSelectedDevice(e.target.value)}
-              className="device-select"
-            >
-              <option value="">Select a device</option>
-              {devices.map(device => (
-                <option key={device.id} value={device.id}>
-                  {device.name} ({device.ip}:{device.port})
-                </option>
-              ))}
-            </select>
-            <button onClick={loadDevices} className="btn-secondary">
-              🔄 Refresh Devices
-            </button>
-          </div>
+          
+          {/* Direct Device Communication Tab */}
+          {activeTab === 'direct' && (
+            <>
+              <div className="sidebar-section highlight">
+                <h3>📡 Direct Device Connection</h3>
+                <p className="section-info">Communicate directly with devices using IP address - no database required</p>
+                
+                {/* Show connected device ID if available */}
+                {formData.connectedDeviceId && (
+                  <div className="connected-badge">
+                    ✅ Connected Device ID: <strong>{formData.connectedDeviceId}</strong>
+                  </div>
+                )}
+                
+                <div className="form-group">
+                  <label>Device IP Address:</label>
+                  <input
+                    type="text"
+                    placeholder="10.0.0.8"
+                    value={formData.directIp || ''}
+                    onChange={(e) => setFormData({ ...formData, directIp: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Device Port:</label>
+                  <input
+                    type="number"
+                    placeholder="51211"
+                    value={formData.directPort || 51211}
+                    onChange={(e) => setFormData({ ...formData, directPort: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Connected Device ID (auto-filled):</label>
+                  <input
+                    type="text"
+                    placeholder="Will be filled after getting connected devices"
+                    value={formData.connectedDeviceId || ''}
+                    onChange={(e) => setFormData({ ...formData, connectedDeviceId: e.target.value })}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={formData.directUseSSL || false}
+                      onChange={(e) => setFormData({ ...formData, directUseSSL: e.target.checked })}
+                    />
+                    Use SSL
+                  </label>
+                </div>
+              </div>
 
-          <div className="sidebar-section">
-            <h3>Search & Discovery</h3>
-            <div className="form-group">
-              <label>Timeout (seconds):</label>
-              <input
-                type="number"
-                value={formData.searchTimeout || 5}
-                onChange={(e) => setFormData({ ...formData, searchTimeout: e.target.value })}
-                min="1"
-                max="30"
-              />
-            </div>
-            <button onClick={testSearchDevices} disabled={loading} className="btn-test">
-              🔍 Search Devices
-            </button>
-            <button onClick={testGetDevices} disabled={loading} className="btn-test">
-              📋 Get All Devices
-            </button>
-            <button onClick={testGetConnectedDevices} disabled={loading} className="btn-test">
-              🔗 Get Connected Devices
-            </button>
-          </div>
+              <div className="sidebar-section">
+                <h3>🔌 Step 1: Check Connection</h3>
+                <p className="section-info">First, get the list of connected devices to find the device ID</p>
+                <button onClick={testDirectGetConnected} disabled={loading} className="btn-test btn-primary">
+                  � Get Connected Devices
+                </button>
+                <button onClick={testDirectConnect} disabled={loading || !formData.directIp} className="btn-test">
+                  � Connect New Device
+                </button>
+              </div>
 
-          <div className="sidebar-section">
-            <h3>Add New Device</h3>
-            <div className="form-group">
-              <input
-                type="text"
-                placeholder="Device Name"
-                value={formData.deviceName || ''}
-                onChange={(e) => setFormData({ ...formData, deviceName: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="IP Address"
-                value={formData.deviceIp || ''}
-                onChange={(e) => setFormData({ ...formData, deviceIp: e.target.value })}
-              />
-              <input
-                type="number"
-                placeholder="Port"
-                value={formData.devicePort || 51211}
-                onChange={(e) => setFormData({ ...formData, devicePort: e.target.value })}
-              />
-              <label>
-                <input
-                  type="checkbox"
-                  checked={formData.deviceUseSSL || false}
-                  onChange={(e) => setFormData({ ...formData, deviceUseSSL: e.target.checked })}
-                />
-                Use SSL
-              </label>
-            </div>
-            <button onClick={testAddDevice} disabled={loading} className="btn-test">
-              ➕ Add Device
-            </button>
-          </div>
+              <div className="sidebar-section">
+                <h3>ℹ️ Step 2: Get Device Info</h3>
+                <p className="section-info">Uses Device ID if available, otherwise connects by IP</p>
+                <button onClick={testDirectGetInfo} disabled={loading || (!formData.directIp && !formData.connectedDeviceId)} className="btn-test btn-primary">
+                  ℹ️ Get Device Info
+                </button>
+                <button onClick={testDirectGetCapabilities} disabled={loading || (!formData.directIp && !formData.connectedDeviceId)} className="btn-test btn-primary">
+                  🎯 Get Capabilities
+                </button>
+              </div>
 
-          <div className="sidebar-section">
-            <h3>Connection Control</h3>
-            <button onClick={testConnectDevice} disabled={loading || !selectedDevice} className="btn-test">
-              🔌 Connect Device
-            </button>
-            <button onClick={testDisconnectDevice} disabled={loading || !selectedDevice} className="btn-test">
-              🔌 Disconnect Device
-            </button>
-            <button onClick={testConnectionTest} disabled={loading || !selectedDevice} className="btn-test">
-              ✓ Test Connection
-            </button>
-          </div>
+              <div className="sidebar-section">
+                <h3>🔌 Disconnect</h3>
+                <button onClick={testDirectDisconnect} disabled={loading || !formData.connectedDeviceId} className="btn-test btn-danger">
+                  🔌 Disconnect Device
+                </button>
+              </div>
+            </>
+          )}
 
-          <div className="sidebar-section">
-            <h3>Device Information</h3>
-            <button onClick={testGetDeviceInfo} disabled={loading || !selectedDevice} className="btn-test">
-              ℹ️ Get Device Info
-            </button>
-            <button onClick={testGetDeviceCapabilities} disabled={loading || !selectedDevice} className="btn-test">
-              🎯 Get Capabilities
-            </button>
-          </div>
+          {/* Database-Based Operations Tab */}
+          {activeTab === 'database' && (
+            <>
+              <div className="sidebar-section">
+                <h3>Device Selection</h3>
+                <select
+                  value={selectedDevice}
+                  onChange={(e) => setSelectedDevice(e.target.value)}
+                  className="device-select"
+                >
+                  <option value="">Select a device</option>
+                  {devices.map(device => (
+                    <option key={device.id} value={device.id}>
+                      {device.name} ({device.ip}:{device.port})
+                    </option>
+                  ))}
+                </select>
+                <button onClick={loadDevices} className="btn-secondary">
+                  🔄 Refresh Devices
+                </button>
+              </div>
 
-          <div className="sidebar-section">
-            <h3>Device Management</h3>
-            <div className="form-group">
-              <input
-                type="text"
-                placeholder="New Name"
-                value={formData.updateName || ''}
-                onChange={(e) => setFormData({ ...formData, updateName: e.target.value })}
-              />
-              <input
-                type="text"
-                placeholder="New IP"
-                value={formData.updateIp || ''}
-                onChange={(e) => setFormData({ ...formData, updateIp: e.target.value })}
-              />
-              <input
-                type="number"
-                placeholder="New Port"
-                value={formData.updatePort || ''}
-                onChange={(e) => setFormData({ ...formData, updatePort: e.target.value })}
-              />
-            </div>
-            <button onClick={testUpdateDevice} disabled={loading || !selectedDevice} className="btn-test">
-              ✏️ Update Device
-            </button>
-            <button onClick={testDeleteDevice} disabled={loading || !selectedDevice} className="btn-test btn-danger">
-              🗑️ Delete Device
-            </button>
-          </div>
+              <div className="sidebar-section">
+                <h3>Search & Discovery</h3>
+                <div className="form-group">
+                  <label>Timeout (seconds):</label>
+                  <input
+                    type="number"
+                    value={formData.searchTimeout || 5}
+                    onChange={(e) => setFormData({ ...formData, searchTimeout: e.target.value })}
+                    min="1"
+                    max="30"
+                  />
+                </div>
+                <button onClick={testSearchDevices} disabled={loading} className="btn-test">
+                  🔍 Search Devices
+                </button>
+                <button onClick={testGetDevices} disabled={loading} className="btn-test">
+                  📋 Get All Devices
+                </button>
+                <button onClick={testGetConnectedDevices} disabled={loading} className="btn-test">
+                  🔗 Get Connected Devices
+                </button>
+              </div>
 
-          <div className="sidebar-section">
-            <h3>System Operations</h3>
-            <button onClick={testSyncDeviceStatus} disabled={loading} className="btn-test">
-              🔄 Sync Device Status
-            </button>
-            <button onClick={testReconnectDevices} disabled={loading} className="btn-test">
-              🔁 Auto-Reconnect
-            </button>
-            <button onClick={testGetStatistics} disabled={loading} className="btn-test">
-              📊 Get Statistics
-            </button>
-          </div>
+              <div className="sidebar-section">
+                <h3>Add New Device</h3>
+                <div className="form-group">
+                  <input
+                    type="text"
+                    placeholder="Device Name"
+                    value={formData.deviceName || ''}
+                    onChange={(e) => setFormData({ ...formData, deviceName: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    placeholder="IP Address"
+                    value={formData.deviceIp || ''}
+                    onChange={(e) => setFormData({ ...formData, deviceIp: e.target.value })}
+                  />
+                  <input
+                    type="number"
+                    placeholder="Port"
+                    value={formData.devicePort || 51211}
+                    onChange={(e) => setFormData({ ...formData, devicePort: e.target.value })}
+                  />
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={formData.deviceUseSSL || false}
+                      onChange={(e) => setFormData({ ...formData, deviceUseSSL: e.target.checked })}
+                    />
+                    Use SSL
+                  </label>
+                </div>
+                <button onClick={testAddDevice} disabled={loading} className="btn-test">
+                  ➕ Add Device
+                </button>
+              </div>
+
+              <div className="sidebar-section">
+                <h3>Connection Control</h3>
+                <button onClick={testConnectDevice} disabled={loading || !selectedDevice} className="btn-test">
+                  🔌 Connect Device
+                </button>
+                <button onClick={testDisconnectDevice} disabled={loading || !selectedDevice} className="btn-test">
+                  🔌 Disconnect Device
+                </button>
+                <button onClick={testConnectionTest} disabled={loading || !selectedDevice} className="btn-test">
+                  ✓ Test Connection
+                </button>
+              </div>
+
+              <div className="sidebar-section">
+                <h3>Device Information</h3>
+                <button onClick={testGetDeviceInfo} disabled={loading || !selectedDevice} className="btn-test">
+                  ℹ️ Get Device Info
+                </button>
+                <button onClick={testGetDeviceCapabilities} disabled={loading || !selectedDevice} className="btn-test">
+                  🎯 Get Capabilities
+                </button>
+              </div>
+
+              <div className="sidebar-section">
+                <h3>Device Management</h3>
+                <div className="form-group">
+                  <input
+                    type="text"
+                    placeholder="New Name"
+                    value={formData.updateName || ''}
+                    onChange={(e) => setFormData({ ...formData, updateName: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    placeholder="New IP"
+                    value={formData.updateIp || ''}
+                    onChange={(e) => setFormData({ ...formData, updateIp: e.target.value })}
+                  />
+                  <input
+                    type="number"
+                    placeholder="New Port"
+                    value={formData.updatePort || ''}
+                    onChange={(e) => setFormData({ ...formData, updatePort: e.target.value })}
+                  />
+                </div>
+                <button onClick={testUpdateDevice} disabled={loading || !selectedDevice} className="btn-test">
+                  ✏️ Update Device
+                </button>
+                <button onClick={testDeleteDevice} disabled={loading || !selectedDevice} className="btn-test btn-danger">
+                  🗑️ Delete Device
+                </button>
+              </div>
+
+              <div className="sidebar-section">
+                <h3>System Operations</h3>
+                <button onClick={testSyncDeviceStatus} disabled={loading} className="btn-test">
+                  🔄 Sync Device Status
+                </button>
+                <button onClick={testReconnectDevices} disabled={loading} className="btn-test">
+                  🔁 Auto-Reconnect
+                </button>
+                <button onClick={testGetStatistics} disabled={loading} className="btn-test">
+                  📊 Get Statistics
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="debugger-results">
