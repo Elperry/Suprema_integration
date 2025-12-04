@@ -853,14 +853,14 @@ class SupremaConnectionService extends EventEmitter {
      * Connect to device using database configuration with retry logic
      */
     async connectToDeviceFromDB(deviceRecord) {
-        // Check if device is already connected
+        // Check if device is already connected in local map
         const existingConnection = Array.from(this.connectedDevices.entries()).find(
             ([id, device]) => device.ip === deviceRecord.ip && device.port === deviceRecord.port
         );
         
         if (existingConnection) {
             const [deviceId] = existingConnection;
-            this.logger.info(`Device ${deviceRecord.name} is already connected with ID ${deviceId}`);
+            this.logger.info(`Device ${deviceRecord.name} is already connected (local) with ID ${deviceId}`);
             
             // Ensure database status is updated
             if (this.database) {
@@ -868,6 +868,44 @@ class SupremaConnectionService extends EventEmitter {
             }
             
             return deviceId;
+        }
+        
+        // Also check the gateway for existing connections (in case device was connected externally)
+        try {
+            const gatewayDevices = await this.getConnectedDevices();
+            const gatewayDevice = gatewayDevices.find(d => {
+                const info = d.toObject ? d.toObject() : d;
+                return info.ipaddr === deviceRecord.ip && info.port === deviceRecord.port;
+            });
+            
+            if (gatewayDevice) {
+                const info = gatewayDevice.toObject ? gatewayDevice.toObject() : gatewayDevice;
+                const deviceId = info.deviceid;
+                this.logger.info(`Device ${deviceRecord.name} is already connected (gateway) with ID ${deviceId}`);
+                
+                // Add to local map
+                this.connectedDevices.set(deviceId, {
+                    id: deviceId,
+                    ip: deviceRecord.ip,
+                    port: deviceRecord.port,
+                    useSSL: deviceRecord.useSSL || false,
+                    connectedAt: new Date(),
+                    status: 'connected'
+                });
+                
+                // Store database ID mapping
+                this.deviceDbIdMap = this.deviceDbIdMap || new Map();
+                this.deviceDbIdMap.set(deviceId.toString(), deviceRecord.id);
+                
+                // Update database status
+                if (this.database) {
+                    await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
+                }
+                
+                return deviceId;
+            }
+        } catch (err) {
+            this.logger.warn(`Could not check gateway for existing connections: ${err.message}`);
         }
         
         const maxRetries = 3;
