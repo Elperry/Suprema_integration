@@ -18,9 +18,9 @@ model Device {
   last_event_sync DateTime @default(now())
   last_user_sync  DateTime @default(now())
   port            Int?     @default(51211) @db.UnsignedInt
-
-  // Relations
-  gateEvents      GateEvent[]
+  isActive        Boolean  @default(true)
+  status          String?  @default("disconnected")
+  useSSL          Boolean  @default(false)
 
   @@map("device")
 }
@@ -36,9 +36,6 @@ model GateEvent {
   etime_truncated String?   @db.VarChar(16)
   d               DateTime? @db.Date
   t               DateTime? @db.Time(0)
-
-  // Relations
-  device          Device?   @relation(fields: [gate_id], references: [id])
 
   @@index([etime], map: "etime")
   @@index([gate_id], map: "gate_id")
@@ -68,128 +65,4 @@ model TempAccess {
   ts            DateTime @default(now())
 
   @@map("tempaccess")
-}
-
-// Employee view - Read-only database view
-// Using @@ignore because views cannot be managed by Prisma migrations
-// Access via raw queries: prisma.$queryRaw
-/// @ignore
-model Employee {
-  id                      Int       @id @db.UnsignedInt
-  username                String?   @db.VarChar(191)
-  userpassword            String?   @db.VarChar(191)
-  displayname             String?   @db.VarChar(191)
-  jobtitle                String?   @db.VarChar(191)
-  jobtype                 String?   @db.VarChar(191)
-  startdate               DateTime? @db.Date
-  start_contract_date     DateTime? @db.Date
-  end_contract_date       DateTime? @db.Date
-  contract_duration_months Float?   @db.Double
-  terminationdate         DateTime?
-  terminationreason       String?   @db.MediumText
-  salary                  Decimal?  @db.Decimal(10, 2)
-  payment_way             String?   @db.VarChar(100)
-  bankaccount             String?   @db.VarChar(150)
-  bankcode                String?   @db.VarChar(50)
-  ssn                     String?   @db.VarChar(191)
-  officialemail           String?   @db.VarChar(300)
-  departmentid            String?   @db.VarChar(100)
-  workingtime             String?   @db.VarChar(191)
-  grade                   Int?      @db.UnsignedTinyInt
-  rank                    Int?      @db.UnsignedInt
-  hrank                   Int?
-  latestdegree            String?   @db.VarChar(255)
-  referral                String?   @db.VarChar(191)
-  hearabout               String?   @db.VarChar(191)
-  submitted               String?   @db.VarChar(191)
-  submitiondate           String?   @db.VarChar(191)
-  accepted                String?   @db.VarChar(191)
-  contacted               String?   @db.VarChar(191)
-  finalstatus             String?   @db.VarChar(191)
-  harmonyfinalstatus      String?   @db.VarChar(191)
-  ivyfinalstatus          String?   @db.VarChar(191)
-  haccepted               Int?      @db.UnsignedTinyInt
-  hnotes                  String?   @db.VarChar(191)
-  notes                   String?   @db.MediumText
-  staffnotes              String?   @db.MediumText
-  hasvisa                 String?   @db.VarChar(50)
-  suspend                 String?   @db.VarChar(10)
-  borroweditems           String?   @db.VarChar(500)
-  driveid                 String?   @db.Text
-  employeephoto           String?   @db.VarChar(191)
-  baseimage               String?   @db.LongText
-  company_id              Int?
-  absfactor               Decimal?  @db.Decimal(10, 0)
-  absdays                 Int?
-
-  @@map("employee")
-  @@ignore
-}
-
-// AllEmployees view - Read-only database view for extended employee data
-// Using @@ignore because views cannot be managed by Prisma migrations
-// Access via raw queries: prisma.$queryRaw
-/// @ignore
-model AllEmployees {
-  id                  Int       @id @db.UnsignedInt
-  firstname           String?   @db.VarChar(191)
-  middlename          String?   @db.VarChar(191)
-  lastname            String?   @db.VarChar(191)
-  fullname            String?   @db.Text
-  displayname         String?   @db.VarChar(191)
-  gender              String?   @db.VarChar(191)
-  dateofbirth         DateTime? @db.Date
-  native              String?   @db.VarChar(191)
-  email               String?   @db.VarChar(191)
-  mobile              String?   @db.VarChar(397)
-  jobtitle            String?   @db.VarChar(191)
-  startdate           DateTime? @db.Date
-  terminationdate     DateTime?
-  terminationreason   String?   @db.MediumText
-  salary              Decimal?  @db.Decimal(10, 2)
-  payment_way         String?   @db.VarChar(100)
-  bankaccount         String?   @db.VarChar(150)
-  bankcode            String?   @db.VarChar(50)
-  ssn                 String?   @db.VarChar(191)
-  officialemail       String?   @db.VarChar(300)
-  rank                Int?      @db.UnsignedInt
-  hrank               Int?
-  latestdegree        String?   @db.VarChar(255)
-  submitted           String?   @db.VarChar(191)
-  contacted           String?   @db.VarChar(191)
-  finalstatus         String?   @db.VarChar(191)
-  harmonyfinalstatus  String?   @db.VarChar(191)
-  ivyfinalstatus      String?   @db.VarChar(191)
-  hnotes              String?   @db.VarChar(191)
-  notes               String?   @db.MediumText
-  staffnotes          String?   @db.MediumText
-  hasvisa             String?   @db.VarChar(50)
-  suspend             String?   @db.VarChar(10)
-  borroweditems       String?   @db.VarChar(500)
-  card                String?   @db.VarChar(255)
-  driveid             String?   @db.Text
-  company             String?   @db.VarChar(500)
-  company_id          Int?
-  absfactor           Decimal?  @db.Decimal(10, 0)
-  appointments        String?   @db.LongText
-  happointments       String?   @db.LongText
-  harmonyppointments  String?   @db.LongText
-  ivyappointments     String?   @db.LongText
-  jobs                String?   @db.LongText
-  dates               String?   @db.LongText
-
-  @@map("allemployees")
-  @@ignore
-}
-
-// MailTemplates Body view - Read-only database view
-// Using @@ignore because views cannot be managed by Prisma migrations
-/// @ignore
-model MailTemplatesBody {
-  id   Int     @id
-  dir  String? @db.VarChar(3)
-  body String? @db.MediumText
-
-  @@map("mailtemplates_body")
-  @@ignore
 }
