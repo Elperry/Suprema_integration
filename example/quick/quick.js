@@ -22,11 +22,11 @@ import event from '../event.js';
 import testEvent from './testEvent.js';
 import util from '../util.js';
 
-const GATEWAY_CA_FILE = 'c:/ca.crt';
-const GATEWAY_IP = '192.168.40.83';
+const GATEWAY_CA_FILE = './cert/ca.crt';
+const GATEWAY_IP = 'localhost';
 const GATEWAY_PORT = 4000;
 
-const DEVICE_IP = '192.168.40.101';
+const DEVICE_IP = '10.0.0.8';
 const DEVICE_PORT = 51211;
 const USE_SSL = false;
 
