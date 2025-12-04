@@ -80,24 +80,96 @@ class SupremaEventService extends EventEmitter {
     }
 
     /**
-     * Create default event code map with common event types
+     * Create default event code map with comprehensive Suprema event types
      */
     createDefaultEventCodeMap() {
         const defaultEvents = [
+            // Authentication Events (0x1000 - 0x1FFF)
             { event_code: 0x1000, sub_code: 0x0, desc: 'Verify Success' },
-            { event_code: 0x1001, sub_code: 0x0, desc: 'Verify Fail' },
+            { event_code: 0x1001, sub_code: 0x0, desc: 'Verify Fail - Not Registered' },
+            { event_code: 0x1002, sub_code: 0x0, desc: 'Verify Fail - Mismatch' },
+            { event_code: 0x1003, sub_code: 0x0, desc: 'Verify Fail - Timeout' },
             { event_code: 0x1100, sub_code: 0x0, desc: 'Identify Success' },
-            { event_code: 0x1101, sub_code: 0x0, desc: 'Identify Fail' },
+            { event_code: 0x1101, sub_code: 0x0, desc: 'Identify Fail - Not Registered' },
+            { event_code: 0x1102, sub_code: 0x0, desc: 'Identify Fail - Mismatch' },
+            { event_code: 0x1103, sub_code: 0x0, desc: 'Identify Fail - Timeout' },
+            { event_code: 0x1200, sub_code: 0x0, desc: 'Verify Success (Card)' },
+            { event_code: 0x1300, sub_code: 0x0, desc: 'Verify Success (Fingerprint)' },
+            { event_code: 0x1400, sub_code: 0x0, desc: 'Verify Success (Face)' },
+            { event_code: 0x1500, sub_code: 0x0, desc: 'Verify Success (PIN)' },
+            { event_code: 0x1600, sub_code: 0x0, desc: 'Dual Auth Success' },
+            { event_code: 0x1700, sub_code: 0x0, desc: 'Auth by Operator' },
+            
+            // Door Events (0x2000 - 0x2FFF)
             { event_code: 0x2000, sub_code: 0x0, desc: 'Door Opened' },
             { event_code: 0x2001, sub_code: 0x0, desc: 'Door Closed' },
             { event_code: 0x2002, sub_code: 0x0, desc: 'Door Locked' },
             { event_code: 0x2003, sub_code: 0x0, desc: 'Door Unlocked' },
+            { event_code: 0x2004, sub_code: 0x0, desc: 'Door Forced Open' },
+            { event_code: 0x2005, sub_code: 0x0, desc: 'Door Held Open' },
+            { event_code: 0x2006, sub_code: 0x0, desc: 'Door Open Alarm' },
+            { event_code: 0x2007, sub_code: 0x0, desc: 'Door Open Warning' },
+            { event_code: 0x2008, sub_code: 0x0, desc: 'Door Released' },
+            { event_code: 0x2100, sub_code: 0x0, desc: 'Exit Button Pressed' },
+            { event_code: 0x2200, sub_code: 0x0, desc: 'Emergency Lock' },
+            { event_code: 0x2201, sub_code: 0x0, desc: 'Emergency Unlock' },
+            
+            // Zone Events (0x3000 - 0x3FFF)
             { event_code: 0x3000, sub_code: 0x0, desc: 'Zone APB Violation' },
+            { event_code: 0x3100, sub_code: 0x0, desc: 'Zone APB Alarm' },
+            { event_code: 0x3200, sub_code: 0x0, desc: 'Zone Timed APB' },
+            { event_code: 0x3300, sub_code: 0x0, desc: 'Zone Fire Alarm' },
+            { event_code: 0x3400, sub_code: 0x0, desc: 'Zone Scheduled Lock' },
+            { event_code: 0x3500, sub_code: 0x0, desc: 'Zone Scheduled Unlock' },
+            { event_code: 0x3600, sub_code: 0x0, desc: 'Zone Emergency Lock' },
+            { event_code: 0x3700, sub_code: 0x0, desc: 'Zone Emergency Unlock' },
+            { event_code: 0x3800, sub_code: 0x0, desc: 'Zone Intrusion Alarm Start' },
+            { event_code: 0x3900, sub_code: 0x0, desc: 'Zone Intrusion Alarm Stop' },
+            { event_code: 0x3A00, sub_code: 0x0, desc: 'Zone Interlock Alarm Start' },
+            { event_code: 0x3B00, sub_code: 0x0, desc: 'Zone Interlock Alarm Stop' },
+            { event_code: 0x3C00, sub_code: 0x0, desc: 'Zone Lift Lock' },
+            { event_code: 0x3D00, sub_code: 0x0, desc: 'Zone Lift Unlock' },
+            
+            // Device/System Events (0x4000 - 0x4FFF)
             { event_code: 0x4000, sub_code: 0x0, desc: 'Device Started' },
             { event_code: 0x4001, sub_code: 0x0, desc: 'Device Stopped' },
+            { event_code: 0x4100, sub_code: 0x0, desc: 'Device Reset' },
+            { event_code: 0x4101, sub_code: 0x0, desc: 'Device Config Changed' },
+            { event_code: 0x4102, sub_code: 0x0, desc: 'Device Factory Reset' },
+            { event_code: 0x4103, sub_code: 0x0, desc: 'Device Time Synced' },
+            { event_code: 0x4200, sub_code: 0x0, desc: 'RS485 Connect' },
+            { event_code: 0x4201, sub_code: 0x0, desc: 'RS485 Disconnect' },
+            { event_code: 0x4300, sub_code: 0x0, desc: 'Tamper On' },
+            { event_code: 0x4301, sub_code: 0x0, desc: 'Tamper Off' },
+            { event_code: 0x4400, sub_code: 0x0, desc: 'Input Detected' },
+            { event_code: 0x4500, sub_code: 0x0, desc: 'Output Changed' },
+            { event_code: 0x4600, sub_code: 0x0, desc: 'Firmware Update Started' },
+            { event_code: 0x4601, sub_code: 0x0, desc: 'Firmware Update Success' },
+            { event_code: 0x4602, sub_code: 0x0, desc: 'Firmware Update Failed' },
+            { event_code: 0x4700, sub_code: 0x0, desc: 'Network Connected' },
+            { event_code: 0x4701, sub_code: 0x0, desc: 'Network Disconnected' },
+            { event_code: 0x4800, sub_code: 0x0, desc: 'License Changed' },
+            
+            // User Events (0x5000 - 0x5FFF)
             { event_code: 0x5000, sub_code: 0x0, desc: 'User Enrolled' },
             { event_code: 0x5001, sub_code: 0x0, desc: 'User Deleted' },
-            { event_code: 0x6000, sub_code: 0x0, desc: 'Time Attendance' }
+            { event_code: 0x5002, sub_code: 0x0, desc: 'User Updated' },
+            { event_code: 0x5100, sub_code: 0x0, desc: 'User Access On' },
+            { event_code: 0x5101, sub_code: 0x0, desc: 'User Access Off' },
+            { event_code: 0x5200, sub_code: 0x0, desc: 'Credential Added' },
+            { event_code: 0x5201, sub_code: 0x0, desc: 'Credential Deleted' },
+            { event_code: 0x5300, sub_code: 0x0, desc: 'User Blacklisted' },
+            { event_code: 0x5301, sub_code: 0x0, desc: 'User Unblacklisted' },
+            
+            // T&A Events (0x6000 - 0x6FFF)
+            { event_code: 0x6000, sub_code: 0x0, desc: 'Time Attendance - Check In' },
+            { event_code: 0x6001, sub_code: 0x0, desc: 'Time Attendance - Check Out' },
+            { event_code: 0x6002, sub_code: 0x0, desc: 'Time Attendance - Break Start' },
+            { event_code: 0x6003, sub_code: 0x0, desc: 'Time Attendance - Break End' },
+            { event_code: 0x6100, sub_code: 0x0, desc: 'TNA Key 1' },
+            { event_code: 0x6101, sub_code: 0x0, desc: 'TNA Key 2' },
+            { event_code: 0x6102, sub_code: 0x0, desc: 'TNA Key 3' },
+            { event_code: 0x6103, sub_code: 0x0, desc: 'TNA Key 4' }
         ];
 
         defaultEvents.forEach(event => {
@@ -105,7 +177,7 @@ class SupremaEventService extends EventEmitter {
             this.eventCodeMap.set(key, event.desc);
         });
 
-        this.logger.info('Created default event code map');
+        this.logger.info(`Created default event code map with ${defaultEvents.length} entries`);
     }
 
     /**
@@ -115,8 +187,36 @@ class SupremaEventService extends EventEmitter {
      * @returns {string} Event description
      */
     getEventDescription(eventCode, subCode) {
+        // First try exact match with subcode
         const key = `${eventCode}_${subCode}`;
-        return this.eventCodeMap.get(key) || `Unknown Event (0x${(eventCode | subCode).toString(16)})`;
+        if (this.eventCodeMap.has(key)) {
+            return this.eventCodeMap.get(key);
+        }
+        
+        // Try with subcode 0 (most events use 0 subcode)
+        const baseKey = `${eventCode}_0`;
+        if (this.eventCodeMap.has(baseKey)) {
+            return this.eventCodeMap.get(baseKey);
+        }
+        
+        // Generate descriptive fallback based on event type ranges
+        const hexCode = eventCode.toString(16).toUpperCase().padStart(4, '0');
+        
+        if (eventCode >= 0x1000 && eventCode < 0x2000) {
+            return `Authentication Event (0x${hexCode})`;
+        } else if (eventCode >= 0x2000 && eventCode < 0x3000) {
+            return `Door Event (0x${hexCode})`;
+        } else if (eventCode >= 0x3000 && eventCode < 0x4000) {
+            return `Zone Event (0x${hexCode})`;
+        } else if (eventCode >= 0x4000 && eventCode < 0x5000) {
+            return `System Event (0x${hexCode})`;
+        } else if (eventCode >= 0x5000 && eventCode < 0x6000) {
+            return `User Event (0x${hexCode})`;
+        } else if (eventCode >= 0x6000 && eventCode < 0x7000) {
+            return `T&A Event (0x${hexCode})`;
+        }
+        
+        return `Event (0x${hexCode})`;
     }
 
     // ================ REAL-TIME MONITORING ================
@@ -600,11 +700,16 @@ class SupremaEventService extends EventEmitter {
         // Add event description
         enhanced.description = this.getEventDescription(event.eventcode, event.subcode);
         
-        // Add readable timestamp - handle invalid dates safely
+        // Add readable timestamp - the protobuf field is 'timestamp' not 'datetime'
+        // It's a Unix timestamp in seconds
         try {
-            if (event.datetime && event.datetime > 0) {
-                const date = new Date(event.datetime * 1000);
-                if (!isNaN(date.getTime())) {
+            // Check for timestamp field (protobuf uses 'timestamp')
+            const rawTimestamp = event.timestamp || event.datetime;
+            if (rawTimestamp && rawTimestamp > 0) {
+                // Handle both seconds and milliseconds timestamps
+                const timestampMs = rawTimestamp > 1e12 ? rawTimestamp : rawTimestamp * 1000;
+                const date = new Date(timestampMs);
+                if (!isNaN(date.getTime()) && date.getFullYear() > 1970) {
                     enhanced.timestamp = date.toISOString();
                 } else {
                     enhanced.timestamp = null;
@@ -613,6 +718,7 @@ class SupremaEventService extends EventEmitter {
                 enhanced.timestamp = null;
             }
         } catch (err) {
+            this.logger.warn('Error parsing event timestamp:', err.message);
             enhanced.timestamp = null;
         }
         
