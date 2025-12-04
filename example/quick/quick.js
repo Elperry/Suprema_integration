@@ -22,7 +22,7 @@ import event from '../event.js';
 import testEvent from './testEvent.js';
 import util from '../util.js';
 
-const GATEWAY_CA_FILE = './cert/ca.crt';
+const GATEWAY_CA_FILE = '/home/gate/Desktop/Suprema/Suprema_integration/cert/ca.crt';
 const GATEWAY_IP = 'localhost';
 const GATEWAY_PORT = 4000;
 
