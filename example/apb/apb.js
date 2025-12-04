@@ -1,5 +1,5 @@
-import apbZoneMessage from '../../biostar/service/apb_zone_pb.js';
-import apbZoneService from '../../biostar/service/apb_zone_grpc_pb.js';
+const apbZoneMessage = require('../../biostar/service/apb_zone_pb');
+const apbZoneService = require('../../biostar/service/apb_zone_grpc_pb');
 
 var apbZoneClient = null;
 

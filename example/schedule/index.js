@@ -1,4 +1,4 @@
-import schedule from './schedule.js';
+const schedule = require('./schedule');
 
 module.exports.initClient = schedule.initClient;
 module.exports.getClient = schedule.getClient;

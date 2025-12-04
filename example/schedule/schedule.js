@@ -1,5 +1,5 @@
-import scheduleMessage from '../../biostar/service/schedule_pb.js';
-import scheduleService from '../../biostar/service/schedule_grpc_pb.js';
+const scheduleMessage = require('../../biostar/service/schedule_pb');
+const scheduleService = require('../../biostar/service/schedule_grpc_pb');
 
 var scheduleClient = null;
 

@@ -1,5 +1,5 @@
-import connectMessage from '../../biostar/service/connect_pb.js';
-import connectService from '../../biostar/service/connect_grpc_pb.js';
+const connectMessage = require('../../biostar/service/connect_pb');
+const connectService = require('../../biostar/service/connect_grpc_pb');
 
 var connClient = null;
 

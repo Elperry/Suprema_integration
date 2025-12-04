@@ -1,4 +1,4 @@
-import voip from './voip.js';
+const voip = require('./voip');
 
 module.exports.initClient = voip.initClient;
 module.exports.getConfig = voip.getConfig;

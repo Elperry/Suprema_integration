@@ -2,7 +2,6 @@
   "name": "suprema-hr-integration",
   "version": "1.0.0",
   "description": "Suprema BioStar device integration for HR systems using G-SDK",
-  "type": "module",
   "private": true,
   "workspaces": [
     "packages/*"

@@ -1,6 +1,6 @@
-import connectMessage from '../../biostar/service/connect_pb.js';
-import connectService from '../../biostar/service/connect_grpc_pb.js';
-import connect from './connect.js';
+const connectMessage = require('../../biostar/service/connect_pb');
+const connectService = require('../../biostar/service/connect_grpc_pb');
+const connect = require('./connect');
 
 function getPendingList() {
   var req = new connectMessage.GetPendingListRequest();

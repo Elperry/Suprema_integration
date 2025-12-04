@@ -1,8 +1,8 @@
-import menu from '../../../cli/menu.js';
-import connect from '../../../connect.js';
-import connectMaster from '../../../connectMaster.js';
-import mainMenu from './mainMenu.js';
-import readlineSync from 'readline-sync';
+const menu = require('../../../cli/menu');
+const connect = require('../../../connect');
+const connectMaster = require('../../../connectMaster');
+const mainMenu = require('./mainMenu');
+const readlineSync = require('readline-sync');
 
 async function showAsyncConnection() {
   var connInfos = [];

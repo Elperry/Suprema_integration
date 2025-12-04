@@ -1,6 +1,6 @@
-import card from '../../card.js';
-import user from '../user.js';
-import menu from '../../cli/menu.js';
+const card = require('../../card');
+const user = require('../user');
+const menu = require('../../cli/menu');
 
 async function test(devID, userID) {
   try {

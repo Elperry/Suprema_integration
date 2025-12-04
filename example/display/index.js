@@ -1,4 +1,4 @@
-import display from './display.js';
+const display = require('./display');
 
 module.exports.initClient = display.initClient;
 module.exports.getConfig = display.getConfig;

@@ -1,10 +1,10 @@
-import grpc from '@grpc/grpc-js';
-import fs from 'fs';
-import connect from '../../connect.js';
-import thermal from '../thermal.js';
-import event from '../../event.js';
-import testConfig from './testConfig.js';
-import testEvent from './testEvent.js';
+const grpc = require('grpc');
+const fs = require('fs');
+const connect = require('../../connect');
+const thermal = require('../thermal');
+const event = require('../../event');
+const testConfig = require('./testConfig');
+const testEvent = require('./testEvent');
 
 const GATEWAY_CA_FILE = '../../../../cert/gateway/192.168.28.111/ca.crt';
 const GATEWAY_IP = '192.168.28.111';

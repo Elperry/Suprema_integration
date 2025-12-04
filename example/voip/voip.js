@@ -1,5 +1,5 @@
-import voipMessage from '../../biostar/service/voip_pb.js';
-import voipService from '../../biostar/service/voip_grpc_pb.js';
+const voipMessage = require('../../biostar/service/voip_pb');
+const voipService = require('../../biostar/service/voip_grpc_pb');
 
 var voipClient = null;
 

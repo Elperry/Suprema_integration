@@ -1,7 +1,7 @@
-import schedule from '../schedule.js';
-import menu from '../../cli/menu.js';
-import util from '../../util.js';
-import moment from 'moment';
+const schedule = require('../schedule');
+const menu = require('../../cli/menu');
+const util = require('../../util');
+const moment = require('moment');
 
 const SAMPLE_HOLIDAY_GROUP_ID = 1;
 const WEEKLY_SCHEDULE_ID = 2; // 0 and 1 are reserved

@@ -1,5 +1,5 @@
-import rtsp from '../rtsp.js';
-import menu from '../../cli/menu.js';
+const rtsp = require('../rtsp');
+const menu = require('../../cli/menu');
 
 async function test(devID, config) {
   try {

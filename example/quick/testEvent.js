@@ -1,6 +1,6 @@
-import event from '../event.js';
-import util from '../util.js';
-import fs from 'fs';
+const event = require('../event');
+const util = require('../util');
+const fs = require('fs');
 
 const MAX_NUM_OF_LOG = 16;
 const MAX_NUM_OF_IMAGE_LOG = 2;

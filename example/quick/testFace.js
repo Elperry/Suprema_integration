@@ -1,5 +1,5 @@
-import face from '../face.js';
-import fs from 'fs';
+const face = require('../face');
+const fs = require('fs');
 
 const IMAGE_FILENAME = './face.bmp';
 

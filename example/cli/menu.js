@@ -1,5 +1,5 @@
-import readlineSync from 'readline-sync';
-import readline from 'readline';
+const readlineSync = require('readline-sync');
+const readline = require('readline');
 
 class MenuItem {
   constructor(key, text, callback, exitMenu) {

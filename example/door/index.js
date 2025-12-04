@@ -1,4 +1,4 @@
-import door from './door.js';
+const door = require('./door');
 
 module.exports.initClient = door.initClient;
 module.exports.getClient = door.getClient;

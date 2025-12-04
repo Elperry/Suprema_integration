@@ -1,4 +1,4 @@
-import action from './action.js';
+const action = require('./action');
 
 module.exports.initClient = action.initClient;
 module.exports.getClient = action.getClient;

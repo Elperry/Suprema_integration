@@ -1,4 +1,4 @@
-import apb from './apb.js';
+const apb = require('./apb');
 
 module.exports.initClient = apb.initClient;
 module.exports.getClient = apb.getClient;

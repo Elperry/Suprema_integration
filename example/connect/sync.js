@@ -1,5 +1,5 @@
-import connectMessage from '../../biostar/service/connect_pb.js';
-import connect from './connect.js';
+const connectMessage = require('../../biostar/service/connect_pb');
+const connect = require('./connect');
 
 function connectToDevice(addr, port, useSSL) {
   var connInfo = new connectMessage.ConnectInfo();

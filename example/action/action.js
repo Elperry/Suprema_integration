@@ -1,5 +1,5 @@
-import actionMessage from '../../biostar/service/action_pb.js';
-import actionService from '../../biostar/service/action_grpc_pb.js';
+const actionMessage = require('../../biostar/service/action_pb');
+const actionService = require('../../biostar/service/action_grpc_pb');
 
 var actionClient = null;
 

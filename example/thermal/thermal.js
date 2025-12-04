@@ -1,5 +1,5 @@
-import thermalMessage from '../../biostar/service/thermal_pb.js';
-import thermalService from '../../biostar/service/thermal_grpc_pb.js';
+const thermalMessage = require('../../biostar/service/thermal_pb');
+const thermalService = require('../../biostar/service/thermal_grpc_pb');
 
 var thermalClient = null;
 

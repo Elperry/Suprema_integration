@@ -1,10 +1,10 @@
-import door from '../door.js';
-import device from '../../device.js';
-import menu from '../../cli/menu.js';
-import util from '../../util.js';
-import access from '../../access.js';
-import user from '../../user.js';
-import testEvent from './testEvent.js';
+const door = require('../door');
+const device = require('../../device');
+const menu = require('../../cli/menu');
+const util = require('../../util');
+const access = require('../../access');
+const user = require('../../user');
+const testEvent = require('./testEvent');
 
 const TEST_DOOR_ID = 1;
 const TEST_ACCESS_LEVEL_ID = 1;

@@ -1,5 +1,5 @@
-import deviceMessage from '../../biostar/service/device_pb.js';
-import deviceService from '../../biostar/service/device_grpc_pb.js';
+const deviceMessage = require('../../biostar/service/device_pb');
+const deviceService = require('../../biostar/service/device_grpc_pb');
 
 var deviceClient = null;
 

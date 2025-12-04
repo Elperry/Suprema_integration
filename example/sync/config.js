@@ -1,5 +1,5 @@
-import fs from 'fs';
-import connect from '../connect.js';
+const fs = require('fs');
+const connect = require('../connect');
 
 var configData = null;
 var configFile = null;

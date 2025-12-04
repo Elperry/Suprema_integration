@@ -1,5 +1,5 @@
-import displayMessage from '../../biostar/service/display_pb.js';
-import displayService from '../../biostar/service/display_grpc_pb.js';
+const displayMessage = require('../../biostar/service/display_pb');
+const displayService = require('../../biostar/service/display_grpc_pb');
 
 var displayClient = null;
 

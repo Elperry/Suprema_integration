@@ -1,6 +1,6 @@
-import event from '../../event.js';
-import tna from '../tna.js';
-import util from '../../util.js';
+const event = require('../../event');
+const tna = require('../tna');
+const util = require('../../util');
 
 const EVENT_QUEUE_SIZE = 16;
 

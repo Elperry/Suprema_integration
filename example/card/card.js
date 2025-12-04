@@ -1,5 +1,5 @@
-import cardMessage from '../../biostar/service/card_pb.js';
-import cardService from '../../biostar/service/card_grpc_pb.js';
+const cardMessage = require('../../biostar/service/card_pb');
+const cardService = require('../../biostar/service/card_grpc_pb');
 
 var cardClient = null;
 

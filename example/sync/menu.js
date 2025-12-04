@@ -1,9 +1,9 @@
-import menu from '../cli/menu.js';
-import config from './config.js';
-import deviceMgr from './device.js';
-import userMgr from './user.js';
-import eventMgr from './event.js';
-import util from '../util.js';
+const menu = require('../cli/menu');
+const config = require('./config');
+const deviceMgr = require('./device');
+const userMgr = require('./user');
+const eventMgr = require('./event');
+const util = require('../util');
 
 const DEFAULT_USER_ID = '1234';
 const MAX_NEW_LOG = 16;

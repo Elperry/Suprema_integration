@@ -1,4 +1,4 @@
-import menu from './menu.js';
+const menu = require('./menu');
 
 module.exports.MenuItem = menu.MenuItem;
 module.exports.showMenu = menu.showMenu;

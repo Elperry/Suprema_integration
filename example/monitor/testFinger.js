@@ -1,5 +1,5 @@
-import finger from '../finger.js';
-import fs from 'fs';
+const finger = require('../finger');
+const fs = require('fs');
 
 const IMAGE_FILENAME = './finger.bmp';
 

@@ -1,6 +1,6 @@
-import fs from 'fs';
-import serverMessage from '../../biostar/service/server_pb.js';
-import serverService from '../../biostar/service/server_grpc_pb.js';
+const fs = require('fs');
+const serverMessage = require('../../biostar/service/server_pb');
+const serverService = require('../../biostar/service/server_grpc_pb');
 
 var serverClient = null;
 

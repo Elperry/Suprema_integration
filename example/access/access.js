@@ -1,5 +1,5 @@
-import accessMessage from '../../biostar/service/access_pb.js';
-import accessService from '../../biostar/service/access_grpc_pb.js';
+const accessMessage = require('../../biostar/service/access_pb');
+const accessService = require('../../biostar/service/access_grpc_pb');
 
 var accessClient = null;
 

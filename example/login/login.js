@@ -1,5 +1,5 @@
-import loginMessage from '../../biostar/service/login_pb.js';
-import loginService from '../../biostar/service/login_grpc_pb.js';
+const loginMessage = require('../../biostar/service/login_pb');
+const loginService = require('../../biostar/service/login_grpc_pb');
 
 const ADMIN_TENANT_ID = "administrator";
 

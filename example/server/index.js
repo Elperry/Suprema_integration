@@ -1,4 +1,4 @@
-import server from './server.js';
+const server = require('./server');
 
 module.exports.initClient = server.initClient;
 module.exports.getClient = server.getClient;

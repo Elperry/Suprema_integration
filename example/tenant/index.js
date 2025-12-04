@@ -1,4 +1,4 @@
-import tenant from './tenant.js';
+const tenant = require('./tenant');
 
 module.exports.initClient = tenant.initClient;
 module.exports.get = tenant.get;

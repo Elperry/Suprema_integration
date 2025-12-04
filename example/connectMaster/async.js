@@ -1,5 +1,5 @@
-import connectMasterMessage from '../../biostar/service/connect_master_pb.js';
-import connectMaster from './connectMaster.js';
+const connectMasterMessage = require('../../biostar/service/connect_master_pb');
+const connectMaster = require('./connectMaster');
 
 function addAsyncConnection(gatewayID, connInfos) {
   var req = new connectMasterMessage.AddAsyncConnectionRequest();

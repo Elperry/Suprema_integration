@@ -1,3 +1,3 @@
-import util from './util.js';
+const util = require('./util');
 
 module.exports.toObjectArray = util.toObjectArray;

@@ -1,8 +1,8 @@
-import grpc from '@grpc/grpc-js';
-import fs from 'fs';
-import connect from '../../connect.js';
-import schedule from '../schedule.js';
-import testSample from './testSample.js';
+const grpc = require('grpc');
+const fs = require('fs');
+const connect = require('../../connect');
+const schedule = require('../schedule');
+const testSample = require('./testSample');
 
 const GATEWAY_CA_FILE = '../../../../cert/gateway/192.168.28.111/ca.crt';
 const GATEWAY_IP = '192.168.28.111';

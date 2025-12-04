@@ -1,6 +1,6 @@
-import user from '../user.js';
-import finger from '../finger.js';
-import util from '../util.js';
+const user = require('../user');
+const finger = require('../finger');
+const util = require('../util');
 
 const NUM_OF_NEW_USER = 3;
 const START_USER_ID = 10000000;

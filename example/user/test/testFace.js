@@ -1,6 +1,6 @@
-import face from '../../face.js';
-import user from '../user.js';
-import menu from '../../cli/menu.js';
+const face = require('../../face');
+const user = require('../user');
+const menu = require('../../cli/menu');
 
 async function test(devID, userID) {
   try {

@@ -1,5 +1,5 @@
-import userMessage from '../../biostar/service/user_pb.js';
-import userService from '../../biostar/service/user_grpc_pb.js';
+const userMessage = require('../../biostar/service/user_pb');
+const userService = require('../../biostar/service/user_grpc_pb');
 
 var userClient = null;
 

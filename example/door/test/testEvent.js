@@ -1,5 +1,5 @@
-import event from '../../event.js';
-import util from '../../util.js';
+const event = require('../../event');
+const util = require('../../util');
 
 const EVENT_QUEUE_SIZE = 16;
 const MAX_NUM_OF_LOG = 32;

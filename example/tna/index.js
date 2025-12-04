@@ -1,4 +1,4 @@
-import tna from './tna.js';
+const tna = require('./tna');
 
 module.exports.initClient = tna.initClient;
 module.exports.getClient = tna.getClient;

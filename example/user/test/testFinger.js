@@ -1,6 +1,6 @@
-import finger from '../../finger.js';
-import user from '../user.js';
-import menu from '../../cli/menu.js';
+const finger = require('../../finger');
+const user = require('../user');
+const menu = require('../../cli/menu');
 
 async function test(devID, userID) {
   try {

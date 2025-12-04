@@ -1,9 +1,9 @@
-import server from '../server.js';
-import auth from '../../auth.js';
-import user from '../../user.js';
-import card from '../../card.js';
-import finger from '../../finger.js';
-import menu from '../../cli/menu.js';
+const server = require('../server');
+const auth = require('../../auth');
+const user = require('../../user');
+const card = require('../../card');
+const finger = require('../../finger');
+const menu = require('../../cli/menu');
 
 const QUEUE_SIZE =16;
 const TEST_USER_ID = '1234';

@@ -1,9 +1,9 @@
-import config from './config.js';
-import user from '../user.js';
-import card from '../card.js';
-import event from '../event.js';
-import errSvc from '../err.js';
-import deviceMgr from './device.js';
+const config = require('./config');
+const user = require('../user');
+const card = require('../card');
+const event = require('../event');
+const errSvc = require('../err');
+const deviceMgr = require('./device');
 
 const BS2_EVENT_USER_ENROLL_SUCCESS			= 0x2000;
 const BS2_EVENT_USER_UPDATE_SUCCESS			= 0x2200;

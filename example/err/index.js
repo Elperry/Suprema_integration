@@ -1,3 +1,3 @@
-import err from './err.js';
+const err = require('./err');
 
 module.exports.getMultiError = err.getMultiError;

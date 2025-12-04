@@ -1,5 +1,5 @@
-import tnaMessage from '../../biostar/service/tna_pb.js';
-import tnaService from '../../biostar/service/tna_grpc_pb.js';
+const tnaMessage = require('../../biostar/service/tna_pb');
+const tnaService = require('../../biostar/service/tna_grpc_pb');
 
 var tnaClient = null;
 

@@ -1,5 +1,5 @@
-import doorMessage from '../../biostar/service/door_pb.js';
-import doorService from '../../biostar/service/door_grpc_pb.js';
+const doorMessage = require('../../biostar/service/door_pb');
+const doorService = require('../../biostar/service/door_grpc_pb');
 
 var doorClient = null;
 

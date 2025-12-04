@@ -1,9 +1,9 @@
-import connect from './connect.js';
-import sync from './sync.js';
-import async from './async.js';
-import accept from './accept.js';
-import mode from './mode.js';
-import ssl from './ssl.js';
+const connect = require('./connect');
+const sync = require('./sync');
+const async = require('./async');
+const accept = require('./accept');
+const mode = require('./mode');
+const ssl = require('./ssl');
 
 module.exports.initClient = connect.initClient;
 module.exports.getDeviceList = connect.getDeviceList;

@@ -1,4 +1,4 @@
-import event from './event.js';
+const event = require('./event');
 
 module.exports.initClient = event.initClient;
 module.exports.getLog = event.getLog;

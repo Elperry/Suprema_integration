@@ -1,5 +1,5 @@
-import rs485Message from '../../biostar/service/rs485_pb.js';
-import rs485Service from '../../biostar/service/rs485_grpc_pb.js';
+const rs485Message = require('../../biostar/service/rs485_pb');
+const rs485Service = require('../../biostar/service/rs485_grpc_pb');
 
 var rs485Client = null;
 

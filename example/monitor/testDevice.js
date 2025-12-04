@@ -1,4 +1,4 @@
-import device from '../device.js';
+const device = require('../device');
 
 async function test(devID) {
   try {
