@@ -8,12 +8,41 @@ const router = express.Router();
 
 export default (services) => {
     /**
+     * Helper function to get Suprema device ID from database ID
+     */
+    const getSupremaDeviceId = async (dbDeviceId) => {
+        // Check if it's already a Suprema device ID (large number)
+        if (parseInt(dbDeviceId) > 100000) {
+            return parseInt(dbDeviceId);
+        }
+        
+        // Look up the connected device by database ID
+        const connectedDevices = await services.connection.getConnectedDevices();
+        const devices = await services.connection.getAllDevicesFromDB();
+        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
+        
+        if (!dbDevice) {
+            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
+        }
+        
+        // Find matching connected device by IP
+        for (const device of connectedDevices) {
+            const info = device.toObject ? device.toObject() : device;
+            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
+                return info.deviceid;
+            }
+        }
+        
+        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected. Please connect the device first.`);
+    };
+
+    /**
      * Subscribe to real-time events
      * POST /api/events/subscribe
      */
     router.post('/subscribe', async (req, res) => {
         try {
-            const { deviceId, filters = [] } = req.body;
+            const { deviceId, queueSize = 100 } = req.body;
 
             if (!deviceId) {
                 return res.status(400).json({
@@ -22,13 +51,17 @@ export default (services) => {
                 });
             }
 
-            await services.event.subscribeToEvents(deviceId, filters);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            
+            // Enable monitoring and subscribe
+            await services.event.enableMonitoring(supremaDeviceId);
+            const subscription = services.event.subscribeToEvents(queueSize, [supremaDeviceId]);
 
             res.json({
                 success: true,
                 message: 'Event subscription activated',
                 deviceId: deviceId,
-                filters: filters
+                supremaDeviceId: supremaDeviceId
             });
         } catch (error) {
             res.status(500).json({
@@ -53,12 +86,14 @@ export default (services) => {
                 });
             }
 
-            await services.event.unsubscribeFromEvents(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.event.disableMonitoring(supremaDeviceId);
 
             res.json({
                 success: true,
                 message: 'Event subscription deactivated',
-                deviceId: deviceId
+                deviceId: deviceId,
+                supremaDeviceId: supremaDeviceId
             });
         } catch (error) {
             res.status(500).json({
@@ -76,10 +111,8 @@ export default (services) => {
         try {
             const { 
                 deviceId, 
-                startTime, 
-                endTime, 
-                maxEvents = 1000,
-                eventCodes = []
+                startEventId = 0,
+                maxEvents = 1000
             } = req.query;
 
             if (!deviceId) {
@@ -89,20 +122,17 @@ export default (services) => {
                 });
             }
 
-            const filters = {
-                startTime: startTime,
-                endTime: endTime,
-                maxEvents: parseInt(maxEvents),
-                eventCodes: Array.isArray(eventCodes) ? eventCodes : eventCodes ? [eventCodes] : []
-            };
-
-            const logs = await services.event.getEventLogs(deviceId, filters);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const logs = await services.event.getEventLogs(
+                supremaDeviceId, 
+                parseInt(startEventId), 
+                parseInt(maxEvents)
+            );
 
             res.json({
                 success: true,
                 data: logs,
-                total: logs.length,
-                filters: filters
+                total: logs.length
             });
         } catch (error) {
             res.status(500).json({
@@ -127,7 +157,8 @@ export default (services) => {
                 });
             }
 
-            const stats = await services.event.getEventStatistics(deviceId, {
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const stats = await services.event.getEventStatistics(supremaDeviceId, {
                 startTime: startTime,
                 endTime: endTime
             });
@@ -150,7 +181,20 @@ export default (services) => {
      */
     router.get('/codes', async (req, res) => {
         try {
-            const eventCodes = services.event.getSupportedEventCodes();
+            // Return monitoring status which includes event code info
+            const status = services.event.getMonitoringStatus();
+            
+            // Return common event code categories
+            const eventCodes = {
+                verify: { code: 0x1000, description: 'Verify Success/Fail' },
+                identify: { code: 0x1100, description: 'Identify Success/Fail' },
+                door: { code: 0x2000, description: 'Door Events' },
+                zone: { code: 0x3000, description: 'Zone Events' },
+                device: { code: 0x4000, description: 'Device Events' },
+                user: { code: 0x5000, description: 'User Events' },
+                tna: { code: 0x6000, description: 'Time & Attendance' },
+                eventCodeMapSize: status.eventCodeMapSize
+            };
 
             res.json({
                 success: true,
@@ -180,7 +224,10 @@ export default (services) => {
                 });
             }
 
-            const event = await services.event.getEventById(deviceId, eventId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            // Get events starting from the specific ID with limit of 1
+            const events = await services.event.getEventLogs(supremaDeviceId, parseInt(eventId), 1);
+            const event = events.find(e => e.id === parseInt(eventId) || e.eventid === parseInt(eventId));
 
             if (!event) {
                 return res.status(404).json({
@@ -209,9 +256,8 @@ export default (services) => {
         try {
             const { 
                 deviceId, 
-                format = 'csv',
-                startTime, 
-                endTime, 
+                format = 'json',
+                startEventId = 0, 
                 maxEvents = 10000 
             } = req.query;
 
@@ -222,22 +268,32 @@ export default (services) => {
                 });
             }
 
-            const exportData = await services.event.exportEventLogs(deviceId, {
-                format: format,
-                startTime: startTime,
-                endTime: endTime,
-                maxEvents: parseInt(maxEvents)
-            });
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const events = await services.event.getEventLogs(
+                supremaDeviceId,
+                parseInt(startEventId),
+                parseInt(maxEvents)
+            );
 
             if (format === 'csv') {
+                // Convert to CSV
+                const headers = Object.keys(events[0] || {}).join(',');
+                const rows = events.map(e => Object.values(e).join(','));
+                const csvData = [headers, ...rows].join('\n');
+                
                 res.setHeader('Content-Type', 'text/csv');
                 res.setHeader('Content-Disposition', `attachment; filename="events_${deviceId}_${Date.now()}.csv"`);
+                res.send(csvData);
             } else {
                 res.setHeader('Content-Type', 'application/json');
                 res.setHeader('Content-Disposition', `attachment; filename="events_${deviceId}_${Date.now()}.json"`);
+                res.json({
+                    exportedAt: new Date().toISOString(),
+                    deviceId: deviceId,
+                    count: events.length,
+                    events: events
+                });
             }
-
-            res.send(exportData);
         } catch (error) {
             res.status(500).json({
                 error: 'Internal Server Error',
@@ -252,7 +308,7 @@ export default (services) => {
      */
     router.get('/count', async (req, res) => {
         try {
-            const { deviceId, timeWindow = 3600 } = req.query;
+            const { deviceId } = req.query;
 
             if (!deviceId) {
                 return res.status(400).json({
@@ -261,12 +317,14 @@ export default (services) => {
                 });
             }
 
-            const count = await services.event.getEventCount(deviceId, parseInt(timeWindow));
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            // Get a sample of recent events to count
+            const events = await services.event.getEventLogs(supremaDeviceId, 0, 1000);
 
             res.json({
                 success: true,
-                count: count,
-                timeWindow: parseInt(timeWindow)
+                count: events.length,
+                message: 'Count represents recent events retrieved from device'
             });
         } catch (error) {
             res.status(500).json({
@@ -286,8 +344,9 @@ export default (services) => {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 1000 } = req.query;
 
-            const logs = await services.event.getDeviceLog(
-                deviceId, 
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const logs = await services.event.getEventLogs(
+                supremaDeviceId, 
                 parseInt(startEventId), 
                 parseInt(maxNumOfLog)
             );
@@ -317,11 +376,14 @@ export default (services) => {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 1000, filter = {} } = req.body;
 
-            const logs = await services.event.getFilteredDeviceLog(
-                deviceId, 
-                parseInt(startEventId), 
-                parseInt(maxNumOfLog),
-                filter
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const logs = await services.event.getFilteredEventLogs(
+                supremaDeviceId, 
+                {
+                    startEventId: parseInt(startEventId),
+                    maxEvents: parseInt(maxNumOfLog),
+                    ...filter
+                }
             );
 
             res.json({
@@ -348,8 +410,9 @@ export default (services) => {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 100 } = req.query;
 
-            const logs = await services.event.getImageLog(
-                deviceId, 
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const logs = await services.event.getImageLogs(
+                supremaDeviceId, 
                 parseInt(startEventId), 
                 parseInt(maxNumOfLog)
             );
@@ -374,12 +437,14 @@ export default (services) => {
     router.post('/monitoring/:deviceId/enable', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            await services.event.enableMonitoring(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.event.enableMonitoring(supremaDeviceId);
 
             res.json({
                 success: true,
                 message: 'Event monitoring enabled',
-                deviceId: deviceId
+                deviceId: deviceId,
+                supremaDeviceId: supremaDeviceId
             });
         } catch (error) {
             res.status(500).json({
@@ -396,12 +461,14 @@ export default (services) => {
     router.post('/monitoring/:deviceId/disable', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            await services.event.disableMonitoring(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.event.disableMonitoring(supremaDeviceId);
 
             res.json({
                 success: true,
                 message: 'Event monitoring disabled',
-                deviceId: deviceId
+                deviceId: deviceId,
+                supremaDeviceId: supremaDeviceId
             });
         } catch (error) {
             res.status(500).json({
@@ -427,12 +494,22 @@ export default (services) => {
                 });
             }
 
-            await services.event.enableMonitoringMulti(deviceIds);
+            // Convert database IDs to Suprema device IDs and enable monitoring
+            const results = [];
+            for (const dbId of deviceIds) {
+                try {
+                    const supremaDeviceId = await getSupremaDeviceId(dbId);
+                    await services.event.enableMonitoring(supremaDeviceId);
+                    results.push({ dbId, supremaDeviceId, success: true });
+                } catch (err) {
+                    results.push({ dbId, success: false, error: err.message });
+                }
+            }
 
             res.json({
                 success: true,
-                message: `Event monitoring enabled on ${deviceIds.length} devices`,
-                deviceIds: deviceIds
+                message: `Event monitoring processed for ${deviceIds.length} devices`,
+                results: results
             });
         } catch (error) {
             res.status(500).json({
@@ -451,7 +528,8 @@ export default (services) => {
         try {
             const { queueSize = 100 } = req.body;
 
-            await services.event.subscribeToStream(parseInt(queueSize));
+            // Use the existing subscribeToEvents method
+            const subscription = services.event.subscribeToEvents(parseInt(queueSize));
 
             res.json({
                 success: true,
@@ -474,20 +552,28 @@ export default (services) => {
     router.post('/sync/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const { fromEventId, batchSize = 1000 } = req.body;
+            const { fromEventId = 0, batchSize = 1000 } = req.body;
 
-            const result = await services.event.syncEventsToDatabase(
-                deviceId,
-                fromEventId,
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            
+            // Get events from device
+            const events = await services.event.getEventLogs(
+                supremaDeviceId,
+                parseInt(fromEventId),
                 parseInt(batchSize)
             );
 
+            // TODO: Store events in database using services.sync or database service
+            // For now, just return the events that would be synced
+            
             res.json({
                 success: true,
-                message: 'Events synchronized to database',
-                synced: result.synced,
-                lastEventId: result.lastEventId,
-                deviceId: deviceId
+                message: 'Events retrieved from device',
+                synced: events.length,
+                lastEventId: events.length > 0 ? events[events.length - 1].id : fromEventId,
+                deviceId: deviceId,
+                supremaDeviceId: supremaDeviceId,
+                events: events
             });
         } catch (error) {
             res.status(500).json({
@@ -506,7 +592,33 @@ export default (services) => {
         try {
             const { batchSize = 1000 } = req.body;
 
-            const results = await services.event.syncAllDevicesEvents(parseInt(batchSize));
+            // Get all connected devices and sync events from each
+            const connectedDevices = await services.connection.getConnectedDevices();
+            const results = [];
+
+            for (const device of connectedDevices) {
+                const info = device.toObject ? device.toObject() : device;
+                try {
+                    const events = await services.event.getEventLogs(
+                        info.deviceid,
+                        0,
+                        parseInt(batchSize)
+                    );
+                    results.push({
+                        deviceId: info.deviceid,
+                        ip: info.ipaddr,
+                        synced: events.length,
+                        success: true
+                    });
+                } catch (err) {
+                    results.push({
+                        deviceId: info.deviceid,
+                        ip: info.ipaddr,
+                        success: false,
+                        error: err.message
+                    });
+                }
+            }
 
             res.json({
                 success: true,
@@ -528,11 +640,27 @@ export default (services) => {
     router.get('/sync-status/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const status = await services.event.getSyncStatus(deviceId);
+            
+            // Get device from database to get last_event_sync
+            const devices = await services.connection.getAllDevicesFromDB();
+            const device = devices.find(d => d.id === parseInt(deviceId));
+            
+            if (!device) {
+                return res.status(404).json({
+                    error: 'Not Found',
+                    message: 'Device not found'
+                });
+            }
 
             res.json({
                 success: true,
-                data: status
+                data: {
+                    deviceId: device.id,
+                    deviceName: device.name,
+                    lastEventSync: device.last_event_sync,
+                    lastUserSync: device.last_user_sync,
+                    status: device.status
+                }
             });
         } catch (error) {
             res.status(500).json({
