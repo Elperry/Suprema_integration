@@ -373,14 +373,24 @@ class SupremaEventService extends EventEmitter {
      */
     async getFilteredEventLogs(deviceId, filters = {}) {
         try {
-            const events = await this.getEventLogs(deviceId, filters.startEventId, filters.maxEvents);
+            const startEventId = filters.startEventId || 0;
+            const maxEvents = filters.maxEvents || 1000;
+            
+            const events = await this.getEventLogs(deviceId, startEventId, maxEvents);
             
             let filteredEvents = events;
 
             // Filter by event codes
             if (filters.eventCodes && filters.eventCodes.length > 0) {
+                const codes = filters.eventCodes.map(c => parseInt(c));
                 filteredEvents = filteredEvents.filter(event => 
-                    filters.eventCodes.includes(event.eventcode));
+                    codes.includes(event.eventcode));
+            }
+
+            // Filter by event type (authentication, door, zone, etc.)
+            if (filters.eventType) {
+                filteredEvents = filteredEvents.filter(event => 
+                    event.eventType === filters.eventType);
             }
 
             // Filter by user IDs
@@ -388,21 +398,191 @@ class SupremaEventService extends EventEmitter {
                 filteredEvents = filteredEvents.filter(event => 
                     filters.userIds.includes(event.userid));
             }
+            
+            // Filter by specific user ID
+            if (filters.userId) {
+                filteredEvents = filteredEvents.filter(event => 
+                    event.userid === filters.userId);
+            }
 
             // Filter by date range
             if (filters.startDate || filters.endDate) {
                 filteredEvents = filteredEvents.filter(event => {
+                    if (!event.datetime || event.datetime <= 0) return false;
                     const eventDate = new Date(event.datetime * 1000);
+                    if (isNaN(eventDate.getTime())) return false;
                     if (filters.startDate && eventDate < new Date(filters.startDate)) return false;
                     if (filters.endDate && eventDate > new Date(filters.endDate)) return false;
                     return true;
                 });
+            }
+            
+            // Filter by door ID
+            if (filters.doorId !== undefined) {
+                filteredEvents = filteredEvents.filter(event => 
+                    event.doorid === parseInt(filters.doorId));
+            }
+            
+            // Filter by success/failure for authentication events
+            if (filters.authResult !== undefined) {
+                const successCodes = [0x1000, 0x1100]; // Verify Success, Identify Success
+                const failCodes = [0x1001, 0x1101]; // Verify Fail, Identify Fail
+                
+                if (filters.authResult === 'success') {
+                    filteredEvents = filteredEvents.filter(event => 
+                        successCodes.includes(event.eventcode));
+                } else if (filters.authResult === 'fail') {
+                    filteredEvents = filteredEvents.filter(event => 
+                        failCodes.includes(event.eventcode));
+                }
             }
 
             this.logger.info(`Filtered ${filteredEvents.length} events from ${events.length} total events`);
             return filteredEvents;
         } catch (error) {
             this.logger.error('Error getting filtered event logs:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Get historical events with pagination
+     * @param {string} deviceId - Device ID
+     * @param {Object} options - Pagination and filter options
+     * @returns {Promise<Object>} Events with pagination info
+     */
+    async getHistoricalEvents(deviceId, options = {}) {
+        try {
+            const page = options.page || 1;
+            const pageSize = options.pageSize || 50;
+            const startEventId = options.startEventId || 0;
+            
+            // Fetch more events than needed for pagination
+            const fetchSize = Math.max(pageSize * page + 100, 1000);
+            
+            let events = await this.getEventLogs(deviceId, startEventId, fetchSize);
+            
+            // Apply filters if provided
+            if (options.filters) {
+                events = await this.applyFilters(events, options.filters);
+            }
+            
+            // Calculate pagination
+            const totalEvents = events.length;
+            const totalPages = Math.ceil(totalEvents / pageSize);
+            const startIndex = (page - 1) * pageSize;
+            const endIndex = startIndex + pageSize;
+            
+            const paginatedEvents = events.slice(startIndex, endIndex);
+            
+            return {
+                events: paginatedEvents,
+                pagination: {
+                    page,
+                    pageSize,
+                    totalEvents,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                }
+            };
+        } catch (error) {
+            this.logger.error('Error getting historical events:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Apply filters to events array
+     * @param {Array} events - Events array
+     * @param {Object} filters - Filter criteria
+     * @returns {Array} Filtered events
+     */
+    applyFilters(events, filters) {
+        let result = [...events];
+        
+        if (filters.eventType) {
+            result = result.filter(e => e.eventType === filters.eventType);
+        }
+        
+        if (filters.userId) {
+            result = result.filter(e => e.userid === filters.userId);
+        }
+        
+        if (filters.doorId !== undefined) {
+            result = result.filter(e => e.doorid === parseInt(filters.doorId));
+        }
+        
+        if (filters.startDate) {
+            const startTime = new Date(filters.startDate).getTime() / 1000;
+            result = result.filter(e => e.datetime >= startTime);
+        }
+        
+        if (filters.endDate) {
+            const endTime = new Date(filters.endDate).getTime() / 1000;
+            result = result.filter(e => e.datetime <= endTime);
+        }
+        
+        if (filters.eventCodes && filters.eventCodes.length > 0) {
+            const codes = filters.eventCodes.map(c => parseInt(c));
+            result = result.filter(e => codes.includes(e.eventcode));
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Get events by user ID
+     * @param {string} deviceId - Device ID
+     * @param {string} userId - User ID to filter
+     * @param {number} maxEvents - Maximum events to retrieve
+     * @returns {Promise<Array>} User's events
+     */
+    async getEventsByUser(deviceId, userId, maxEvents = 500) {
+        try {
+            const events = await this.getEventLogs(deviceId, 0, maxEvents);
+            return events.filter(e => e.userid === userId);
+        } catch (error) {
+            this.logger.error(`Error getting events for user ${userId}:`, error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Get recent authentication events
+     * @param {string} deviceId - Device ID
+     * @param {number} maxEvents - Maximum events
+     * @returns {Promise<Array>} Authentication events
+     */
+    async getAuthenticationEvents(deviceId, maxEvents = 100) {
+        try {
+            const events = await this.getEventLogs(deviceId, 0, maxEvents);
+            return events.filter(e => e.eventType === 'authentication');
+        } catch (error) {
+            this.logger.error('Error getting authentication events:', error);
+            throw error;
+        }
+    }
+    
+    /**
+     * Get door events
+     * @param {string} deviceId - Device ID
+     * @param {number} doorId - Door ID (optional)
+     * @param {number} maxEvents - Maximum events
+     * @returns {Promise<Array>} Door events
+     */
+    async getDoorEvents(deviceId, doorId = null, maxEvents = 100) {
+        try {
+            const events = await this.getEventLogs(deviceId, 0, maxEvents);
+            let doorEvents = events.filter(e => e.eventType === 'door');
+            
+            if (doorId !== null) {
+                doorEvents = doorEvents.filter(e => e.doorid === parseInt(doorId));
+            }
+            
+            return doorEvents;
+        } catch (error) {
+            this.logger.error('Error getting door events:', error);
             throw error;
         }
     }
@@ -420,8 +600,21 @@ class SupremaEventService extends EventEmitter {
         // Add event description
         enhanced.description = this.getEventDescription(event.eventcode, event.subcode);
         
-        // Add readable timestamp
-        enhanced.timestamp = new Date(event.datetime * 1000).toISOString();
+        // Add readable timestamp - handle invalid dates safely
+        try {
+            if (event.datetime && event.datetime > 0) {
+                const date = new Date(event.datetime * 1000);
+                if (!isNaN(date.getTime())) {
+                    enhanced.timestamp = date.toISOString();
+                } else {
+                    enhanced.timestamp = null;
+                }
+            } else {
+                enhanced.timestamp = null;
+            }
+        } catch (err) {
+            enhanced.timestamp = null;
+        }
         
         // Add event type classification
         enhanced.eventType = this.classifyEventType(event.eventcode);

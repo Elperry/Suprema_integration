@@ -431,6 +431,206 @@ export default (services) => {
     });
 
     /**
+     * Get historical events with pagination and filters
+     * GET /api/events/historical/:deviceId
+     * Query: page, pageSize, startEventId, eventType, userId, doorId, startDate, endDate
+     */
+    router.get('/historical/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { 
+                page = 1, 
+                pageSize = 50, 
+                startEventId = 0,
+                eventType,
+                userId,
+                doorId,
+                startDate,
+                endDate,
+                eventCodes
+            } = req.query;
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            
+            const filters = {};
+            if (eventType) filters.eventType = eventType;
+            if (userId) filters.userId = userId;
+            if (doorId) filters.doorId = doorId;
+            if (startDate) filters.startDate = startDate;
+            if (endDate) filters.endDate = endDate;
+            if (eventCodes) filters.eventCodes = eventCodes.split(',');
+
+            const result = await services.event.getHistoricalEvents(supremaDeviceId, {
+                page: parseInt(page),
+                pageSize: parseInt(pageSize),
+                startEventId: parseInt(startEventId),
+                filters: Object.keys(filters).length > 0 ? filters : null
+            });
+
+            res.json({
+                success: true,
+                data: result.events,
+                pagination: result.pagination
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get authentication events (login/access attempts)
+     * GET /api/events/authentication/:deviceId
+     * Query: maxEvents, authResult (success/fail)
+     */
+    router.get('/authentication/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { maxEvents = 100, authResult } = req.query;
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            let events = await services.event.getAuthenticationEvents(
+                supremaDeviceId, 
+                parseInt(maxEvents)
+            );
+
+            // Filter by auth result if specified
+            if (authResult === 'success') {
+                const successCodes = [0x1000, 0x1100];
+                events = events.filter(e => successCodes.includes(e.eventcode));
+            } else if (authResult === 'fail') {
+                const failCodes = [0x1001, 0x1101];
+                events = events.filter(e => failCodes.includes(e.eventcode));
+            }
+
+            res.json({
+                success: true,
+                data: events,
+                total: events.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get door events
+     * GET /api/events/door/:deviceId
+     * Query: doorId, maxEvents
+     */
+    router.get('/door/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { doorId, maxEvents = 100 } = req.query;
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const events = await services.event.getDoorEvents(
+                supremaDeviceId,
+                doorId ? parseInt(doorId) : null,
+                parseInt(maxEvents)
+            );
+
+            res.json({
+                success: true,
+                data: events,
+                total: events.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get events for a specific user
+     * GET /api/events/user/:deviceId/:userId
+     * Query: maxEvents
+     */
+    router.get('/user/:deviceId/:userId', async (req, res) => {
+        try {
+            const { deviceId, userId } = req.params;
+            const { maxEvents = 500 } = req.query;
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const events = await services.event.getEventsByUser(
+                supremaDeviceId,
+                userId,
+                parseInt(maxEvents)
+            );
+
+            res.json({
+                success: true,
+                data: events,
+                total: events.length,
+                userId: userId
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Advanced event search with multiple filters
+     * POST /api/events/search/:deviceId
+     * Body: { filters: {...}, pagination: {...} }
+     */
+    router.post('/search/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            const { 
+                filters = {}, 
+                page = 1, 
+                pageSize = 50,
+                startEventId = 0,
+                maxEvents = 1000
+            } = req.body;
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            
+            const events = await services.event.getFilteredEventLogs(supremaDeviceId, {
+                startEventId: parseInt(startEventId),
+                maxEvents: parseInt(maxEvents),
+                ...filters
+            });
+
+            // Apply pagination
+            const totalEvents = events.length;
+            const totalPages = Math.ceil(totalEvents / pageSize);
+            const startIndex = (page - 1) * pageSize;
+            const paginatedEvents = events.slice(startIndex, startIndex + pageSize);
+
+            res.json({
+                success: true,
+                data: paginatedEvents,
+                pagination: {
+                    page,
+                    pageSize,
+                    totalEvents,
+                    totalPages,
+                    hasNextPage: page < totalPages,
+                    hasPrevPage: page > 1
+                },
+                filters: filters
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
      * Enable event monitoring on device
      * POST /api/events/monitoring/:deviceId/enable
      */
