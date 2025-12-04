@@ -221,7 +221,7 @@ class SupremaConnectionService extends EventEmitter {
             req.setDeviceidsList([deviceId]);
 
             return new Promise((resolve, reject) => {
-                this.connClient.disconnect(req, (err, response) => {
+                this.connClient.disconnect(req, async (err, response) => {
                     if (err) {
                         this.logger.error(`Cannot disconnect: ${deviceId}`, err);
                         reject(err);
@@ -229,6 +229,16 @@ class SupremaConnectionService extends EventEmitter {
                     }
 
                     this.connectedDevices.delete(deviceId);
+                    
+                    // Update device status in database
+                    if (this.database && this.deviceDbIdMap) {
+                        const dbId = this.deviceDbIdMap.get(deviceId.toString());
+                        if (dbId) {
+                            await this.database.updateDevice(dbId, { status: 'disconnected' });
+                            this.deviceDbIdMap.delete(deviceId.toString());
+                        }
+                    }
+                    
                     this.logger.info(`Disconnected from device ${deviceId}`);
                     this.emit('device:disconnected', { deviceId });
                     resolve(true);
@@ -843,6 +853,61 @@ class SupremaConnectionService extends EventEmitter {
      * Connect to device using database configuration with retry logic
      */
     async connectToDeviceFromDB(deviceRecord) {
+        // Check if device is already connected in local map
+        const existingConnection = Array.from(this.connectedDevices.entries()).find(
+            ([id, device]) => device.ip === deviceRecord.ip && device.port === deviceRecord.port
+        );
+        
+        if (existingConnection) {
+            const [deviceId] = existingConnection;
+            this.logger.info(`Device ${deviceRecord.name} is already connected (local) with ID ${deviceId}`);
+            
+            // Ensure database status is updated
+            if (this.database) {
+                await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
+            }
+            
+            return deviceId;
+        }
+        
+        // Also check the gateway for existing connections (in case device was connected externally)
+        try {
+            const gatewayDevices = await this.getConnectedDevices();
+            const gatewayDevice = gatewayDevices.find(d => {
+                const info = d.toObject ? d.toObject() : d;
+                return info.ipaddr === deviceRecord.ip && info.port === deviceRecord.port;
+            });
+            
+            if (gatewayDevice) {
+                const info = gatewayDevice.toObject ? gatewayDevice.toObject() : gatewayDevice;
+                const deviceId = info.deviceid;
+                this.logger.info(`Device ${deviceRecord.name} is already connected (gateway) with ID ${deviceId}`);
+                
+                // Add to local map
+                this.connectedDevices.set(deviceId, {
+                    id: deviceId,
+                    ip: deviceRecord.ip,
+                    port: deviceRecord.port,
+                    useSSL: deviceRecord.useSSL || false,
+                    connectedAt: new Date(),
+                    status: 'connected'
+                });
+                
+                // Store database ID mapping
+                this.deviceDbIdMap = this.deviceDbIdMap || new Map();
+                this.deviceDbIdMap.set(deviceId.toString(), deviceRecord.id);
+                
+                // Update database status
+                if (this.database) {
+                    await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
+                }
+                
+                return deviceId;
+            }
+        } catch (err) {
+            this.logger.warn(`Could not check gateway for existing connections: ${err.message}`);
+        }
+        
         const maxRetries = 3;
         const retryDelay = 2000; // 2 seconds between retries
         
@@ -859,10 +924,15 @@ class SupremaConnectionService extends EventEmitter {
                 
                 const deviceId = await this.connectToDevice(config);
                 
-                // Reset device retry counter after successful connection
+                // Update device status to connected in database
                 if (this.database) {
+                    await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
                     await this.database.resetDeviceRetries(deviceRecord.id);
                 }
+                
+                // Store database ID mapping for later disconnect
+                this.deviceDbIdMap = this.deviceDbIdMap || new Map();
+                this.deviceDbIdMap.set(deviceId.toString(), deviceRecord.id);
                 
                 // Store device info
                 try {
@@ -895,8 +965,9 @@ class SupremaConnectionService extends EventEmitter {
                 this.logger.warn(`Connection attempt ${attempt}/${maxRetries} failed for ${deviceRecord.name}: ${error.message}`);
                 
                 if (attempt === maxRetries) {
-                    // Final attempt failed
+                    // Final attempt failed - update status to disconnected
                     if (this.database) {
+                        await this.database.updateDevice(deviceRecord.id, { status: 'disconnected' });
                         await this.database.incrementDeviceRetries(deviceRecord.id);
                     }
                     throw new Error(`Failed to connect after ${maxRetries} attempts: ${error.message}`);
