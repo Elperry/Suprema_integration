@@ -1,0 +1,811 @@
+/**
+ * Enrollment Service
+ * Handles the complete workflow for enrolling employees with cards on Suprema devices
+ * 
+ * Workflow:
+ * 1. Scan card from device
+ * 2. Search and select employee from HR database
+ * 3. Assign card to employee (stored in CardAssignment)
+ * 4. Enroll employee+card on selected devices (stored in DeviceEnrollment)
+ */
+
+import { PrismaClient } from '@prisma/client';
+import winston from 'winston';
+
+const prisma = new PrismaClient();
+
+class EnrollmentService {
+    constructor(userService, cardService, connectionService) {
+        this.userService = userService;
+        this.cardService = cardService;
+        this.connectionService = connectionService;
+        
+        this.logger = winston.createLogger({
+            level: 'info',
+            format: winston.format.combine(
+                winston.format.timestamp(),
+                winston.format.json()
+            ),
+            transports: [
+                new winston.transports.Console(),
+                new winston.transports.File({ filename: 'logs/enrollment-service.log' })
+            ]
+        });
+    }
+
+    // ==================== CARD SCANNING ====================
+
+    /**
+     * Scan a card from a device
+     * @param {number} deviceId - Database device ID
+     * @param {number} timeout - Scan timeout in seconds
+     * @returns {Promise<Object>} Scanned card data
+     */
+    async scanCard(deviceId, timeout = 10) {
+        try {
+            // Get the Suprema device ID
+            const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
+            
+            // Use the biometric/card service to scan
+            const cardData = await this.cardService.scanCard(supremaDeviceId);
+            
+            // Normalize card data structure
+            const normalizedCardData = this.normalizeCardData(cardData);
+            
+            // Check if card is already assigned using the CSN
+            const existingAssignment = await this.getCardAssignmentByCardData(normalizedCardData.csn);
+            
+            return {
+                ...normalizedCardData,
+                isAssigned: !!existingAssignment,
+                existingAssignment: existingAssignment
+            };
+        } catch (error) {
+            this.logger.error('Error scanning card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Normalize card data from different sources
+     * @param {Object} cardData - Raw card data from device
+     * @returns {Object} Normalized card data
+     */
+    normalizeCardData(cardData) {
+        // Handle various card data formats from Suprema devices
+        if (!cardData) {
+            throw new Error('No card data received');
+        }
+
+        let csn = '';
+        let type = 'CSN';
+        let data = '';
+
+        // If it's a protobuf object
+        if (cardData.csn) {
+            csn = typeof cardData.csn === 'string' 
+                ? cardData.csn 
+                : Buffer.from(cardData.csn).toString('base64');
+        } else if (cardData.data) {
+            csn = typeof cardData.data === 'string' 
+                ? cardData.data 
+                : Buffer.from(cardData.data).toString('base64');
+        } else if (typeof cardData === 'string') {
+            csn = cardData;
+        } else if (Buffer.isBuffer(cardData)) {
+            csn = cardData.toString('base64');
+        } else if (cardData.csnCardData || cardData.smartCardData || cardData.accessCardData) {
+            // Suprema card protobuf format
+            data = cardData.csnCardData || cardData.smartCardData || cardData.accessCardData;
+            csn = typeof data === 'string' ? data : Buffer.from(data || []).toString('base64');
+            type = cardData.type || (cardData.smartCardData ? 'SmartCard' : 'CSN');
+        }
+
+        return {
+            csn,
+            type,
+            data: csn,
+            raw: cardData
+        };
+    }
+
+    // ==================== CARD ASSIGNMENTS ====================
+
+    /**
+     * Get card assignment by card data (CSN)
+     * @param {string} cardData - Card CSN or data
+     * @returns {Promise<Object|null>} Card assignment or null
+     */
+    async getCardAssignmentByCardData(cardData) {
+        try {
+            return await prisma.cardAssignment.findUnique({
+                where: { cardData },
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                }
+            });
+        } catch (error) {
+            this.logger.error('Error getting card assignment:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get card assignment by ID or card data
+     * @param {number|string} idOrCardData - Assignment ID or card data
+     * @returns {Promise<Object|null>} Card assignment or null
+     */
+    async getCardAssignment(idOrCardData) {
+        try {
+            // If numeric, treat as ID
+            if (typeof idOrCardData === 'number') {
+                return await prisma.cardAssignment.findUnique({
+                    where: { id: idOrCardData },
+                    include: {
+                        enrollments: {
+                            include: { device: true }
+                        }
+                    }
+                });
+            }
+            // Otherwise treat as card data
+            return await this.getCardAssignmentByCardData(idOrCardData);
+        } catch (error) {
+            this.logger.error('Error getting card assignment:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Get all card assignments with optional filters
+     * @param {Object} filters - Filter options
+     * @returns {Promise<Array>} Card assignments
+     */
+    async getAllCardAssignments(filters = {}) {
+        try {
+            const where = {};
+            
+            if (filters.status) {
+                where.status = filters.status;
+            }
+            if (filters.employeeId) {
+                where.employeeId = filters.employeeId;
+            }
+
+            return await prisma.cardAssignment.findMany({
+                where,
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                },
+                orderBy: { assignedAt: 'desc' }
+            });
+        } catch (error) {
+            this.logger.error('Error getting card assignments:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Assign a card to an employee
+     * @param {Object} data - Assignment data
+     * @returns {Promise<Object>} Created card assignment
+     */
+    async assignCardToEmployee(data) {
+        const { employeeId, employeeName, cardData, cardType = 'CSN', cardFormat = 0, notes } = data;
+
+        try {
+            // Check if card is already assigned
+            const existing = await this.getCardAssignment(cardData);
+            if (existing) {
+                if (existing.status === 'active') {
+                    throw new Error(`Card is already assigned to employee ${existing.employeeName || existing.employeeId}`);
+                }
+                // Reactivate revoked card for new employee
+                return await prisma.cardAssignment.update({
+                    where: { id: existing.id },
+                    data: {
+                        employeeId,
+                        employeeName,
+                        status: 'active',
+                        assignedAt: new Date(),
+                        revokedAt: null,
+                        notes
+                    },
+                    include: {
+                        enrollments: {
+                            include: { device: true }
+                        }
+                    }
+                });
+            }
+
+            // Create new assignment
+            const assignment = await prisma.cardAssignment.create({
+                data: {
+                    employeeId,
+                    employeeName,
+                    cardData,
+                    cardType,
+                    cardFormat,
+                    notes
+                },
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                }
+            });
+
+            this.logger.info(`Card assigned to employee ${employeeId} (${employeeName})`);
+            return assignment;
+        } catch (error) {
+            this.logger.error('Error assigning card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Revoke a card assignment
+     * @param {number} assignmentId - Card assignment ID
+     * @param {string} reason - Reason for revocation
+     * @returns {Promise<Object>} Updated assignment
+     */
+    async revokeCardAssignment(assignmentId, reason = '') {
+        try {
+            const assignment = await prisma.cardAssignment.update({
+                where: { id: assignmentId },
+                data: {
+                    status: 'revoked',
+                    revokedAt: new Date(),
+                    notes: reason ? `Revoked: ${reason}` : 'Revoked'
+                },
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                }
+            });
+
+            // Remove from all devices
+            for (const enrollment of assignment.enrollments) {
+                try {
+                    await this.removeFromDevice(enrollment.deviceId, assignmentId);
+                } catch (err) {
+                    this.logger.warn(`Failed to remove from device ${enrollment.deviceId}:`, err.message);
+                }
+            }
+
+            this.logger.info(`Card assignment ${assignmentId} revoked`);
+            return assignment;
+        } catch (error) {
+            this.logger.error('Error revoking card assignment:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update card assignment status (lost, expired, etc.)
+     * @param {number} assignmentId - Card assignment ID
+     * @param {string} status - New status
+     * @returns {Promise<Object>} Updated assignment
+     */
+    async updateCardStatus(assignmentId, status) {
+        try {
+            return await prisma.cardAssignment.update({
+                where: { id: assignmentId },
+                data: {
+                    status,
+                    ...(status !== 'active' ? { revokedAt: new Date() } : { revokedAt: null })
+                },
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                }
+            });
+        } catch (error) {
+            this.logger.error('Error updating card status:', error);
+            throw error;
+        }
+    }
+
+    // ==================== DEVICE ENROLLMENT ====================
+
+    /**
+     * Enroll a card assignment on a device
+     * @param {number} deviceId - Database device ID
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Object>} Enrollment result
+     */
+    async enrollOnDevice(deviceId, assignmentId) {
+        try {
+            // Get the card assignment
+            const assignment = await prisma.cardAssignment.findUnique({
+                where: { id: assignmentId }
+            });
+
+            if (!assignment) {
+                throw new Error('Card assignment not found');
+            }
+
+            if (assignment.status !== 'active') {
+                throw new Error('Cannot enroll inactive card assignment');
+            }
+
+            // Check if already enrolled on this device
+            const existingEnrollment = await prisma.deviceEnrollment.findUnique({
+                where: {
+                    deviceId_cardAssignmentId: {
+                        deviceId,
+                        cardAssignmentId: assignmentId
+                    }
+                }
+            });
+
+            if (existingEnrollment && existingEnrollment.status === 'active') {
+                throw new Error('Already enrolled on this device');
+            }
+
+            // Get Suprema device ID
+            const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
+
+            // Create user on device with card
+            const deviceUserId = assignment.employeeId;
+            
+            // Prepare user data for device
+            const userData = {
+                userID: deviceUserId,
+                name: assignment.employeeName || `Employee ${assignment.employeeId}`,
+                cards: [{
+                    type: this.getCardTypeCode(assignment.cardType),
+                    size: assignment.cardData.length,
+                    data: assignment.cardData
+                }]
+            };
+
+            // Enroll on device
+            await this.userService.enrollUsers(supremaDeviceId, [userData]);
+
+            // Create or update enrollment record
+            const enrollment = existingEnrollment
+                ? await prisma.deviceEnrollment.update({
+                    where: { id: existingEnrollment.id },
+                    data: {
+                        status: 'active',
+                        enrolledAt: new Date(),
+                        lastSyncAt: new Date()
+                    },
+                    include: { device: true, cardAssignment: true }
+                })
+                : await prisma.deviceEnrollment.create({
+                    data: {
+                        deviceId,
+                        cardAssignmentId: assignmentId,
+                        deviceUserId,
+                        status: 'active'
+                    },
+                    include: { device: true, cardAssignment: true }
+                });
+
+            this.logger.info(`Enrolled assignment ${assignmentId} on device ${deviceId}`);
+            return enrollment;
+        } catch (error) {
+            this.logger.error('Error enrolling on device:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Enroll a card assignment on multiple devices
+     * @param {Array<number>} deviceIds - Database device IDs
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Object>} Enrollment results
+     */
+    async enrollOnMultipleDevices(deviceIds, assignmentId) {
+        const results = {
+            successful: [],
+            failed: []
+        };
+
+        for (const deviceId of deviceIds) {
+            try {
+                const enrollment = await this.enrollOnDevice(deviceId, assignmentId);
+                results.successful.push({ deviceId, enrollment });
+            } catch (error) {
+                results.failed.push({ deviceId, error: error.message });
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * Remove enrollment from a device
+     * @param {number} deviceId - Database device ID
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Object>} Removal result
+     */
+    async removeFromDevice(deviceId, assignmentId) {
+        try {
+            // Get enrollment
+            const enrollment = await prisma.deviceEnrollment.findUnique({
+                where: {
+                    deviceId_cardAssignmentId: {
+                        deviceId,
+                        cardAssignmentId: assignmentId
+                    }
+                },
+                include: { cardAssignment: true }
+            });
+
+            if (!enrollment) {
+                throw new Error('Enrollment not found');
+            }
+
+            // Get Suprema device ID
+            const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
+
+            // Remove from device
+            await this.userService.deleteUsers(supremaDeviceId, [enrollment.deviceUserId]);
+
+            // Update enrollment status
+            const updated = await prisma.deviceEnrollment.update({
+                where: { id: enrollment.id },
+                data: { status: 'removed' },
+                include: { device: true, cardAssignment: true }
+            });
+
+            this.logger.info(`Removed enrollment ${enrollment.id} from device ${deviceId}`);
+            return updated;
+        } catch (error) {
+            this.logger.error('Error removing from device:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get all enrollments for a device
+     * @param {number} deviceId - Database device ID
+     * @returns {Promise<Array>} Device enrollments
+     */
+    async getDeviceEnrollments(deviceId) {
+        try {
+            return await prisma.deviceEnrollment.findMany({
+                where: { deviceId },
+                include: { cardAssignment: true },
+                orderBy: { enrolledAt: 'desc' }
+            });
+        } catch (error) {
+            this.logger.error('Error getting device enrollments:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get all enrollments for a card assignment
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Array>} Enrollments
+     */
+    async getAssignmentEnrollments(assignmentId) {
+        try {
+            return await prisma.deviceEnrollment.findMany({
+                where: { cardAssignmentId: assignmentId },
+                include: { device: true },
+                orderBy: { enrolledAt: 'desc' }
+            });
+        } catch (error) {
+            this.logger.error('Error getting assignment enrollments:', error);
+            throw error;
+        }
+    }
+
+    // ==================== SYNC OPERATIONS ====================
+
+    /**
+     * Sync all active enrollments to a device
+     * @param {number} deviceId - Database device ID
+     * @returns {Promise<Object>} Sync results
+     */
+    async syncToDevice(deviceId) {
+        try {
+            const enrollments = await prisma.deviceEnrollment.findMany({
+                where: { 
+                    deviceId,
+                    status: 'active'
+                },
+                include: { cardAssignment: true }
+            });
+
+            const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
+            
+            const results = {
+                total: enrollments.length,
+                synced: 0,
+                failed: 0,
+                errors: []
+            };
+
+            for (const enrollment of enrollments) {
+                try {
+                    const userData = {
+                        userID: enrollment.deviceUserId,
+                        name: enrollment.cardAssignment.employeeName || `Employee ${enrollment.cardAssignment.employeeId}`,
+                        cards: [{
+                            type: this.getCardTypeCode(enrollment.cardAssignment.cardType),
+                            size: enrollment.cardAssignment.cardData.length,
+                            data: enrollment.cardAssignment.cardData
+                        }]
+                    };
+
+                    await this.userService.enrollUsers(supremaDeviceId, [userData]);
+                    
+                    await prisma.deviceEnrollment.update({
+                        where: { id: enrollment.id },
+                        data: { lastSyncAt: new Date() }
+                    });
+
+                    results.synced++;
+                } catch (error) {
+                    results.failed++;
+                    results.errors.push({
+                        enrollmentId: enrollment.id,
+                        error: error.message
+                    });
+                }
+            }
+
+            // Update device last sync time
+            await prisma.device.update({
+                where: { id: deviceId },
+                data: { last_user_sync: new Date() }
+            });
+
+            this.logger.info(`Synced ${results.synced}/${results.total} enrollments to device ${deviceId}`);
+            return results;
+        } catch (error) {
+            this.logger.error('Error syncing to device:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Sync a card assignment to all enrolled devices
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Object>} Sync results
+     */
+    async syncAssignmentToDevices(assignmentId) {
+        try {
+            const enrollments = await prisma.deviceEnrollment.findMany({
+                where: {
+                    cardAssignmentId: assignmentId,
+                    status: 'active'
+                },
+                include: { device: true }
+            });
+
+            const results = {
+                total: enrollments.length,
+                synced: 0,
+                failed: 0,
+                errors: []
+            };
+
+            for (const enrollment of enrollments) {
+                try {
+                    await this.enrollOnDevice(enrollment.deviceId, assignmentId);
+                    results.synced++;
+                } catch (error) {
+                    results.failed++;
+                    results.errors.push({
+                        deviceId: enrollment.deviceId,
+                        error: error.message
+                    });
+                }
+            }
+
+            return results;
+        } catch (error) {
+            this.logger.error('Error syncing assignment to devices:', error);
+            throw error;
+        }
+    }
+
+    // ==================== EMPLOYEE QUERIES ====================
+
+    /**
+     * Search employees from HR database
+     * @param {string} searchTerm - Search term
+     * @param {number} limit - Result limit
+     * @returns {Promise<Array>} Employees
+     */
+    async searchEmployees(searchTerm, limit = 20) {
+        try {
+            // Query from the allemployees view
+            const employees = await prisma.$queryRaw`
+                SELECT * FROM allemployees 
+                WHERE employee_id LIKE ${`%${searchTerm}%`}
+                   OR name LIKE ${`%${searchTerm}%`}
+                   OR department LIKE ${`%${searchTerm}%`}
+                LIMIT ${limit}
+            `;
+
+            // For each employee, check if they have a card assignment
+            const enrichedEmployees = await Promise.all(employees.map(async (emp) => {
+                const cardAssignment = await prisma.cardAssignment.findFirst({
+                    where: { 
+                        employeeId: String(emp.employee_id),
+                        status: 'active'
+                    },
+                    include: {
+                        enrollments: {
+                            include: { device: true }
+                        }
+                    }
+                });
+
+                return {
+                    ...emp,
+                    hasCard: !!cardAssignment,
+                    cardAssignment
+                };
+            }));
+
+            return enrichedEmployees;
+        } catch (error) {
+            this.logger.error('Error searching employees:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get all employees with enrollment status
+     * @param {Object} options - Query options
+     * @returns {Promise<Array>} Employees
+     */
+    async getEmployeesWithStatus(options = {}) {
+        try {
+            const { limit = 100, offset = 0, enrolled = null } = options;
+
+            let employees = await prisma.$queryRaw`
+                SELECT * FROM allemployees 
+                ORDER BY name
+                LIMIT ${limit} OFFSET ${offset}
+            `;
+
+            // Enrich with card assignment info
+            employees = await Promise.all(employees.map(async (emp) => {
+                const cardAssignment = await prisma.cardAssignment.findFirst({
+                    where: {
+                        employeeId: String(emp.employee_id),
+                        status: 'active'
+                    },
+                    include: {
+                        enrollments: {
+                            where: { status: 'active' },
+                            include: { device: true }
+                        }
+                    }
+                });
+
+                return {
+                    ...emp,
+                    hasCard: !!cardAssignment,
+                    cardAssignment,
+                    enrolledDevices: cardAssignment?.enrollments?.map(e => e.device) || []
+                };
+            }));
+
+            // Filter by enrollment status if specified
+            if (enrolled === true) {
+                employees = employees.filter(e => e.hasCard);
+            } else if (enrolled === false) {
+                employees = employees.filter(e => !e.hasCard);
+            }
+
+            return employees;
+        } catch (error) {
+            this.logger.error('Error getting employees with status:', error);
+            throw error;
+        }
+    }
+
+    // ==================== HELPER METHODS ====================
+
+    /**
+     * Get Suprema device ID from database ID
+     * @param {number} dbDeviceId - Database device ID
+     * @returns {Promise<number>} Suprema device ID
+     */
+    async getSupremaDeviceId(dbDeviceId) {
+        // Check if it's already a Suprema device ID (large number)
+        if (parseInt(dbDeviceId) > 100000) {
+            return parseInt(dbDeviceId);
+        }
+
+        const connectedDevices = await this.connectionService.getConnectedDevices();
+        const devices = await this.connectionService.getAllDevicesFromDB();
+        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
+
+        if (!dbDevice) {
+            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
+        }
+
+        // Find matching connected device by IP
+        for (const device of connectedDevices) {
+            const info = device.toObject ? device.toObject() : device;
+            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
+                return info.deviceid;
+            }
+        }
+
+        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected`);
+    }
+
+    /**
+     * Convert card type string to Suprema card type code
+     * @param {string} cardType - Card type string
+     * @returns {number} Card type code
+     */
+    getCardTypeCode(cardType) {
+        const cardTypes = {
+            'CSN': 0,       // Card Serial Number
+            'SECURE': 1,    // Secure credential
+            'ACCESS': 2,    // Access credential
+            'WIEGAND': 3,   // Wiegand format
+            'QR': 4,        // QR Code
+            'BARCODE': 5    // Barcode
+        };
+        return cardTypes[cardType?.toUpperCase()] ?? 0;
+    }
+
+    /**
+     * Get enrollment statistics
+     * @returns {Promise<Object>} Statistics
+     */
+    async getStatistics() {
+        try {
+            const [
+                totalAssignments,
+                activeAssignments,
+                revokedAssignments,
+                totalEnrollments,
+                activeEnrollments
+            ] = await Promise.all([
+                prisma.cardAssignment.count(),
+                prisma.cardAssignment.count({ where: { status: 'active' } }),
+                prisma.cardAssignment.count({ where: { status: 'revoked' } }),
+                prisma.deviceEnrollment.count(),
+                prisma.deviceEnrollment.count({ where: { status: 'active' } })
+            ]);
+
+            // Get enrollments per device
+            const enrollmentsPerDevice = await prisma.deviceEnrollment.groupBy({
+                by: ['deviceId'],
+                where: { status: 'active' },
+                _count: { id: true }
+            });
+
+            return {
+                cards: {
+                    total: totalAssignments,
+                    active: activeAssignments,
+                    revoked: revokedAssignments
+                },
+                enrollments: {
+                    total: totalEnrollments,
+                    active: activeEnrollments
+                },
+                byDevice: enrollmentsPerDevice
+            };
+        } catch (error) {
+            this.logger.error('Error getting statistics:', error);
+            throw error;
+        }
+    }
+}
+
+export default EnrollmentService;

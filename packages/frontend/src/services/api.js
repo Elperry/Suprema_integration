@@ -225,4 +225,56 @@ export const hrAPI = {
   getSyncStatus: () => api.get('/hr/sync/status'),
 };
 
+// ==================== ENROLLMENT ENDPOINTS ====================
+
+export const enrollmentAPI = {
+  // Card scanning
+  scanCard: (deviceId, timeout = 10) => 
+    api.post('/enrollment/scan', { deviceId, timeout }),
+
+  // Card assignments
+  getCardAssignments: (params = {}) => 
+    api.get('/enrollment/cards', { params }),
+  getCardAssignment: (id) => 
+    api.get(`/enrollment/cards/${id}`),
+  assignCard: (data) => 
+    api.post('/enrollment/cards', data),
+  revokeCard: (id, reason = '') => 
+    api.delete(`/enrollment/cards/${id}`, { data: { reason } }),
+  updateCardStatus: (id, status) => 
+    api.patch(`/enrollment/cards/${id}/status`, { status }),
+
+  // Device enrollment
+  enrollOnDevice: (deviceId, assignmentId) => 
+    api.post('/enrollment/enroll', { deviceId, assignmentId }),
+  enrollOnMultipleDevices: (deviceIds, assignmentId) => 
+    api.post('/enrollment/enroll-multi', { deviceIds, assignmentId }),
+  removeFromDevice: (deviceId, assignmentId) => 
+    api.delete(`/enrollment/devices/${deviceId}/assignments/${assignmentId}`),
+  getDeviceEnrollments: (deviceId) => 
+    api.get(`/enrollment/devices/${deviceId}/enrollments`),
+  getCardEnrollments: (assignmentId) => 
+    api.get(`/enrollment/cards/${assignmentId}/enrollments`),
+
+  // Sync operations
+  syncToDevice: (deviceId) => 
+    api.post(`/enrollment/devices/${deviceId}/sync`),
+  syncCardToDevices: (assignmentId) => 
+    api.post(`/enrollment/cards/${assignmentId}/sync`),
+
+  // Employee queries
+  searchEmployees: (query, limit = 20) => 
+    api.get('/enrollment/employees/search', { params: { q: query, limit } }),
+  getEmployeesWithStatus: (params = {}) => 
+    api.get('/enrollment/employees', { params }),
+
+  // Quick enrollment (one step)
+  quickEnroll: (data) => 
+    api.post('/enrollment/quick', data),
+
+  // Statistics
+  getStatistics: () => 
+    api.get('/enrollment/statistics'),
+};
+
 export default api;
