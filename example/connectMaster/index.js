@@ -1,9 +1,9 @@
-const connectMaster = require('./connectMaster');
-const sync = require('./sync');
-const async = require('./async');
-const accept = require('./accept');
-const mode = require('./mode');
-const ssl = require('./ssl');
+import connectMaster from './connectMaster.js';
+import sync from './sync.js';
+import async from './async.js';
+import accept from './accept.js';
+import mode from './mode.js';
+import ssl from './ssl.js';
 
 module.exports.initClient = connectMaster.initClient;
 module.exports.getDeviceList = connectMaster.getDeviceList;

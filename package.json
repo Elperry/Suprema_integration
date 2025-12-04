@@ -2,12 +2,14 @@
   "name": "suprema-hr-integration",
   "version": "1.0.0",
   "description": "Suprema BioStar device integration for HR systems using G-SDK",
+  "type": "module",
   "private": true,
   "workspaces": [
     "packages/*"
   ],
   "main": "index.js",
   "scripts": {
+    "dev": "npm run dev:frontend && npm run dev:backend",
     "dev:frontend": "npm run dev --workspace=@suprema-hr/frontend",
     "dev:backend": "npm run dev --workspace=@suprema-hr/backend",
     "build:frontend": "npm run build --workspace=@suprema-hr/frontend",

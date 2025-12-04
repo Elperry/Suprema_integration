@@ -3,9 +3,13 @@
  * Handles T&A configuration, log retrieval, and HR system integration
  */
 
-const EventEmitter = require('events');
-const winston = require('winston');
-const moment = require('moment');
+import { EventEmitter } from 'events';
+import winston from 'winston';
+import { createRequire } from 'module';
+
+// Create require function for CommonJS modules
+const require = createRequire(import.meta.url);
+import moment from 'moment';
 
 // Import protobuf services (these would come from the G-SDK)
 const tnaService = require('../../biostar/service/tna_grpc_pb');
@@ -747,4 +751,4 @@ class SupremaTNAService extends EventEmitter {
     }
 }
 
-module.exports = SupremaTNAService;
+export default SupremaTNAService;

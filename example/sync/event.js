@@ -1,5 +1,5 @@
-const config = require('./config');
-const event = require('../event');
+import config from './config.js';
+import event from '../event.js';
 
 const QUEUE_SIZE = 16;
 const MAX_NUM_OF_LOG = 16384;

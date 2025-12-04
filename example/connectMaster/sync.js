@@ -1,6 +1,6 @@
-const connectMessage = require('../../biostar/service/connect_pb');
-const connectMasterMessage = require('../../biostar/service/connect_master_pb');
-const connectMaster = require('./connectMaster');
+import connectMessage from '../../biostar/service/connect_pb.js';
+import connectMasterMessage from '../../biostar/service/connect_master_pb.js';
+import connectMaster from './connectMaster.js';
 
 function connectToDevice(gatewayID, addr, port, useSSL) {
   var connInfo = new connectMessage.ConnectInfo();

@@ -1,5 +1,5 @@
-const wiegandMessage = require('../../biostar/service/wiegand_pb');
-const wiegandService = require('../../biostar/service/wiegand_grpc_pb');
+import wiegandMessage from '../../biostar/service/wiegand_pb.js';
+import wiegandService from '../../biostar/service/wiegand_grpc_pb.js';
 
 var wiegandClient = null;
 

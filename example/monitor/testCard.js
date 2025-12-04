@@ -1,5 +1,5 @@
-const card = require('../card');
-const util = require('../util');
+import card from '../card.js';
+import util from '../util.js';
 
 const NUM_OF_NEW_BLACKLIST = 2;
 const	FIRST_BLACKLISTED_CARD_ID = 100000;

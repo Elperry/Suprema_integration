@@ -1,5 +1,5 @@
-const util = require('../../util');
-const rs485 = require('../../rs485');
+import util from '../../util.js';
+import rs485 from '../../rs485.js';
 
 var slaves = [];
 var registeredSlaves = [];

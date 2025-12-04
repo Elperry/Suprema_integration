@@ -1,6 +1,6 @@
-const event = require('../../event');
-const menu = require('../../cli/menu');
-const util = require('../../util');
+import event from '../../event.js';
+import menu from '../../cli/menu.js';
+import util from '../../util.js';
 
 const EVENT_QUEUE_SIZE = 16;
 const MAX_NUM_EVENT = 32;

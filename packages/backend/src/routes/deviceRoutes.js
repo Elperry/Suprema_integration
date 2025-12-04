@@ -3,10 +3,10 @@
  * REST API endpoints for device operations
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Search for devices on network
      * GET /api/devices/search

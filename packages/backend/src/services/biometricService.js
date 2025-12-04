@@ -3,10 +3,14 @@
  * Handles fingerprint, card, and face biometric operations
  */
 
-const EventEmitter = require('events');
-const winston = require('winston');
-const fs = require('fs');
-const path = require('path');
+import { EventEmitter } from 'events';
+import winston from 'winston';
+import { createRequire } from 'module';
+
+// Create require function for CommonJS modules
+const require = createRequire(import.meta.url);
+import fs from 'fs';
+import path from 'path';
 
 // Import protobuf services (these would come from the G-SDK)
 const fingerService = require('../../biostar/service/finger_grpc_pb');
@@ -883,4 +887,4 @@ class SupremaBiometricService extends EventEmitter {
     }
 }
 
-module.exports = SupremaBiometricService;
+export default SupremaBiometricService;

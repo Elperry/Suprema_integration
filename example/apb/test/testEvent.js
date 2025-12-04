@@ -1,4 +1,4 @@
-const event = require('../../event');
+import event from '../../event.js';
 
 const EVENT_QUEUE_SIZE = 16;
 

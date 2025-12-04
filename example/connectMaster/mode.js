@@ -1,5 +1,5 @@
-const connectMasterMessage = require('../../biostar/service/connect_master_pb');
-const connectMaster = require('./connectMaster');
+import connectMasterMessage from '../../biostar/service/connect_master_pb.js';
+import connectMaster from './connectMaster.js';
 
 function setConnectionMode(deviceIDs, mode) {
   var req = new connectMasterMessage.SetConnectionModeMultiRequest();

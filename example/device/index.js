@@ -1,4 +1,4 @@
-const device = require('./device');
+import device from './device.js';
 
 module.exports.initClient = device.initClient;
 module.exports.getInfo = device.getInfo;

@@ -1,5 +1,5 @@
-const statusMessage = require('../../biostar/service/status_pb');
-const statusService = require('../../biostar/service/status_grpc_pb');
+import statusMessage from '../../biostar/service/status_pb.js';
+import statusService from '../../biostar/service/status_grpc_pb.js';
 
 var statusClient = null;
 

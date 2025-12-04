@@ -1,4 +1,4 @@
-const status = require('./status');
+import status from './status.js';
 
 module.exports.initClient = status.initClient;
 module.exports.getClient = status.getClient;

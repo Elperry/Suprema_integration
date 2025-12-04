@@ -3,7 +3,7 @@
  * Handles synchronization between devices and database for events, users, and cards
  */
 
-const database = require('../models/database');
+import database from '../models/database.js';
 
 class SyncService {
     constructor(services) {
@@ -336,4 +336,4 @@ class SyncService {
     }
 }
 
-module.exports = SyncService;
+export default SyncService;

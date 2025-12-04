@@ -3,36 +3,45 @@
  * Suprema HR Integration System
  */
 
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const winston = require('winston');
+import dotenv from 'dotenv';
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import winston from 'winston';
+import { v4 as uuidv4 } from 'uuid';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
 // Import services
-const SupremaConnectionService = require('./src/services/connectionService');
-const SupremaUserService = require('./src/services/userService');
-const SupremaEventService = require('./src/services/eventService');
-const SupremaDoorService = require('./src/services/doorService');
-const SupremaTNAService = require('./src/services/tnaService');
-const SupremaBiometricService = require('./src/services/biometricService');
-const SyncService = require('./src/services/syncService');
+import SupremaConnectionService from './src/services/connectionService.js';
+import SupremaUserService from './src/services/userService.js';
+import SupremaEventService from './src/services/eventService.js';
+import SupremaDoorService from './src/services/doorService.js';
+import SupremaTNAService from './src/services/tnaService.js';
+import SupremaBiometricService from './src/services/biometricService.js';
+import SyncService from './src/services/syncService.js';
 
 // Import database
-const DatabaseManager = require('./src/models/database');
+import DatabaseManager from './src/models/database.js';
 
 // Import routes
-const deviceRoutes = require('./src/routes/deviceRoutes');
-const userRoutes = require('./src/routes/userRoutes');
-const eventRoutes = require('./src/routes/eventRoutes');
-const doorRoutes = require('./src/routes/doorRoutes');
-const tnaRoutes = require('./src/routes/tnaRoutes');
-const biometricRoutes = require('./src/routes/biometricRoutes');
-const hrRoutes = require('./src/routes/hrRoutes');
-const gateEventRoutes = require('./src/routes/gateEventRoutes');
-const employeeRoutes = require('./src/routes/employeeRoutes');
-const cardRoutes = require('./src/routes/cardRoutes');
+import deviceRoutes from './src/routes/deviceRoutes.js';
+import userRoutes from './src/routes/userRoutes.js';
+import eventRoutes from './src/routes/eventRoutes.js';
+import doorRoutes from './src/routes/doorRoutes.js';
+import tnaRoutes from './src/routes/tnaRoutes.js';
+import biometricRoutes from './src/routes/biometricRoutes.js';
+import hrRoutes from './src/routes/hrRoutes.js';
+import gateEventRoutes from './src/routes/gateEventRoutes.js';
+import employeeRoutes from './src/routes/employeeRoutes.js';
+import cardRoutes from './src/routes/cardRoutes.js';
+
+// ES6 module equivalents for __filename and __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+dotenv.config();
 
 class SupremaHRIntegrationApp {
     constructor() {
@@ -143,7 +152,7 @@ class SupremaHRIntegrationApp {
 
         // Request ID middleware
         this.app.use((req, res, next) => {
-            req.requestId = require('uuid').v4();
+            req.requestId = uuidv4();
             res.setHeader('X-Request-ID', req.requestId);
             next();
         });
@@ -513,9 +522,10 @@ class SupremaHRIntegrationApp {
 }
 
 // Create and start application if run directly
-if (require.main === module) {
+const isMainModule = import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`;
+if (isMainModule) {
     const app = new SupremaHRIntegrationApp();
     app.start();
 }
 
-module.exports = SupremaHRIntegrationApp;
+export default SupremaHRIntegrationApp;

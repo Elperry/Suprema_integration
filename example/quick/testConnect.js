@@ -1,6 +1,6 @@
-const connect = require('../connect');
-const connectMaster = require('../connectMaster');
-const util = require('../util');
+import connect from '../connect.js';
+import connectMaster from '../connectMaster.js';
+import util from '../util.js';
 
 async function test(deviceIP, devicePort, useSSL) {
   try {

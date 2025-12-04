@@ -3,10 +3,10 @@
  * REST API endpoints for user operations
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Get all users from device
      * GET /api/users/:deviceId

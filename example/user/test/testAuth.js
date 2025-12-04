@@ -1,6 +1,6 @@
-const auth = require('../../auth');
-const device = require('../../device');
-const menu = require('../../cli/menu');
+import auth from '../../auth.js';
+import device from '../../device.js';
+import menu from '../../cli/menu.js';
 
 async function prepareAuthConfig(devID) {
   try {

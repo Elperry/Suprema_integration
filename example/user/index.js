@@ -1,4 +1,4 @@
-const user = require('./user');
+import user from './user.js';
 
 module.exports.initClient = user.initClient;
 module.exports.getList = user.getList;

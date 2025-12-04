@@ -1,4 +1,4 @@
-const wiegand = require('./wiegand');
+import wiegand from './wiegand.js';
 
 module.exports.initClient = wiegand.initClient;
 module.exports.getClient = wiegand.getClient;

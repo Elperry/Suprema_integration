@@ -1,4 +1,4 @@
-const rs485 = require('./rs485');
+import rs485 from './rs485.js';
 
 module.exports.initClient = rs485.initClient;
 module.exports.getClient = rs485.getClient;

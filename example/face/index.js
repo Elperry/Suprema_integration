@@ -1,4 +1,4 @@
-const face = require('./face');
+import face from './face.js';
 
 module.exports.initClient = face.initClient;
 module.exports.scan = face.scan;

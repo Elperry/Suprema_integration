@@ -1,5 +1,5 @@
-const fingerMessage = require('../../biostar/service/finger_pb');
-const fingerService = require('../../biostar/service/finger_grpc_pb');
+import fingerMessage from '../../biostar/service/finger_pb.js';
+import fingerService from '../../biostar/service/finger_grpc_pb.js';
 
 var fingerClient = null;
 

@@ -1,4 +1,4 @@
-const auth = require('./auth');
+import auth from './auth.js';
 
 module.exports.initClient = auth.initClient;
 module.exports.getClient = auth.getClient;

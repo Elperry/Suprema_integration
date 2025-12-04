@@ -1,9 +1,9 @@
-const menu = require('../../../cli/menu');
-const connect = require('../../../connect');
-const connectMaster = require('../../../connectMaster');
-const deviceMenu = require('./deviceMenu');
-const asyncMenu = require('./asyncMenu');
-const acceptMenu = require('./acceptMenu');
+import menu from '../../../cli/menu.js';
+import connect from '../../../connect.js';
+import connectMaster from '../../../connectMaster.js';
+import deviceMenu from './deviceMenu.js';
+import asyncMenu from './asyncMenu.js';
+import acceptMenu from './acceptMenu.js';
 
 const SEARCH_TIMEOUT = 5000;
 

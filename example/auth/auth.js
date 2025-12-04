@@ -1,5 +1,5 @@
-const authMessage = require('../../biostar/service/auth_pb');
-const authService = require('../../biostar/service/auth_grpc_pb');
+import authMessage from '../../biostar/service/auth_pb.js';
+import authService from '../../biostar/service/auth_grpc_pb.js';
 
 var authClient = null;
 

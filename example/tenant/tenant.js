@@ -1,5 +1,5 @@
-const tenantMessage = require('../../biostar/service/tenant_pb');
-const tenantService = require('../../biostar/service/tenant_grpc_pb');
+import tenantMessage from '../../biostar/service/tenant_pb.js';
+import tenantService from '../../biostar/service/tenant_grpc_pb.js';
 
 const ADMIN_TENANT_ID = "administrator";
 

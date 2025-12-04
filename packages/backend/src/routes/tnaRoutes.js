@@ -3,10 +3,10 @@
  * REST API endpoints for T&A configuration and attendance management
  */
 
-const express = require('express');
+import express from 'express';
 const router = express.Router();
 
-module.exports = (services) => {
+export default (services) => {
     /**
      * Get T&A configuration
      * GET /api/tna/config
