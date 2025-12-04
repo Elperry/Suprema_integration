@@ -22,6 +22,8 @@ model Device {
   status          String?  @default("disconnected")
   useSSL          Boolean  @default(false)
 
+  enrollments     DeviceEnrollment[]
+
   @@map("device")
 }
 
@@ -65,4 +67,44 @@ model TempAccess {
   ts            DateTime @default(now())
 
   @@map("tempaccess")
+}
+
+// Card assignments - links cards to employees
+model CardAssignment {
+  id            Int       @id @default(autoincrement())
+  employeeId    String    @db.VarChar(50)  // References HR employee ID
+  employeeName  String?   @db.VarChar(255) // Cached employee name for quick lookup
+  cardData      String    @db.VarChar(255) // CSN/card data (base64 or hex)
+  cardType      String    @default("CSN") @db.VarChar(50) // CSN, SmartCard, QR, etc.
+  cardFormat    Int       @default(0)      // Card format type from Suprema
+  status        String    @default("active") @db.VarChar(20) // active, revoked, lost, expired
+  assignedAt    DateTime  @default(now())
+  revokedAt     DateTime?
+  notes         String?   @db.Text
+
+  enrollments   DeviceEnrollment[]
+
+  @@unique([cardData])
+  @@index([employeeId])
+  @@index([status])
+  @@map("card_assignments")
+}
+
+// Device enrollments - tracks which employees are enrolled on which devices
+model DeviceEnrollment {
+  id              Int       @id @default(autoincrement())
+  deviceId        Int       @db.UnsignedInt  // FK to Device
+  cardAssignmentId Int       // FK to CardAssignment
+  deviceUserId    String    @db.VarChar(50) // User ID on the Suprema device
+  enrolledAt      DateTime  @default(now())
+  lastSyncAt      DateTime?
+  status          String    @default("active") @db.VarChar(20) // active, removed, pending
+
+  device          Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  cardAssignment  CardAssignment @relation(fields: [cardAssignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, cardAssignmentId])
+  @@unique([deviceId, deviceUserId])
+  @@index([status])
+  @@map("device_enrollments")
 }

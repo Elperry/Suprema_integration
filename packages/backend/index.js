@@ -36,6 +36,10 @@ import hrRoutes from './src/routes/hrRoutes.js';
 import gateEventRoutes from './src/routes/gateEventRoutes.js';
 import employeeRoutes from './src/routes/employeeRoutes.js';
 import cardRoutes from './src/routes/cardRoutes.js';
+import enrollmentRoutes from './src/routes/enrollmentRoutes.js';
+
+// Import enrollment service
+import EnrollmentService from './src/services/enrollmentService.js';
 
 // ES6 module equivalents for __filename and __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -68,9 +72,7 @@ class SupremaHRIntegrationApp {
             ]
         });
 
-        this.initializeServices();
         this.setupMiddleware();
-        this.setupRoutes();
         this.setupErrorHandling();
     }
 
@@ -112,6 +114,13 @@ class SupremaHRIntegrationApp {
             
             // Initialize sync service for event/user synchronization
             this.services.sync = new SyncService(this.services);
+
+            // Initialize enrollment service for card-based employee enrollment
+            this.services.enrollment = new EnrollmentService(
+                this.services.user,
+                this.services.biometric,
+                this.services.connection
+            );
 
             // Setup event listeners for HR integration
             this.setupHREventListeners();
@@ -201,7 +210,8 @@ class SupremaHRIntegrationApp {
                         door: !!this.services.door,
                         tna: !!this.services.tna,
                         biometric: !!this.services.biometric,
-                        sync: !!this.services.sync
+                        sync: !!this.services.sync,
+                        enrollment: !!this.services.enrollment
                     }
                 };
 
@@ -227,6 +237,7 @@ class SupremaHRIntegrationApp {
         this.app.use('/api/gate-events', gateEventRoutes(this.database, this.logger));
         this.app.use('/api/employees', employeeRoutes(this.database, this.logger));
         this.app.use('/api/cards', cardRoutes(this.services));
+        this.app.use('/api/enrollment', enrollmentRoutes(this.services));
 
         // API documentation
         this.app.get('/api', (req, res) => {
@@ -244,7 +255,8 @@ class SupremaHRIntegrationApp {
                     hr: '/api/hr',
                     gateEvents: '/api/gate-events',
                     employees: '/api/employees',
-                    cards: '/api/cards'
+                    cards: '/api/cards',
+                    enrollment: '/api/enrollment'
                 },
                 health: '/health'
             });
@@ -397,7 +409,9 @@ class SupremaHRIntegrationApp {
      */
     async start() {
         try {
+            // Initialize services first, then set up routes
             await this.initializeServices();
+            this.setupRoutes();
             
             this.server = this.app.listen(this.port, () => {
                 this.logger.info(`Suprema HR Integration Server running on port ${this.port}`);
