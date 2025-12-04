@@ -103,22 +103,57 @@ export const cardAPI = {
 
 export const eventAPI = {
   // Subscription
-  subscribe: (deviceId, filters = []) => api.post('/events/subscribe', { deviceId, filters }),
+  subscribe: (deviceId, queueSize = 100) => api.post('/events/subscribe', { deviceId, queueSize }),
   unsubscribe: (deviceId) => api.post('/events/unsubscribe', { deviceId }),
   subscribeStream: (queueSize = 100) => api.post('/events/stream/subscribe', { queueSize }),
   
   // Logs
-  getLogs: (params) => api.get('/events/logs', { params }),
+  getLogs: (deviceId, params = {}) => api.get('/events/logs', { params: { deviceId, ...params } }),
   getById: (eventId, deviceId) => api.get(`/events/${eventId}?deviceId=${deviceId}`),
   exportLogs: (params) => api.get('/events/export', { params, responseType: 'blob' }),
   
   // Device logs
   getDeviceLog: (deviceId, startEventId = 0, maxNumOfLog = 1000) => 
     api.get(`/events/device-log/${deviceId}?startEventId=${startEventId}&maxNumOfLog=${maxNumOfLog}`),
-  getFilteredLog: (deviceId, startEventId, maxNumOfLog, filter) => 
-    api.post(`/events/device-log/${deviceId}/filtered`, { startEventId, maxNumOfLog, filter }),
+  getFilteredLog: (deviceId, filters = {}) => 
+    api.post(`/events/device-log/${deviceId}/filtered`, { 
+      startEventId: filters.startEventId || 0, 
+      maxNumOfLog: filters.maxNumOfLog || 1000, 
+      filter: filters 
+    }),
   getImageLog: (deviceId, startEventId = 0, maxNumOfLog = 100) => 
     api.get(`/events/image-log/${deviceId}?startEventId=${startEventId}&maxNumOfLog=${maxNumOfLog}`),
+  
+  // Historical events with pagination
+  getHistorical: (deviceId, params = {}) => {
+    const query = new URLSearchParams();
+    if (params.page) query.append('page', params.page);
+    if (params.pageSize) query.append('pageSize', params.pageSize);
+    if (params.eventType) query.append('eventType', params.eventType);
+    if (params.userId) query.append('userId', params.userId);
+    if (params.doorId) query.append('doorId', params.doorId);
+    if (params.startDate) query.append('startDate', params.startDate);
+    if (params.endDate) query.append('endDate', params.endDate);
+    if (params.eventCodes) query.append('eventCodes', params.eventCodes);
+    return api.get(`/events/historical/${deviceId}?${query.toString()}`);
+  },
+  
+  // Specific event types
+  getAuthenticationEvents: (deviceId, params = {}) => 
+    api.get(`/events/authentication/${deviceId}`, { params }),
+  getDoorEvents: (deviceId, params = {}) => 
+    api.get(`/events/door/${deviceId}`, { params }),
+  getUserEvents: (deviceId, userId, maxEvents = 500) => 
+    api.get(`/events/user/${deviceId}/${userId}?maxEvents=${maxEvents}`),
+  
+  // Advanced search
+  search: (deviceId, filters = {}, pagination = {}) => 
+    api.post(`/events/search/${deviceId}`, { 
+      filters, 
+      page: pagination.page || 1, 
+      pageSize: pagination.pageSize || 50,
+      maxEvents: pagination.maxEvents || 1000
+    }),
   
   // Monitoring
   enableMonitoring: (deviceId) => api.post(`/events/monitoring/${deviceId}/enable`),
@@ -132,9 +167,8 @@ export const eventAPI = {
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
   
   // Statistics
-  getStatistics: (params) => api.get('/events/statistics', { params }),
-  getCount: (deviceId, timeWindow = 3600) => 
-    api.get(`/events/count?deviceId=${deviceId}&timeWindow=${timeWindow}`),
+  getStatistics: (deviceId, params = {}) => api.get('/events/statistics', { params: { deviceId, ...params } }),
+  getCount: (deviceId) => api.get(`/events/count?deviceId=${deviceId}`),
   getCodes: () => api.get('/events/codes'),
 };
 
