@@ -37,6 +37,7 @@ import gateEventRoutes from './src/routes/gateEventRoutes.js';
 import employeeRoutes from './src/routes/employeeRoutes.js';
 import cardRoutes from './src/routes/cardRoutes.js';
 import enrollmentRoutes from './src/routes/enrollmentRoutes.js';
+import locationRoutes from './src/routes/locationRoutes.js';
 
 // Import enrollment service
 import EnrollmentService from './src/services/enrollmentService.js';
@@ -238,6 +239,7 @@ class SupremaHRIntegrationApp {
         this.app.use('/api/employees', employeeRoutes(this.database, this.logger));
         this.app.use('/api/cards', cardRoutes(this.services));
         this.app.use('/api/enrollment', enrollmentRoutes(this.services));
+        this.app.use('/api/locations', locationRoutes({ ...this.services, database: this.database }));
 
         // API documentation
         this.app.get('/api', (req, res) => {

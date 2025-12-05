@@ -164,7 +164,23 @@ export const eventAPI = {
   sync: (deviceId, fromEventId, batchSize = 1000) => 
     api.post(`/events/sync/${deviceId}`, { fromEventId, batchSize }),
   syncAll: (batchSize = 1000) => api.post('/events/sync-all', { batchSize }),
+  syncAllToDB: (batchSize = 1000) => api.post('/events/sync-all-to-db', { batchSize }),
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
+  
+  // Database events (synced events)
+  getFromDB: (params = {}) => {
+    const query = new URLSearchParams();
+    if (params.page) query.append('page', params.page);
+    if (params.pageSize) query.append('pageSize', params.pageSize);
+    if (params.deviceId) query.append('deviceId', params.deviceId);
+    if (params.eventType) query.append('eventType', params.eventType);
+    if (params.userId) query.append('userId', params.userId);
+    if (params.authResult) query.append('authResult', params.authResult);
+    if (params.doorId) query.append('doorId', params.doorId);
+    if (params.startDate) query.append('startDate', params.startDate);
+    if (params.endDate) query.append('endDate', params.endDate);
+    return api.get(`/events/db?${query.toString()}`);
+  },
   
   // Statistics
   getStatistics: (deviceId, params = {}) => api.get('/events/statistics', { params: { deviceId, ...params } }),
@@ -275,6 +291,28 @@ export const enrollmentAPI = {
   // Statistics
   getStatistics: () => 
     api.get('/enrollment/statistics'),
+};
+
+// ==================== LOCATION ENDPOINTS ====================
+
+export const locationAPI = {
+  // Tree structure
+  getTree: () => api.get('/locations/tree'),
+  
+  // CRUD
+  getAll: () => api.get('/locations'),
+  getById: (locationId) => api.get(`/locations/${locationId}`),
+  create: (locationData) => api.post('/locations', locationData),
+  update: (locationId, updates) => api.put(`/locations/${locationId}`, updates),
+  delete: (locationId) => api.delete(`/locations/${locationId}`),
+  
+  // Device assignment
+  assignDevice: (locationId, deviceId, direction = 'in') => 
+    api.post(`/locations/${locationId}/devices`, { deviceId, direction }),
+  removeDevice: (locationId, deviceId) => 
+    api.delete(`/locations/${locationId}/devices/${deviceId}`),
+  updateDeviceDirection: (deviceId, direction) => 
+    api.patch(`/locations/devices/${deviceId}/direction`, { direction }),
 };
 
 export default api;

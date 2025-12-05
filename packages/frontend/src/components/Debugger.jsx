@@ -68,9 +68,10 @@ const Debugger = () => {
       const endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/connect`
       const response = await axios.post(endpoint, requestData)
       addResult('POST', endpoint, requestData, response.data)
-      // If connection successful, store the device ID
+      // If connection successful, store the device ID (ensure it's a number)
       if (response.data.data?.deviceId) {
-        setFormData(prev => ({ ...prev, connectedDeviceId: response.data.data.deviceId }))
+        const deviceId = parseInt(response.data.data.deviceId, 10)
+        setFormData(prev => ({ ...prev, connectedDeviceId: deviceId }))
       }
     } catch (error) {
       addResult('POST', `${API_CONFIG.API_BASE_URL}/devices/direct/connect`, requestData, null, error.response?.data || error.message)
@@ -82,15 +83,19 @@ const Debugger = () => {
   const testDirectGetInfo = async () => {
     setLoading(true)
     // Use deviceId if available, otherwise use IP
-    const useDeviceId = formData.connectedDeviceId
+    const useDeviceId = formData.connectedDeviceId ? parseInt(formData.connectedDeviceId, 10) : null
     let endpoint, params
     
-    if (useDeviceId) {
+    if (useDeviceId && !isNaN(useDeviceId)) {
       params = { deviceId: useDeviceId }
       endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/info?deviceId=${useDeviceId}`
-    } else {
-      params = { ip: formData.directIp, port: formData.directPort || 51211 }
+    } else if (formData.directIp) {
+      params = { ip: formData.directIp, port: parseInt(formData.directPort) || 51211 }
       endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/info?ip=${params.ip}&port=${params.port}`
+    } else {
+      addResult('GET', 'N/A', {}, null, 'Please provide either a Device ID or IP address')
+      setLoading(false)
+      return
     }
     
     try {
@@ -106,15 +111,19 @@ const Debugger = () => {
   const testDirectGetCapabilities = async () => {
     setLoading(true)
     // Use deviceId if available, otherwise use IP
-    const useDeviceId = formData.connectedDeviceId
+    const useDeviceId = formData.connectedDeviceId ? parseInt(formData.connectedDeviceId, 10) : null
     let endpoint, params
     
-    if (useDeviceId) {
+    if (useDeviceId && !isNaN(useDeviceId)) {
       params = { deviceId: useDeviceId }
       endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/capabilities?deviceId=${useDeviceId}`
-    } else {
-      params = { ip: formData.directIp, port: formData.directPort || 51211 }
+    } else if (formData.directIp) {
+      params = { ip: formData.directIp, port: parseInt(formData.directPort) || 51211 }
       endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/capabilities?ip=${params.ip}&port=${params.port}`
+    } else {
+      addResult('GET', 'N/A', {}, null, 'Please provide either a Device ID or IP address')
+      setLoading(false)
+      return
     }
     
     try {
@@ -137,11 +146,13 @@ const Debugger = () => {
       // If we get connected devices, auto-populate the device ID if available
       if (response.data.data?.length > 0) {
         const firstDevice = response.data.data[0]
+        // Ensure deviceid is stored as a number
+        const deviceId = parseInt(firstDevice.deviceid, 10)
         setFormData(prev => ({
           ...prev,
-          connectedDeviceId: firstDevice.deviceid,
+          connectedDeviceId: deviceId,
           directIp: firstDevice.ipaddr,
-          directPort: firstDevice.port.toString()
+          directPort: String(firstDevice.port)
         }))
       }
     } catch (error) {
@@ -153,7 +164,16 @@ const Debugger = () => {
 
   const testDirectDisconnect = async () => {
     setLoading(true)
-    const deviceIdToDisconnect = formData.disconnectDeviceId || formData.connectedDeviceId
+    // Parse device ID to ensure it's a number
+    const rawDeviceId = formData.disconnectDeviceId || formData.connectedDeviceId
+    const deviceIdToDisconnect = parseInt(rawDeviceId, 10)
+    
+    if (isNaN(deviceIdToDisconnect)) {
+      addResult('POST', 'N/A', {}, null, 'Invalid Device ID. Please provide a valid numeric device ID.')
+      setLoading(false)
+      return
+    }
+    
     const requestData = { deviceId: deviceIdToDisconnect }
     try {
       const endpoint = `${API_CONFIG.API_BASE_URL}/devices/direct/disconnect`

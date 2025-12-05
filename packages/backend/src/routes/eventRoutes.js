@@ -104,6 +104,224 @@ export default (services) => {
     });
 
     /**
+     * Get synced events from database (all devices)
+     * GET /api/events/db
+     * Query: page, pageSize, deviceId, eventType, userId, authResult, startDate, endDate
+     */
+    router.get('/db', async (req, res) => {
+        try {
+            const { 
+                page = 1, 
+                pageSize = 50,
+                deviceId,
+                eventType,
+                userId,
+                authResult,
+                doorId,
+                startDate,
+                endDate
+            } = req.query;
+
+            const prisma = services.database.getPrisma();
+            
+            // Build where clause
+            const where = {};
+            
+            if (deviceId) {
+                where.deviceId = parseInt(deviceId);
+            }
+            if (eventType) {
+                where.eventType = eventType;
+            }
+            if (userId) {
+                where.userId = { contains: userId };
+            }
+            if (authResult) {
+                where.authResult = authResult;
+            }
+            if (doorId) {
+                where.doorId = parseInt(doorId);
+            }
+            if (startDate) {
+                where.timestamp = { ...where.timestamp, gte: new Date(startDate) };
+            }
+            if (endDate) {
+                where.timestamp = { ...where.timestamp, lte: new Date(endDate) };
+            }
+
+            // Get total count
+            const totalEvents = await prisma.event.count({ where });
+            
+            // Get paginated events
+            const events = await prisma.event.findMany({
+                where,
+                orderBy: { timestamp: 'desc' },
+                skip: (parseInt(page) - 1) * parseInt(pageSize),
+                take: parseInt(pageSize)
+            });
+
+            // Convert BigInt to string for JSON serialization
+            const serializedEvents = events.map(e => ({
+                ...e,
+                supremaEventId: e.supremaEventId.toString(),
+                id: e.id
+            }));
+
+            res.json({
+                success: true,
+                data: serializedEvents,
+                pagination: {
+                    page: parseInt(page),
+                    pageSize: parseInt(pageSize),
+                    totalEvents,
+                    totalPages: Math.ceil(totalEvents / parseInt(pageSize))
+                }
+            });
+        } catch (error) {
+            console.error('Error getting events from DB:', error);
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Sync events from all connected devices
+     * POST /api/events/sync-all-to-db
+     */
+    router.post('/sync-all-to-db', async (req, res) => {
+        try {
+            const { batchSize = 1000 } = req.body;
+            const prisma = services.database.getPrisma();
+            
+            // Get all devices from database
+            const devices = await prisma.device.findMany({
+                where: { isActive: true }
+            });
+            
+            const results = [];
+            
+            for (const device of devices) {
+                try {
+                    // Get Suprema device ID
+                    const connectedDevices = await services.connection.getConnectedDevices();
+                    let supremaDeviceId = null;
+                    
+                    for (const connected of connectedDevices) {
+                        const info = connected.toObject ? connected.toObject() : connected;
+                        if (info.ipaddr === device.ip && info.port === device.port) {
+                            supremaDeviceId = info.deviceid;
+                            break;
+                        }
+                    }
+                    
+                    if (!supremaDeviceId) {
+                        results.push({
+                            deviceId: device.id,
+                            deviceName: device.name,
+                            success: false,
+                            error: 'Device not connected'
+                        });
+                        continue;
+                    }
+                    
+                    // Get last synced event ID
+                    const lastEvent = await prisma.event.findFirst({
+                        where: { deviceId: device.id },
+                        orderBy: { supremaEventId: 'desc' }
+                    });
+                    const startEventId = lastEvent ? Number(lastEvent.supremaEventId) : 0;
+                    
+                    // Get events from device
+                    const events = await services.event.getEventLogs(
+                        supremaDeviceId,
+                        startEventId,
+                        parseInt(batchSize)
+                    );
+                    
+                    // Store events
+                    let syncedCount = 0;
+                    for (const event of events) {
+                        try {
+                            await prisma.event.upsert({
+                                where: {
+                                    deviceId_supremaEventId: {
+                                        deviceId: device.id,
+                                        supremaEventId: BigInt(event.id || event.eventid || 0)
+                                    }
+                                },
+                                update: {
+                                    eventCode: event.eventcode || 0,
+                                    eventType: event.eventType || 'other',
+                                    subType: event.subType || null,
+                                    userId: event.userid || null,
+                                    doorId: event.doorid || null,
+                                    description: event.description || null,
+                                    authResult: event.authResult || null,
+                                    timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+                                    rawData: event
+                                },
+                                create: {
+                                    deviceId: device.id,
+                                    supremaEventId: BigInt(event.id || event.eventid || 0),
+                                    eventCode: event.eventcode || 0,
+                                    eventType: event.eventType || 'other',
+                                    subType: event.subType || null,
+                                    userId: event.userid || null,
+                                    doorId: event.doorid || null,
+                                    description: event.description || null,
+                                    authResult: event.authResult || null,
+                                    timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+                                    rawData: event
+                                }
+                            });
+                            syncedCount++;
+                        } catch (e) {
+                            // Continue with other events
+                        }
+                    }
+                    
+                    // Update device last_event_sync
+                    await prisma.device.update({
+                        where: { id: device.id },
+                        data: { last_event_sync: new Date() }
+                    });
+                    
+                    results.push({
+                        deviceId: device.id,
+                        deviceName: device.name,
+                        success: true,
+                        synced: syncedCount,
+                        total: events.length
+                    });
+                } catch (err) {
+                    results.push({
+                        deviceId: device.id,
+                        deviceName: device.name,
+                        success: false,
+                        error: err.message
+                    });
+                }
+            }
+            
+            const totalSynced = results.reduce((sum, r) => sum + (r.synced || 0), 0);
+            
+            res.json({
+                success: true,
+                message: 'All devices synced',
+                totalSynced,
+                results
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
      * Get event logs
      * GET /api/events/logs
      */
@@ -752,28 +970,85 @@ export default (services) => {
     router.post('/sync/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const { fromEventId = 0, batchSize = 1000 } = req.body;
+            const { fromEventId, batchSize = 1000 } = req.body;
 
             const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const prisma = services.database.getPrisma();
+            
+            // Get last synced event ID from database if not provided
+            let startEventId = fromEventId;
+            if (startEventId === undefined || startEventId === null) {
+                const lastEvent = await prisma.event.findFirst({
+                    where: { deviceId: parseInt(deviceId) },
+                    orderBy: { supremaEventId: 'desc' }
+                });
+                startEventId = lastEvent ? Number(lastEvent.supremaEventId) : 0;
+            }
             
             // Get events from device
             const events = await services.event.getEventLogs(
                 supremaDeviceId,
-                parseInt(fromEventId),
+                parseInt(startEventId),
                 parseInt(batchSize)
             );
 
-            // TODO: Store events in database using services.sync or database service
-            // For now, just return the events that would be synced
+            // Store events in database
+            let syncedCount = 0;
+            for (const event of events) {
+                try {
+                    await prisma.event.upsert({
+                        where: {
+                            deviceId_supremaEventId: {
+                                deviceId: parseInt(deviceId),
+                                supremaEventId: BigInt(event.id || event.eventid || 0)
+                            }
+                        },
+                        update: {
+                            eventCode: event.eventcode || 0,
+                            eventType: event.eventType || 'other',
+                            subType: event.subType || null,
+                            userId: event.userid || null,
+                            doorId: event.doorid || null,
+                            description: event.description || null,
+                            authResult: event.authResult || null,
+                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+                            rawData: event
+                        },
+                        create: {
+                            deviceId: parseInt(deviceId),
+                            supremaEventId: BigInt(event.id || event.eventid || 0),
+                            eventCode: event.eventcode || 0,
+                            eventType: event.eventType || 'other',
+                            subType: event.subType || null,
+                            userId: event.userid || null,
+                            doorId: event.doorid || null,
+                            description: event.description || null,
+                            authResult: event.authResult || null,
+                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+                            rawData: event
+                        }
+                    });
+                    syncedCount++;
+                } catch (upsertError) {
+                    // Log but continue with other events
+                    console.error(`Failed to sync event ${event.id}:`, upsertError.message);
+                }
+            }
+            
+            // Update device last_event_sync
+            await prisma.device.update({
+                where: { id: parseInt(deviceId) },
+                data: { last_event_sync: new Date() }
+            });
             
             res.json({
                 success: true,
-                message: 'Events retrieved from device',
-                synced: events.length,
-                lastEventId: events.length > 0 ? events[events.length - 1].id : fromEventId,
+                message: 'Events synced to database',
+                synced: syncedCount,
+                total: events.length,
+                lastEventId: events.length > 0 ? events[events.length - 1].id : startEventId,
                 deviceId: deviceId,
-                supremaDeviceId: supremaDeviceId,
-                events: events
+                supremaDeviceId: supremaDeviceId
             });
         } catch (error) {
             res.status(500).json({

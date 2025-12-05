@@ -13,6 +13,20 @@ export default (services) => {
     // =====================================================
 
     /**
+     * Helper function to parse device ID to proper integer
+     */
+    const parseDeviceId = (deviceId) => {
+        if (deviceId === null || deviceId === undefined || deviceId === '') {
+            return null;
+        }
+        const parsed = parseInt(deviceId, 10);
+        if (isNaN(parsed)) {
+            return null;
+        }
+        return parsed;
+    };
+
+    /**
      * Helper function to find device ID by IP address from connected devices
      */
     const findConnectedDeviceByIp = async (ip, port) => {
@@ -21,8 +35,9 @@ export default (services) => {
             const deviceList = connectedDevices.map(d => d.toObject ? d.toObject() : d);
             
             // Find device matching IP and port
+            const parsedPort = parseInt(port, 10);
             const device = deviceList.find(d => 
-                d.ipaddr === ip && d.port === parseInt(port)
+                d.ipaddr === ip && d.port === parsedPort
             );
             
             return device ? device.deviceid : null;
@@ -36,19 +51,21 @@ export default (services) => {
      * Helper function to get or establish device connection
      */
     const getOrConnectDevice = async (ip, port, useSSL = false) => {
+        const parsedPort = parseInt(port, 10) || 51211;
+        
         // First, check if device is already connected
-        let deviceId = await findConnectedDeviceByIp(ip, port);
+        let deviceId = await findConnectedDeviceByIp(ip, parsedPort);
         
         if (deviceId) {
-            console.log(`Device already connected at ${ip}:${port} with ID ${deviceId}`);
+            console.log(`Device already connected at ${ip}:${parsedPort} with ID ${deviceId}`);
             return { deviceId, alreadyConnected: true };
         }
 
         // Device not connected, establish new connection
-        console.log(`Connecting to device at ${ip}:${port}...`);
+        console.log(`Connecting to device at ${ip}:${parsedPort}...`);
         const deviceConfig = {
             ip: ip,
-            port: parseInt(port),
+            port: parsedPort,
             useSSL: useSSL,
             timeout: 15000
         };
@@ -66,10 +83,10 @@ export default (services) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
-            let deviceId = providedDeviceId;
+            let deviceId = parseDeviceId(providedDeviceId);
 
-            // If deviceId provided, use it directly
-            if (!deviceId) {
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
                 if (!ip) {
                     return res.status(400).json({
                         error: 'Bad Request',
@@ -78,8 +95,16 @@ export default (services) => {
                 }
 
                 // Get or establish connection
-                const connection = await getOrConnectDevice(ip, parseInt(port));
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
                 deviceId = connection.deviceId;
+            }
+            
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
             }
             
             // Get device info
@@ -93,7 +118,7 @@ export default (services) => {
                 source: 'direct_device',
                 connectionInfo: {
                     ip: ip || 'N/A',
-                    port: parseInt(port) || 'N/A',
+                    port: parseInt(port, 10) || 51211,
                     deviceId: deviceId
                 },
                 data: deviceInfo
@@ -116,10 +141,10 @@ export default (services) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
-            let deviceId = providedDeviceId;
+            let deviceId = parseDeviceId(providedDeviceId);
 
-            // If deviceId provided, use it directly
-            if (!deviceId) {
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
                 if (!ip) {
                     return res.status(400).json({
                         error: 'Bad Request',
@@ -128,8 +153,16 @@ export default (services) => {
                 }
 
                 // Get or establish connection
-                const connection = await getOrConnectDevice(ip, parseInt(port));
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
                 deviceId = connection.deviceId;
+            }
+            
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
             }
             
             // Get device capabilities
@@ -143,7 +176,7 @@ export default (services) => {
                 source: 'direct_device',
                 connectionInfo: {
                     ip: ip || 'N/A',
-                    port: parseInt(port) || 'N/A',
+                    port: parseInt(port, 10) || 51211,
                     deviceId: deviceId
                 },
                 data: capsData
@@ -173,8 +206,10 @@ export default (services) => {
                 });
             }
 
+            const parsedPort = parseInt(port, 10) || 51211;
+
             // Check if already connected first
-            const existingDeviceId = await findConnectedDeviceByIp(ip, parseInt(port));
+            const existingDeviceId = await findConnectedDeviceByIp(ip, parsedPort);
             
             if (existingDeviceId) {
                 return res.json({
@@ -184,7 +219,7 @@ export default (services) => {
                     data: {
                         deviceId: existingDeviceId,
                         ip: ip,
-                        port: parseInt(port),
+                        port: parsedPort,
                         useSSL: useSSL,
                         alreadyConnected: true
                     }
@@ -194,7 +229,7 @@ export default (services) => {
             // Not connected, establish new connection
             const deviceConfig = {
                 ip: ip,
-                port: parseInt(port),
+                port: parsedPort,
                 useSSL: useSSL,
                 timeout: 15000
             };
@@ -208,7 +243,7 @@ export default (services) => {
                 data: {
                     deviceId: deviceId,
                     ip: ip,
-                    port: parseInt(port),
+                    port: parsedPort,
                     useSSL: useSSL,
                     connectedAt: new Date().toISOString()
                 }
@@ -229,12 +264,14 @@ export default (services) => {
      */
     router.post('/direct/disconnect', async (req, res) => {
         try {
-            const { deviceId } = req.body;
+            const { deviceId: rawDeviceId } = req.body;
 
-            if (!deviceId) {
+            const deviceId = parseDeviceId(rawDeviceId);
+
+            if (deviceId === null) {
                 return res.status(400).json({
                     error: 'Bad Request',
-                    message: 'Device ID is required in request body'
+                    message: 'Valid numeric Device ID is required in request body'
                 });
             }
 

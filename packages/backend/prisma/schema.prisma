@@ -7,6 +7,31 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Location tree structure for organizing devices
+model Location {
+  id          Int       @id @default(autoincrement())
+  name        String    @db.VarChar(100)
+  description String?   @db.Text
+  parentId    Int?      // Self-referential for tree structure
+  level       Int       @default(0)  // 0=root, 1=building, 2=floor, 3=zone, etc.
+  locationType String   @default("zone") @db.VarChar(50) // building, floor, zone, room, gate
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Self-referential relationship
+  parent      Location?  @relation("LocationTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Location[] @relation("LocationTree")
+  
+  // Devices at this location
+  devices     Device[]
+
+  @@index([parentId])
+  @@index([locationType])
+  @@map("locations")
+}
+
 model Device {
   id              Int      @id @default(autoincrement()) @db.UnsignedInt
   name            String?
@@ -21,9 +46,20 @@ model Device {
   isActive        Boolean  @default(true)
   status          String?  @default("disconnected")
   useSSL          Boolean  @default(false)
+  
+  // New fields for device tree
+  locationId      Int?     // FK to Location
+  direction       String   @default("in") @db.VarChar(10) // 'in' or 'out'
+  deviceType      String?  @db.VarChar(50) // reader, controller, terminal
+  serialNumber    String?  @db.VarChar(100)
+  
+  // Relation to Location
+  location        Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
 
   enrollments     DeviceEnrollment[]
 
+  @@index([locationId])
+  @@index([direction])
   @@map("device")
 }
 
@@ -107,4 +143,29 @@ model DeviceEnrollment {
   @@unique([deviceId, deviceUserId])
   @@index([status])
   @@map("device_enrollments")
+}
+
+// Synced events from devices
+model Event {
+  id            Int       @id @default(autoincrement())
+  deviceId      Int       @db.UnsignedInt  // Device database ID
+  supremaEventId BigInt   // Event ID from Suprema device
+  eventCode     Int       // Event code (hex)
+  eventType     String    @db.VarChar(50)  // authentication, door, zone, system, user, attendance
+  subType       String?   @db.VarChar(50)  // More specific type
+  userId        String?   @db.VarChar(50)  // User ID if applicable
+  doorId        Int?      // Door ID if applicable
+  description   String?   @db.VarChar(500) // Human-readable description
+  authResult    String?   @db.VarChar(20)  // success, fail, etc.
+  timestamp     DateTime  // Event timestamp from device
+  syncedAt      DateTime  @default(now())  // When we synced this event
+  rawData       Json?     // Full event data from device
+
+  @@unique([deviceId, supremaEventId])
+  @@index([deviceId])
+  @@index([eventType])
+  @@index([userId])
+  @@index([timestamp])
+  @@index([authResult])
+  @@map("events")
 }

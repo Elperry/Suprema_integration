@@ -1057,8 +1057,8 @@ class SupremaConnectionService extends EventEmitter {
                 throw new Error(`Device not found: ${deviceId}`);
             }
             
-            // Disconnect device first if connected
-            if (device.isConnected) {
+            // Disconnect device first if connected (check if it's in connectedDevices map)
+            if (this.connectedDevices.has(device.id)) {
                 try {
                     await this.disconnectDevice(device.id);
                 } catch (disconnectError) {
@@ -1126,8 +1126,7 @@ class SupremaConnectionService extends EventEmitter {
             const failedDevices = await this.database.getPrisma().device.findMany({
                 where: {
                     isActive: true,
-                    isConnected: false,
-                    status: { in: ['active', 'error'] }
+                    status: { in: ['error', 'disconnected'] }
                 }
             });
             

@@ -12,6 +12,7 @@ import Events from './components/Events'
 import Settings from './components/Settings'
 import Debugger from './components/Debugger'
 import Enrollment from './components/Enrollment'
+import DeviceTree from './components/DeviceTree'
 import {API_CONFIG,API_ENDPOINTS } from './config/constants'
 
 function App() {
@@ -63,6 +64,10 @@ function App() {
             <span className="icon">🖥️</span>
             Devices
           </Link>
+          <Link to="/device-tree" className="nav-link">
+            <span className="icon">🌳</span>
+            Device Tree
+          </Link>
           <Link to="/enrollment" className="nav-link">
             <span className="icon">🎫</span>
             Enrollment
@@ -96,6 +101,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Dashboard health={health} />} />
               <Route path="/devices" element={<Devices />} />
+              <Route path="/device-tree" element={<DeviceTree />} />
               <Route path="/enrollment" element={<Enrollment />} />
               <Route path="/users" element={<Users />} />
               <Route path="/scanning" element={<CardScanning />} />
