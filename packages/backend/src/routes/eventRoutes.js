@@ -192,7 +192,7 @@ export default (services) => {
      */
     router.post('/sync-all-to-db', async (req, res) => {
         try {
-            const { batchSize = 1000 } = req.body;
+            const { batchSize = 500 } = req.body;
             const prisma = services.database.getPrisma();
             
             // Get all devices from database
@@ -240,45 +240,52 @@ export default (services) => {
                         parseInt(batchSize)
                     );
                     
-                    // Store events
+                    // Store events in batches using createMany with skipDuplicates
                     let syncedCount = 0;
-                    for (const event of events) {
+                    const BATCH_SIZE = 100;
+                    
+                    for (let i = 0; i < events.length; i += BATCH_SIZE) {
+                        const batch = events.slice(i, i + BATCH_SIZE);
+                        const eventsToInsert = batch.map(event => ({
+                            deviceId: device.id,
+                            supremaEventId: BigInt(event.id || event.eventid || 0),
+                            eventCode: event.eventcode || 0,
+                            eventType: event.eventType || 'other',
+                            subType: event.subType || null,
+                            userId: event.userid || null,
+                            doorId: event.doorid || null,
+                            description: event.description || null,
+                            authResult: event.authResult || null,
+                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
+                            rawData: event
+                        }));
+                        
                         try {
-                            await prisma.event.upsert({
-                                where: {
-                                    deviceId_supremaEventId: {
-                                        deviceId: device.id,
-                                        supremaEventId: BigInt(event.id || event.eventid || 0)
-                                    }
-                                },
-                                update: {
-                                    eventCode: event.eventcode || 0,
-                                    eventType: event.eventType || 'other',
-                                    subType: event.subType || null,
-                                    userId: event.userid || null,
-                                    doorId: event.doorid || null,
-                                    description: event.description || null,
-                                    authResult: event.authResult || null,
-                                    timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-                                    rawData: event
-                                },
-                                create: {
-                                    deviceId: device.id,
-                                    supremaEventId: BigInt(event.id || event.eventid || 0),
-                                    eventCode: event.eventcode || 0,
-                                    eventType: event.eventType || 'other',
-                                    subType: event.subType || null,
-                                    userId: event.userid || null,
-                                    doorId: event.doorid || null,
-                                    description: event.description || null,
-                                    authResult: event.authResult || null,
-                                    timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-                                    rawData: event
-                                }
+                            const result = await prisma.event.createMany({
+                                data: eventsToInsert,
+                                skipDuplicates: true
                             });
-                            syncedCount++;
-                        } catch (e) {
-                            // Continue with other events
+                            syncedCount += result.count;
+                        } catch (batchError) {
+                            console.error('Batch insert error:', batchError.message);
+                            // Fall back to individual inserts for this batch
+                            for (const eventData of eventsToInsert) {
+                                try {
+                                    await prisma.event.upsert({
+                                        where: {
+                                            deviceId_supremaEventId: {
+                                                deviceId: eventData.deviceId,
+                                                supremaEventId: eventData.supremaEventId
+                                            }
+                                        },
+                                        update: eventData,
+                                        create: eventData
+                                    });
+                                    syncedCount++;
+                                } catch (e) {
+                                    // Skip duplicate events
+                                }
+                            }
                         }
                     }
                     

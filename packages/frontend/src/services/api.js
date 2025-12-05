@@ -9,6 +9,15 @@ const api = axios.create({
   },
 });
 
+// Longer timeout for sync operations
+const syncApi = axios.create({
+  baseURL: API_CONFIG.API_BASE_URL,
+  timeout: 120000, // 2 minutes for sync operations
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
 // Health check
 export const checkHealth = () => axios.get(`${API_CONFIG.BASE_URL}${API_ENDPOINTS.HEALTH}`);
 
@@ -160,11 +169,11 @@ export const eventAPI = {
   disableMonitoring: (deviceId) => api.post(`/events/monitoring/${deviceId}/disable`),
   enableMonitoringMulti: (deviceIds) => api.post('/events/monitoring/enable-multi', { deviceIds }),
   
-  // Sync
+  // Sync - use longer timeout
   sync: (deviceId, fromEventId, batchSize = 1000) => 
-    api.post(`/events/sync/${deviceId}`, { fromEventId, batchSize }),
-  syncAll: (batchSize = 1000) => api.post('/events/sync-all', { batchSize }),
-  syncAllToDB: (batchSize = 1000) => api.post('/events/sync-all-to-db', { batchSize }),
+    syncApi.post(`/events/sync/${deviceId}`, { fromEventId, batchSize }),
+  syncAll: (batchSize = 1000) => syncApi.post('/events/sync-all', { batchSize }),
+  syncAllToDB: (batchSize = 500) => syncApi.post('/events/sync-all-to-db', { batchSize }),
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
   
   // Database events (synced events)

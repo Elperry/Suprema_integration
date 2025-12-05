@@ -113,6 +113,10 @@ class SupremaHRIntegrationApp {
             this.services.tna = new SupremaTNAService(this.services.connection, this.services.event, this.database);
             this.services.biometric = new SupremaBiometricService(this.services.connection, this.database);
             
+            // Expose database on the shared services object so route factories
+            // and other modules can access the DatabaseManager via services.database
+            this.services.database = this.database;
+
             // Initialize sync service for event/user synchronization
             this.services.sync = new SyncService(this.services);
 
