@@ -97,11 +97,11 @@ export default (services) => {
     /**
      * Assign a card to an employee
      * POST /api/enrollment/cards
-     * Body: { employeeId, employeeName, cardData, cardType, cardFormat, notes }
+     * Body: { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes }
      */
     router.post('/cards', async (req, res) => {
         try {
-            const { employeeId, employeeName, cardData, cardType, cardFormat, notes } = req.body;
+            const { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes } = req.body;
 
             console.log('POST /enrollment/cards - Request body:', JSON.stringify(req.body, null, 2));
 
@@ -119,6 +119,7 @@ export default (services) => {
                 cardData: String(cardData),
                 cardType: cardType || 'CSN',
                 cardFormat: cardFormat || 0,
+                cardSize: cardSize || 0,
                 notes: notes || null
             });
 
@@ -439,11 +440,11 @@ export default (services) => {
      * 1. Assign card to employee
      * 2. Enroll on specified devices
      * POST /api/enrollment/quick
-     * Body: { employeeId, employeeName, cardData, cardType, deviceIds }
+     * Body: { employeeId, employeeName, cardData, cardType, cardSize, deviceIds }
      */
     router.post('/quick', async (req, res) => {
         try {
-            const { employeeId, employeeName, cardData, cardType, deviceIds = [] } = req.body;
+            const { employeeId, employeeName, cardData, cardType, cardSize, deviceIds = [] } = req.body;
 
             if (!employeeId || !cardData) {
                 return res.status(400).json({
@@ -457,7 +458,8 @@ export default (services) => {
                 employeeId,
                 employeeName,
                 cardData,
-                cardType
+                cardType,
+                cardSize: cardSize || 0
             });
 
             // Step 2: Enroll on devices

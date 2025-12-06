@@ -105,6 +105,7 @@ class EnrollmentService {
 
         let csn = '';
         let type = 'CSN';
+        let size = 0;
 
         // Extract card data from various Suprema protobuf formats
         // CardData.toObject() returns: { type, csncarddata: { type, size, data (base64) }, smartcarddata: {...} }
@@ -115,14 +116,22 @@ class EnrollmentService {
         if (csnCardData) {
             // CSN card format - data is base64 encoded from protobuf toObject()
             type = 'CSN';
+            size = csnCardData.size || 0;
             if (csnCardData.data) {
                 // The data field from protobuf is base64 encoded
                 if (typeof csnCardData.data === 'string' && csnCardData.data.length > 0) {
                     // Convert base64 to hex for consistent storage
                     try {
                         const buffer = Buffer.from(csnCardData.data, 'base64');
-                        csn = buffer.toString('hex').toUpperCase();
-                        this.logger.info('CSN from base64 data:', csn);
+                        // If size is provided, only use that many bytes from the end
+                        if (size > 0 && size < buffer.length) {
+                            const trimmedBuffer = buffer.slice(buffer.length - size);
+                            csn = trimmedBuffer.toString('hex').toUpperCase();
+                            this.logger.info(`CSN from base64 data (trimmed to size ${size}):`, csn);
+                        } else {
+                            csn = buffer.toString('hex').toUpperCase();
+                            this.logger.info('CSN from base64 data:', csn);
+                        }
                     } catch (e) {
                         // If not valid base64, use as-is
                         csn = csnCardData.data;
@@ -134,7 +143,7 @@ class EnrollmentService {
                     csn = Buffer.from(csnCardData.data).toString('hex').toUpperCase();
                 }
             }
-            this.logger.info('Extracted CSN card data:', csn, 'size:', csnCardData.size);
+            this.logger.info('Extracted CSN card data:', csn, 'size:', size);
         } else if (smartCardData) {
             type = 'SmartCard';
             if (smartCardData.data) {
@@ -172,7 +181,7 @@ class EnrollmentService {
             this.logger.info('Card data is string:', csn);
         }
 
-        this.logger.info('Normalized card data - CSN:', csn, 'Type:', type);
+        this.logger.info('Normalized card data - CSN:', csn, 'Type:', type, 'Size:', size);
 
         if (!csn) {
             this.logger.warn('Could not extract CSN from card data. Raw structure:', Object.keys(cardData));
@@ -182,6 +191,7 @@ class EnrollmentService {
             csn,
             type,
             data: csn,
+            size,  // Include original size for accurate reconstruction
             raw: cardData
         };
     }
@@ -272,9 +282,9 @@ class EnrollmentService {
      * @returns {Promise<Object>} Created card assignment
      */
     async assignCardToEmployee(data) {
-        const { employeeId, employeeName, cardData, cardType = 'CSN', cardFormat = 0, notes } = data;
+        const { employeeId, employeeName, cardData, cardType = 'CSN', cardFormat = 0, cardSize = 0, notes } = data;
 
-        this.logger.info('assignCardToEmployee called with:', { employeeId, employeeName, cardData, cardType });
+        this.logger.info('assignCardToEmployee called with:', { employeeId, employeeName, cardData, cardType, cardSize });
 
         if (!employeeId || !cardData) {
             throw new Error(`Missing required fields: employeeId=${employeeId}, cardData=${cardData}`);
@@ -318,6 +328,7 @@ class EnrollmentService {
                     employeeId: String(employeeId),
                     employeeName: employeeName || null,
                     cardData: String(cardData),
+                    cardSize: cardSize || 0,
                     cardType: cardType || 'CSN',
                     cardFormat: cardFormat || 0,
                     notes: notes || null
@@ -462,6 +473,7 @@ class EnrollmentService {
             const cardData = [{
                 userId: deviceUserId,
                 cardData: assignment.cardData,
+                cardSize: assignment.cardSize || 0,
                 cardType: this.getCardTypeCode(assignment.cardType)
             }];
             

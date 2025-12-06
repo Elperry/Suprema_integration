@@ -382,33 +382,67 @@ class SupremaUserService extends EventEmitter {
      */
     async setUserCards(deviceId, userCardData) {
         try {
+            this.logger.info(`Setting cards for device ${deviceId}:`, JSON.stringify(userCardData));
+
             const userCards = userCardData.map(data => {
                 const userCard = new userMessage.UserCard();
-                userCard.setUserid(data.userId);
+                userCard.setUserid(String(data.userId));
                 
                 // Create CSNCardData protobuf message
                 const csnCardData = new cardMessage.CSNCardData();
                 
                 // Set card data from the provided data
                 if (data.cardData) {
-                    // If cardData is a string (card number), convert to bytes
+                    let cardBuffer;
+                    // If cardData is a string (hex card number), convert to bytes
                     if (typeof data.cardData === 'string') {
-                        csnCardData.setData(Buffer.from(data.cardData, 'hex'));
+                        // Parse hex to buffer
+                        const fullBuffer = Buffer.from(data.cardData, 'hex');
+                        
+                        // If we have the original size from the database, use it to extract
+                        // the correct number of bytes from the end
+                        if (data.cardSize && data.cardSize > 0 && data.cardSize < fullBuffer.length) {
+                            cardBuffer = fullBuffer.slice(fullBuffer.length - data.cardSize);
+                            this.logger.info(`Card data: using stored cardSize=${data.cardSize}, result hex=${cardBuffer.toString('hex')}`);
+                        } else {
+                            // Find first non-zero byte to trim padding
+                            let startIdx = 0;
+                            for (let i = 0; i < fullBuffer.length; i++) {
+                                if (fullBuffer[i] !== 0) {
+                                    startIdx = i;
+                                    break;
+                                }
+                            }
+                            
+                            // Extract the meaningful bytes
+                            cardBuffer = fullBuffer.slice(startIdx);
+                            this.logger.info(`Card data: full hex=${data.cardData}, trimmed from index ${startIdx}, result size=${cardBuffer.length} bytes, hex=${cardBuffer.toString('hex')}`);
+                        }
                     } else if (Buffer.isBuffer(data.cardData)) {
-                        csnCardData.setData(data.cardData);
+                        cardBuffer = data.cardData;
                     } else if (data.cardData.data) {
                         // If it's already a structured object with data property
-                        csnCardData.setData(Buffer.from(data.cardData.data));
+                        cardBuffer = Buffer.from(data.cardData.data);
                     }
+                    
+                    if (cardBuffer && cardBuffer.length > 0) {
+                        csnCardData.setData(cardBuffer);
+                        // Set size based on actual data length
+                        csnCardData.setSize(cardBuffer.length);
+                        this.logger.info(`CSN card data set: size=${cardBuffer.length}, hex=${cardBuffer.toString('hex')}`);
+                    } else {
+                        this.logger.error('Card buffer is empty or invalid!');
+                        throw new Error('Invalid card data: buffer is empty');
+                    }
+                } else {
+                    this.logger.error('No card data provided!');
+                    throw new Error('No card data provided');
                 }
                 
-                // Set card type and size if provided
-                if (data.cardType !== undefined) {
-                    csnCardData.setType(data.cardType);
-                }
-                if (data.cardSize !== undefined) {
-                    csnCardData.setSize(data.cardSize);
-                }
+                // Set card type (default to 1 for CSN)
+                const cardType = data.cardType !== undefined ? data.cardType : 1;
+                csnCardData.setType(cardType);
+                this.logger.info(`User ${data.userId}: Card type=${cardType}, data size=${csnCardData.getSize()}`);
                 
                 // Add the protobuf message object
                 userCard.addCards(csnCardData);

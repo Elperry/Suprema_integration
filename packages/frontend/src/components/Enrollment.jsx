@@ -163,6 +163,7 @@ export default function Enrollment() {
         employeeId: String(selectedEmployee.employee_id),
         employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
         cardData: cardData,
+        cardSize: scannedCard.size || 0,
         cardType: scannedCard.type || 'CSN'
       }
       
@@ -224,6 +225,7 @@ export default function Enrollment() {
         employeeId: String(selectedEmployee.employee_id),
         employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
         cardData: cardData,
+        cardSize: scannedCard.size || 0,
         cardType: scannedCard.type || 'CSN',
         deviceIds: selectedDevices.map(d => parseInt(d))
       }
