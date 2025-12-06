@@ -6,6 +6,29 @@
 import express from 'express';
 const router = express.Router();
 
+/**
+ * Helper function to extract user ID from event
+ * For user-related events (0x5000-0x5FFF), the user ID may be in entityid instead of userid
+ * @param {Object} event - Event object from device
+ * @returns {string|null} User ID or null
+ */
+function extractUserIdFromEvent(event) {
+    // First check userid
+    if (event.userid && event.userid !== '' && event.userid !== '0') {
+        return event.userid;
+    }
+    
+    // For user events (event codes 0x5000-0x5FFF = 20480-24575), use entityid as fallback
+    const eventCode = event.eventcode || 0;
+    if (eventCode >= 0x5000 && eventCode <= 0x5FFF) {
+        if (event.entityid && event.entityid !== 0) {
+            return String(event.entityid);
+        }
+    }
+    
+    return null;
+}
+
 export default (services) => {
     /**
      * Helper function to get Suprema device ID from database ID
@@ -252,7 +275,7 @@ export default (services) => {
                             eventCode: event.eventcode || 0,
                             eventType: event.eventType || 'other',
                             subType: event.subType || null,
-                            userId: event.userid || null,
+                            userId: extractUserIdFromEvent(event),
                             doorId: event.doorid || null,
                             description: event.description || null,
                             authResult: event.authResult || null,
@@ -1014,7 +1037,7 @@ export default (services) => {
                             eventCode: event.eventcode || 0,
                             eventType: event.eventType || 'other',
                             subType: event.subType || null,
-                            userId: event.userid || null,
+                            userId: extractUserIdFromEvent(event),
                             doorId: event.doorid || null,
                             description: event.description || null,
                             authResult: event.authResult || null,
@@ -1027,7 +1050,7 @@ export default (services) => {
                             eventCode: event.eventcode || 0,
                             eventType: event.eventType || 'other',
                             subType: event.subType || null,
-                            userId: event.userid || null,
+                            userId: extractUserIdFromEvent(event),
                             doorId: event.doorid || null,
                             description: event.description || null,
                             authResult: event.authResult || null,

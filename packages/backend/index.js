@@ -48,6 +48,29 @@ const __dirname = dirname(__filename);
 
 dotenv.config();
 
+/**
+ * Helper function to extract user ID from event
+ * For user-related events (0x5000-0x5FFF), the user ID may be in entityid instead of userid
+ * @param {Object} event - Event object from device
+ * @returns {string|null} User ID or null
+ */
+function extractUserIdFromEvent(event) {
+    // First check userid
+    if (event.userid && event.userid !== '' && event.userid !== '0') {
+        return event.userid;
+    }
+    
+    // For user events (event codes 0x5000-0x5FFF = 20480-24575), use entityid as fallback
+    const eventCode = event.eventcode || 0;
+    if (eventCode >= 0x5000 && eventCode <= 0x5FFF) {
+        if (event.entityid && event.entityid !== 0) {
+            return String(event.entityid);
+        }
+    }
+    
+    return null;
+}
+
 class SupremaHRIntegrationApp {
     constructor() {
         this.app = express();
@@ -331,7 +354,7 @@ class SupremaHRIntegrationApp {
         this.services.event.on('auth:success', (event) => {
             const hrEvent = {
                 type: 'access_granted',
-                userId: event.userid,
+                userId: extractUserIdFromEvent(event),
                 deviceId: event.deviceid,
                 timestamp: event.timestamp,
                 eventId: event.id
@@ -342,7 +365,7 @@ class SupremaHRIntegrationApp {
         this.services.event.on('auth:failure', (event) => {
             const hrEvent = {
                 type: 'access_denied',
-                userId: event.userid || 'unknown',
+                userId: extractUserIdFromEvent(event) || 'unknown',
                 deviceId: event.deviceid,
                 timestamp: event.timestamp,
                 eventId: event.id,
