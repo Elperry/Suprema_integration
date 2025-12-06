@@ -137,8 +137,21 @@ export default function Enrollment() {
 
   // Assign card to employee
   const handleAssignCard = async () => {
-    if (!scannedCard || !selectedEmployee) {
-      setError('Please scan a card and select an employee')
+    if (!scannedCard) {
+      setError('Please scan a card first')
+      return
+    }
+    
+    if (!selectedEmployee) {
+      setError('Please select an employee')
+      return
+    }
+
+    // Get card data - try multiple possible property names
+    const cardData = scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
+    if (!cardData) {
+      setError('Card data is missing. Please scan the card again.')
+      console.error('Scanned card object:', scannedCard)
       return
     }
 
@@ -146,13 +159,17 @@ export default function Enrollment() {
       setLoading(true)
       setError(null)
 
-      // Create card assignment
-      const res = await enrollmentAPI.assignCard({
+      const payload = {
         employeeId: String(selectedEmployee.employee_id),
-        employeeName: selectedEmployee.name,
-        cardData: scannedCard.csn || scannedCard.data,
+        employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
+        cardData: cardData,
         cardType: scannedCard.type || 'CSN'
-      })
+      }
+      
+      console.log('Assign card payload:', payload)
+
+      // Create card assignment
+      const res = await enrollmentAPI.assignCard(payload)
 
       setSuccess(`Card assigned to ${selectedEmployee.name} successfully!`)
       setSelectedAssignment(res.data.data)
@@ -176,8 +193,21 @@ export default function Enrollment() {
 
   // Quick enroll (assign + enroll on devices)
   const handleQuickEnroll = async () => {
-    if (!scannedCard || !selectedEmployee) {
-      setError('Please scan a card and select an employee')
+    if (!scannedCard) {
+      setError('Please scan a card first')
+      return
+    }
+    
+    if (!selectedEmployee) {
+      setError('Please select an employee')
+      return
+    }
+
+    // Get card data - try multiple possible property names
+    const cardData = scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
+    if (!cardData) {
+      setError('Card data is missing. Please scan the card again.')
+      console.error('Scanned card object:', scannedCard)
       return
     }
 
@@ -190,13 +220,17 @@ export default function Enrollment() {
       setLoading(true)
       setError(null)
 
-      const res = await enrollmentAPI.quickEnroll({
+      const payload = {
         employeeId: String(selectedEmployee.employee_id),
-        employeeName: selectedEmployee.name,
-        cardData: scannedCard.csn || scannedCard.data,
+        employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
+        cardData: cardData,
         cardType: scannedCard.type || 'CSN',
         deviceIds: selectedDevices.map(d => parseInt(d))
-      })
+      }
+      
+      console.log('Quick enroll payload:', payload)
+      
+      const res = await enrollmentAPI.quickEnroll(payload)
 
       const enrollments = res.data.data.enrollments
       if (enrollments) {
