@@ -103,7 +103,10 @@ export default (services) => {
         try {
             const { employeeId, employeeName, cardData, cardType, cardFormat, notes } = req.body;
 
+            console.log('POST /enrollment/cards - Request body:', JSON.stringify(req.body, null, 2));
+
             if (!employeeId || !cardData) {
+                console.log('Missing required fields:', { employeeId: !!employeeId, cardData: !!cardData });
                 return res.status(400).json({
                     error: 'Bad Request',
                     message: 'employeeId and cardData are required'
@@ -111,13 +114,15 @@ export default (services) => {
             }
 
             const assignment = await enrollment.assignCardToEmployee({
-                employeeId,
-                employeeName,
-                cardData,
-                cardType,
-                cardFormat,
-                notes
+                employeeId: String(employeeId),
+                employeeName: employeeName || null,
+                cardData: String(cardData),
+                cardType: cardType || 'CSN',
+                cardFormat: cardFormat || 0,
+                notes: notes || null
             });
+
+            console.log('Card assignment created:', assignment.id);
 
             res.status(201).json({
                 success: true,
@@ -125,6 +130,7 @@ export default (services) => {
                 message: 'Card assigned successfully'
             });
         } catch (error) {
+            console.error('Error in POST /enrollment/cards:', error);
             res.status(error.message.includes('already assigned') ? 409 : 500).json({
                 error: error.message.includes('already assigned') ? 'Conflict' : 'Internal Server Error',
                 message: error.message

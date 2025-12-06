@@ -289,7 +289,15 @@ class SupremaBiometricService extends EventEmitter {
                         return;
                     }
 
-                    const cardData = response.toObject().carddata;
+                    const responseObj = response.toObject();
+                    this.logger.info(`Card scan response object:`, JSON.stringify(responseObj, (key, value) => {
+                        // Handle Uint8Array/Buffer for logging
+                        if (value instanceof Uint8Array) return `Uint8Array(${value.length}): ${Buffer.from(value).toString('hex')}`;
+                        if (value && value.type === 'Buffer') return `Buffer: ${Buffer.from(value.data || []).toString('hex')}`;
+                        return value;
+                    }));
+
+                    const cardData = responseObj.carddata;
                     this.logger.info(`Card scanned successfully on device ${deviceId}`);
                     this.emit('card:scanned', { deviceId, cardData });
                     resolve(cardData);

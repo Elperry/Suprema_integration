@@ -101,28 +101,75 @@ class EnrollmentService {
             throw new Error('No card data received');
         }
 
+        this.logger.info('normalizeCardData input:', JSON.stringify(cardData, (key, value) => {
+            // Handle Buffer/Uint8Array for logging
+            if (value && value.type === 'Buffer') return `Buffer(${value.data?.length || 0})`;
+            if (value instanceof Uint8Array) return `Uint8Array(${value.length})`;
+            return value;
+        }));
+
         let csn = '';
         let type = 'CSN';
-        let data = '';
+        let rawData = null;
 
-        // If it's a protobuf object
-        if (cardData.csn) {
-            csn = typeof cardData.csn === 'string' 
-                ? cardData.csn 
-                : Buffer.from(cardData.csn).toString('base64');
+        // Extract card data from various Suprema protobuf formats
+        // The property names can be camelCase or lowercase depending on protobuf settings
+        const csnCardData = cardData.csnCardData || cardData.csncarddata || cardData.csnCarddata;
+        const smartCardData = cardData.smartCardData || cardData.smartcarddata;
+        const accessCardData = cardData.accessCardData || cardData.accesscarddata;
+
+        if (csnCardData) {
+            // CSN card format - extract the data bytes
+            rawData = csnCardData.data || csnCardData;
+            type = 'CSN';
+            this.logger.info('Found CSN card data:', typeof rawData, rawData);
+        } else if (smartCardData) {
+            rawData = smartCardData.data || smartCardData;
+            type = 'SmartCard';
+            this.logger.info('Found SmartCard data:', typeof rawData);
+        } else if (accessCardData) {
+            rawData = accessCardData.data || accessCardData;
+            type = 'Access';
+            this.logger.info('Found Access card data:', typeof rawData);
+        } else if (cardData.csn) {
+            // Direct CSN property
+            rawData = cardData.csn;
+            this.logger.info('Found direct csn property:', typeof rawData);
         } else if (cardData.data) {
-            csn = typeof cardData.data === 'string' 
-                ? cardData.data 
-                : Buffer.from(cardData.data).toString('base64');
+            rawData = cardData.data;
+            this.logger.info('Found direct data property:', typeof rawData);
         } else if (typeof cardData === 'string') {
             csn = cardData;
+            this.logger.info('Card data is string:', csn);
         } else if (Buffer.isBuffer(cardData)) {
-            csn = cardData.toString('base64');
-        } else if (cardData.csnCardData || cardData.smartCardData || cardData.accessCardData) {
-            // Suprema card protobuf format
-            data = cardData.csnCardData || cardData.smartCardData || cardData.accessCardData;
-            csn = typeof data === 'string' ? data : Buffer.from(data || []).toString('base64');
-            type = cardData.type || (cardData.smartCardData ? 'SmartCard' : 'CSN');
+            csn = cardData.toString('hex');
+            this.logger.info('Card data is Buffer, converted to hex:', csn);
+        }
+
+        // Convert raw data to hex string if we have it
+        if (rawData && !csn) {
+            if (typeof rawData === 'string') {
+                csn = rawData;
+            } else if (Buffer.isBuffer(rawData)) {
+                csn = rawData.toString('hex');
+            } else if (rawData instanceof Uint8Array || Array.isArray(rawData)) {
+                csn = Buffer.from(rawData).toString('hex');
+            } else if (rawData.data && (Array.isArray(rawData.data) || rawData.data instanceof Uint8Array)) {
+                // Nested data property (protobuf bytes)
+                csn = Buffer.from(rawData.data).toString('hex');
+            } else if (typeof rawData === 'object') {
+                // Try to extract from object
+                const bytes = rawData.data || rawData.bytes || Object.values(rawData);
+                if (Array.isArray(bytes)) {
+                    csn = Buffer.from(bytes).toString('hex');
+                }
+            }
+        }
+
+        this.logger.info('Normalized card data - CSN:', csn, 'Type:', type);
+
+        if (!csn) {
+            this.logger.warn('Could not extract CSN from card data');
         }
 
         return {
@@ -221,23 +268,32 @@ class EnrollmentService {
     async assignCardToEmployee(data) {
         const { employeeId, employeeName, cardData, cardType = 'CSN', cardFormat = 0, notes } = data;
 
+        this.logger.info('assignCardToEmployee called with:', { employeeId, employeeName, cardData, cardType });
+
+        if (!employeeId || !cardData) {
+            throw new Error(`Missing required fields: employeeId=${employeeId}, cardData=${cardData}`);
+        }
+
         try {
             // Check if card is already assigned
             const existing = await this.getCardAssignment(cardData);
+            this.logger.info('Existing card assignment check:', existing ? 'found' : 'not found');
+            
             if (existing) {
                 if (existing.status === 'active') {
                     throw new Error(`Card is already assigned to employee ${existing.employeeName || existing.employeeId}`);
                 }
                 // Reactivate revoked card for new employee
-                return await prisma.cardAssignment.update({
+                this.logger.info('Reactivating revoked card assignment');
+                const updated = await prisma.cardAssignment.update({
                     where: { id: existing.id },
                     data: {
-                        employeeId,
-                        employeeName,
+                        employeeId: String(employeeId),
+                        employeeName: employeeName || null,
                         status: 'active',
                         assignedAt: new Date(),
                         revokedAt: null,
-                        notes
+                        notes: notes || null
                     },
                     include: {
                         enrollments: {
@@ -245,17 +301,20 @@ class EnrollmentService {
                         }
                     }
                 });
+                this.logger.info('Card assignment reactivated:', updated.id);
+                return updated;
             }
 
             // Create new assignment
+            this.logger.info('Creating new card assignment');
             const assignment = await prisma.cardAssignment.create({
                 data: {
-                    employeeId,
-                    employeeName,
-                    cardData,
-                    cardType,
-                    cardFormat,
-                    notes
+                    employeeId: String(employeeId),
+                    employeeName: employeeName || null,
+                    cardData: String(cardData),
+                    cardType: cardType || 'CSN',
+                    cardFormat: cardFormat || 0,
+                    notes: notes || null
                 },
                 include: {
                     enrollments: {
@@ -264,7 +323,7 @@ class EnrollmentService {
                 }
             });
 
-            this.logger.info(`Card assigned to employee ${employeeId} (${employeeName})`);
+            this.logger.info(`Card assigned successfully: ID=${assignment.id}, Employee=${employeeId} (${employeeName})`);
             return assignment;
         } catch (error) {
             this.logger.error('Error assigning card:', error);
