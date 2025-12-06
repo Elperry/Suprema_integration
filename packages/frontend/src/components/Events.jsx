@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { eventAPI, deviceAPI } from '../services/api'
+import { useNotification } from './Notifications'
 
 export default function Events() {
+  const { showNotification } = useNotification()
   const [devices, setDevices] = useState([])
   const [events, setEvents] = useState([])
   const [loading, setLoading] = useState(false)
@@ -9,11 +11,20 @@ export default function Events() {
   const [error, setError] = useState(null)
   const [successMessage, setSuccessMessage] = useState(null)
   
+  // Auto-refresh
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [refreshInterval, setRefreshInterval] = useState(30)
+  const refreshTimerRef = useRef(null)
+  const [countdown, setCountdown] = useState(0)
+  
   // Pagination
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(50)
+  const [pageSize, setPageSize] = useState(50)
   const [totalPages, setTotalPages] = useState(1)
   const [totalEvents, setTotalEvents] = useState(0)
+  
+  // Export
+  const [exporting, setExporting] = useState(false)
   
   // Filters - deviceId is empty by default (show ALL devices)
   const [filters, setFilters] = useState({
@@ -29,7 +40,43 @@ export default function Events() {
   useEffect(() => { 
     loadDevices()
     loadEvents()
+    
+    // Cleanup on unmount
+    return () => {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current)
+      }
+    }
   }, [])
+  
+  // Auto-refresh effect
+  useEffect(() => {
+    if (autoRefresh && refreshInterval > 0) {
+      setCountdown(refreshInterval)
+      
+      // Countdown timer
+      const countdownTimer = setInterval(() => {
+        setCountdown(prev => {
+          if (prev <= 1) {
+            loadEvents()
+            return refreshInterval
+          }
+          return prev - 1
+        })
+      }, 1000)
+      
+      refreshTimerRef.current = countdownTimer
+      
+      return () => {
+        clearInterval(countdownTimer)
+      }
+    } else {
+      if (refreshTimerRef.current) {
+        clearInterval(refreshTimerRef.current)
+      }
+      setCountdown(0)
+    }
+  }, [autoRefresh, refreshInterval])
 
   const loadDevices = async () => {
     try {
@@ -116,6 +163,78 @@ export default function Events() {
     }
   }
 
+  // Export functions
+  const handleExportCSV = () => {
+    setExporting(true)
+    try {
+      // Prepare CSV content
+      const headers = ['Device', 'Type', 'User ID', 'Event Code', 'Description', 'Result', 'Door', 'Timestamp']
+      const rows = events.map(e => [
+        getDeviceName(e.deviceId),
+        e.eventType || '',
+        e.userId || '',
+        `0x${(e.eventCode || 0).toString(16).toUpperCase().padStart(4, '0')}`,
+        (e.description || '').replace(/,/g, ';'),
+        e.authResult || '',
+        e.doorId !== null ? e.doorId : '',
+        e.timestamp ? new Date(e.timestamp).toISOString() : ''
+      ])
+      
+      const csvContent = [
+        headers.join(','),
+        ...rows.map(row => row.join(','))
+      ].join('\n')
+      
+      // Download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `events_export_${new Date().toISOString().split('T')[0]}.csv`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      
+      showNotification(`Exported ${events.length} events to CSV`, 'success')
+    } catch (e) {
+      showNotification('Failed to export events: ' + e.message, 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const handleExportJSON = () => {
+    setExporting(true)
+    try {
+      const exportData = {
+        exportDate: new Date().toISOString(),
+        filters: filters,
+        totalEvents: events.length,
+        events: events.map(e => ({
+          ...e,
+          deviceName: getDeviceName(e.deviceId)
+        }))
+      }
+      
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `events_export_${new Date().toISOString().split('T')[0]}.json`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+      
+      showNotification(`Exported ${events.length} events to JSON`, 'success')
+    } catch (e) {
+      showNotification('Failed to export events: ' + e.message, 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const applyFilters = () => {
     loadEvents(true)
   }
@@ -195,6 +314,37 @@ export default function Events() {
               🔃 Refresh
             </button>
           </div>
+        </div>
+        
+        {/* Auto-refresh controls */}
+        <div className="auto-refresh-controls">
+          <label className="auto-refresh-toggle">
+            <input 
+              type="checkbox" 
+              checked={autoRefresh} 
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Auto-refresh
+          </label>
+          {autoRefresh && (
+            <>
+              <select 
+                value={refreshInterval} 
+                onChange={(e) => setRefreshInterval(Number(e.target.value))}
+                className="form-control"
+                style={{ width: 'auto' }}
+              >
+                <option value={10}>Every 10s</option>
+                <option value={30}>Every 30s</option>
+                <option value={60}>Every 1m</option>
+                <option value={120}>Every 2m</option>
+                <option value={300}>Every 5m</option>
+              </select>
+              <span className="countdown-badge">
+                🔄 {countdown}s
+              </span>
+            </>
+          )}
         </div>
         
         {/* Quick device sync */}
@@ -340,7 +490,42 @@ export default function Events() {
       <div className="card">
         <div className="card-header">
           <h3>Event Log ({totalEvents.toLocaleString()} events)</h3>
-          {loading && <span className="loading-spinner">⏳ Loading...</span>}
+          <div className="table-controls">
+            <div className="page-size-control">
+              <label>Show:</label>
+              <select 
+                value={pageSize} 
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value))
+                  setPage(1)
+                  setTimeout(() => loadEvents(true), 0)
+                }}
+                className="form-control"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </div>
+            <div className="export-controls">
+              <button 
+                onClick={handleExportCSV} 
+                className="btn btn-secondary"
+                disabled={exporting || events.length === 0}
+              >
+                📥 Export CSV
+              </button>
+              <button 
+                onClick={handleExportJSON} 
+                className="btn btn-secondary"
+                disabled={exporting || events.length === 0}
+              >
+                📥 Export JSON
+              </button>
+            </div>
+            {loading && <span className="loading-spinner">⏳ Loading...</span>}
+          </div>
         </div>
         
         <div className="table-responsive">
@@ -437,6 +622,58 @@ export default function Events() {
           gap: 8px;
           flex-wrap: wrap;
         }
+        .auto-refresh-controls {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+          padding: 10px 0;
+          border-bottom: 1px solid #eee;
+          margin-bottom: 15px;
+        }
+        .auto-refresh-toggle {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-weight: 500;
+          cursor: pointer;
+        }
+        .auto-refresh-toggle input {
+          width: 18px;
+          height: 18px;
+          cursor: pointer;
+        }
+        .countdown-badge {
+          background: #e3f2fd;
+          color: #1976d2;
+          padding: 4px 12px;
+          border-radius: 20px;
+          font-size: 12px;
+          font-weight: 600;
+        }
+        .table-controls {
+          display: flex;
+          align-items: center;
+          gap: 15px;
+          flex-wrap: wrap;
+        }
+        .page-size-control {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .page-size-control label {
+          font-size: 14px;
+          color: #666;
+        }
+        .page-size-control select {
+          width: auto;
+          padding: 4px 8px;
+          font-size: 14px;
+        }
+        .export-controls {
+          display: flex;
+          gap: 8px;
+        }
         .device-sync-grid {
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -448,6 +685,9 @@ export default function Events() {
           border: 1px solid #ddd;
           border-radius: 8px;
           display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
           justify-content: space-between;
           align-items: center;
         }

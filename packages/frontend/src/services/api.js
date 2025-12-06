@@ -1,25 +1,133 @@
 import axios from 'axios';
 import { API_CONFIG, API_ENDPOINTS } from '../config/constants';
 
-const api = axios.create({
+/**
+ * Parse API error and return user-friendly message
+ */
+const parseApiError = (error) => {
+  if (error.response) {
+    // Server responded with error
+    const status = error.response.status;
+    const data = error.response.data;
+    
+    // Handle specific status codes
+    switch (status) {
+      case 400:
+        return data.message || 'Invalid request. Please check your input.';
+      case 401:
+        return 'Authentication required. Please log in.';
+      case 403:
+        return 'Access denied. You do not have permission.';
+      case 404:
+        return data.message || 'Resource not found.';
+      case 409:
+        return data.message || 'Conflict with existing data.';
+      case 422:
+        return data.message || 'Validation failed. Please check your input.';
+      case 500:
+        return data.message || 'Server error. Please try again later.';
+      case 502:
+      case 503:
+      case 504:
+        return 'Service temporarily unavailable. Please try again.';
+      default:
+        return data.message || `Request failed (${status})`;
+    }
+  } else if (error.request) {
+    // Request made but no response
+    if (error.code === 'ECONNABORTED') {
+      return 'Request timed out. The server may be busy or unreachable.';
+    }
+    return 'Cannot connect to server. Please check your connection.';
+  } else {
+    // Request setup error
+    return error.message || 'An unexpected error occurred.';
+  }
+};
+
+/**
+ * Response interceptor for centralized error handling
+ */
+const setupInterceptors = (axiosInstance) => {
+  axiosInstance.interceptors.response.use(
+    (response) => response,
+    (error) => {
+      // Enhanced error with parsed message
+      error.userMessage = parseApiError(error);
+      
+      // Log errors in development
+      if (import.meta.env.DEV) {
+        console.error('API Error:', {
+          url: error.config?.url,
+          method: error.config?.method,
+          status: error.response?.status,
+          message: error.userMessage,
+          data: error.response?.data
+        });
+      }
+      
+      return Promise.reject(error);
+    }
+  );
+  
+  // Request interceptor for adding auth headers if needed
+  axiosInstance.interceptors.request.use(
+    (config) => {
+      // Add auth token if available
+      const token = localStorage.getItem('auth_token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+  
+  return axiosInstance;
+};
+
+const api = setupInterceptors(axios.create({
   baseURL: API_CONFIG.API_BASE_URL,
   timeout: API_CONFIG.TIMEOUT,
   headers: {
     'Content-Type': 'application/json',
   },
-});
+}));
 
 // Longer timeout for sync operations
-const syncApi = axios.create({
+const syncApi = setupInterceptors(axios.create({
   baseURL: API_CONFIG.API_BASE_URL,
   timeout: 120000, // 2 minutes for sync operations
   headers: {
     'Content-Type': 'application/json',
   },
-});
+}));
 
-// Health check
-export const checkHealth = () => axios.get(`${API_CONFIG.BASE_URL}${API_ENDPOINTS.HEALTH}`);
+// ==================== HEALTH ENDPOINTS ====================
+
+export const healthAPI = {
+  check: async () => {
+    try {
+      const response = await api.get('/health');
+      return response.data;
+    } catch (error) {
+      // Return a default health object if health check fails
+      return {
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        database: { connected: false, message: 'Health check failed' },
+        devices: { total: 0, connected: 0, active: 0 },
+        services: {}
+      };
+    }
+  },
+  
+  // Legacy check function for backward compatibility
+  ping: () => api.get('/health'),
+};
+
+// Legacy export for backward compatibility
+export const checkHealth = () => api.get('/health');
 
 // ==================== DEVICE ENDPOINTS ====================
 

@@ -8,7 +8,17 @@ const router = express.Router();
 
 export default (services) => {
     const { database } = services;
-    const prisma = database.getPrisma();
+
+    /**
+     * Helper to get Prisma client with error handling
+     */
+    const getPrisma = () => {
+        const prisma = database?.getPrisma();
+        if (!prisma) {
+            throw new Error('Database not initialized');
+        }
+        return prisma;
+    };
 
     /**
      * Get all locations as a tree structure
@@ -16,6 +26,7 @@ export default (services) => {
      */
     router.get('/tree', async (req, res) => {
         try {
+            const prisma = getPrisma();
             // Get all locations with their devices
             const locations = await prisma.location.findMany({
                 where: { isActive: true },
@@ -71,6 +82,7 @@ export default (services) => {
      */
     router.get('/', async (req, res) => {
         try {
+            const prisma = getPrisma();
             const locations = await prisma.location.findMany({
                 where: { isActive: true },
                 include: {
@@ -108,6 +120,7 @@ export default (services) => {
      */
     router.get('/:id', async (req, res) => {
         try {
+            const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
             
             const location = await prisma.location.findUnique({
@@ -154,6 +167,8 @@ export default (services) => {
                 });
             }
 
+            const prisma = getPrisma();
+            
             // Calculate level based on parent
             let level = 0;
             if (parentId) {
@@ -196,6 +211,7 @@ export default (services) => {
      */
     router.put('/:id', async (req, res) => {
         try {
+            const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
             const { name, description, parentId, locationType, sortOrder, isActive } = req.body;
 
@@ -248,6 +264,7 @@ export default (services) => {
      */
     router.delete('/:id', async (req, res) => {
         try {
+            const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
 
             // Check if location has children
@@ -301,6 +318,7 @@ export default (services) => {
                 });
             }
 
+            const prisma = getPrisma();
             const device = await prisma.device.update({
                 where: { id: deviceId },
                 data: {
@@ -329,6 +347,7 @@ export default (services) => {
      */
     router.delete('/:id/devices/:deviceId', async (req, res) => {
         try {
+            const prisma = getPrisma();
             const deviceId = parseInt(req.params.deviceId, 10);
 
             const device = await prisma.device.update({
@@ -366,6 +385,7 @@ export default (services) => {
                 });
             }
 
+            const prisma = getPrisma();
             const device = await prisma.device.update({
                 where: { id: deviceId },
                 data: { direction }
