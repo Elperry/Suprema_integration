@@ -14,6 +14,30 @@ import winston from 'winston';
 
 const prisma = new PrismaClient();
 
+/**
+ * Helper to convert BigInt values to regular numbers/strings for JSON serialization
+ * @param {any} obj - Object that may contain BigInt values
+ * @returns {any} Object with BigInt converted to Number or String
+ */
+function serializeBigInt(obj) {
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'bigint') {
+        // Convert to number if safe, otherwise string
+        return Number(obj);
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(serializeBigInt);
+    }
+    if (typeof obj === 'object') {
+        const result = {};
+        for (const key in obj) {
+            result[key] = serializeBigInt(obj[key]);
+        }
+        return result;
+    }
+    return obj;
+}
+
 class EnrollmentService {
     constructor(userService, cardService, connectionService) {
         this.userService = userService;
@@ -650,8 +674,11 @@ class EnrollmentService {
                 LIMIT ${limit}
             `;
 
+            // Convert BigInt values for JSON serialization
+            const serializedEmployees = serializeBigInt(employees);
+
             // For each employee, check if they have a card assignment
-            const enrichedEmployees = await Promise.all(employees.map(async (emp) => {
+            const enrichedEmployees = await Promise.all(serializedEmployees.map(async (emp) => {
                 const cardAssignment = await prisma.cardAssignment.findFirst({
                     where: { 
                         employeeId: String(emp.employee_id),
@@ -705,6 +732,9 @@ class EnrollmentService {
                 ORDER BY fullname
                 LIMIT ${limit} OFFSET ${offset}
             `;
+
+            // Convert BigInt values for JSON serialization
+            employees = serializeBigInt(employees);
 
             // Enrich with card assignment info
             employees = await Promise.all(employees.map(async (emp) => {
