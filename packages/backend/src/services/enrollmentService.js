@@ -101,75 +101,81 @@ class EnrollmentService {
             throw new Error('No card data received');
         }
 
-        this.logger.info('normalizeCardData input:', JSON.stringify(cardData, (key, value) => {
-            // Handle Buffer/Uint8Array for logging
-            if (value && value.type === 'Buffer') return `Buffer(${value.data?.length || 0})`;
-            if (value instanceof Uint8Array) return `Uint8Array(${value.length})`;
-            return value;
-        }));
+        this.logger.info('normalizeCardData input:', JSON.stringify(cardData));
 
         let csn = '';
         let type = 'CSN';
-        let rawData = null;
 
         // Extract card data from various Suprema protobuf formats
-        // The property names can be camelCase or lowercase depending on protobuf settings
+        // CardData.toObject() returns: { type, csncarddata: { type, size, data (base64) }, smartcarddata: {...} }
         const csnCardData = cardData.csnCardData || cardData.csncarddata || cardData.csnCarddata;
         const smartCardData = cardData.smartCardData || cardData.smartcarddata;
         const accessCardData = cardData.accessCardData || cardData.accesscarddata;
 
         if (csnCardData) {
-            // CSN card format - extract the data bytes
-            rawData = csnCardData.data || csnCardData;
+            // CSN card format - data is base64 encoded from protobuf toObject()
             type = 'CSN';
-            this.logger.info('Found CSN card data:', typeof rawData, rawData);
+            if (csnCardData.data) {
+                // The data field from protobuf is base64 encoded
+                if (typeof csnCardData.data === 'string' && csnCardData.data.length > 0) {
+                    // Convert base64 to hex for consistent storage
+                    try {
+                        const buffer = Buffer.from(csnCardData.data, 'base64');
+                        csn = buffer.toString('hex').toUpperCase();
+                        this.logger.info('CSN from base64 data:', csn);
+                    } catch (e) {
+                        // If not valid base64, use as-is
+                        csn = csnCardData.data;
+                        this.logger.info('CSN from raw data string:', csn);
+                    }
+                } else if (Buffer.isBuffer(csnCardData.data)) {
+                    csn = csnCardData.data.toString('hex').toUpperCase();
+                } else if (Array.isArray(csnCardData.data) || csnCardData.data instanceof Uint8Array) {
+                    csn = Buffer.from(csnCardData.data).toString('hex').toUpperCase();
+                }
+            }
+            this.logger.info('Extracted CSN card data:', csn, 'size:', csnCardData.size);
         } else if (smartCardData) {
-            rawData = smartCardData.data || smartCardData;
             type = 'SmartCard';
-            this.logger.info('Found SmartCard data:', typeof rawData);
+            if (smartCardData.data) {
+                if (typeof smartCardData.data === 'string' && smartCardData.data.length > 0) {
+                    try {
+                        const buffer = Buffer.from(smartCardData.data, 'base64');
+                        csn = buffer.toString('hex').toUpperCase();
+                    } catch (e) {
+                        csn = smartCardData.data;
+                    }
+                }
+            }
+            this.logger.info('Extracted SmartCard data:', csn);
         } else if (accessCardData) {
-            rawData = accessCardData.data || accessCardData;
             type = 'Access';
-            this.logger.info('Found Access card data:', typeof rawData);
-        } else if (cardData.csn) {
-            // Direct CSN property
-            rawData = cardData.csn;
-            this.logger.info('Found direct csn property:', typeof rawData);
-        } else if (cardData.data) {
-            rawData = cardData.data;
-            this.logger.info('Found direct data property:', typeof rawData);
+            if (accessCardData.data) {
+                if (typeof accessCardData.data === 'string' && accessCardData.data.length > 0) {
+                    try {
+                        const buffer = Buffer.from(accessCardData.data, 'base64');
+                        csn = buffer.toString('hex').toUpperCase();
+                    } catch (e) {
+                        csn = accessCardData.data;
+                    }
+                }
+            }
+            this.logger.info('Extracted Access card data:', csn);
+        } else if (cardData.csn && typeof cardData.csn === 'string') {
+            csn = cardData.csn;
+            this.logger.info('Using direct csn property:', csn);
+        } else if (cardData.data && typeof cardData.data === 'string') {
+            csn = cardData.data;
+            this.logger.info('Using direct data property:', csn);
         } else if (typeof cardData === 'string') {
             csn = cardData;
             this.logger.info('Card data is string:', csn);
-        } else if (Buffer.isBuffer(cardData)) {
-            csn = cardData.toString('hex');
-            this.logger.info('Card data is Buffer, converted to hex:', csn);
-        }
-
-        // Convert raw data to hex string if we have it
-        if (rawData && !csn) {
-            if (typeof rawData === 'string') {
-                csn = rawData;
-            } else if (Buffer.isBuffer(rawData)) {
-                csn = rawData.toString('hex');
-            } else if (rawData instanceof Uint8Array || Array.isArray(rawData)) {
-                csn = Buffer.from(rawData).toString('hex');
-            } else if (rawData.data && (Array.isArray(rawData.data) || rawData.data instanceof Uint8Array)) {
-                // Nested data property (protobuf bytes)
-                csn = Buffer.from(rawData.data).toString('hex');
-            } else if (typeof rawData === 'object') {
-                // Try to extract from object
-                const bytes = rawData.data || rawData.bytes || Object.values(rawData);
-                if (Array.isArray(bytes)) {
-                    csn = Buffer.from(bytes).toString('hex');
-                }
-            }
         }
 
         this.logger.info('Normalized card data - CSN:', csn, 'Type:', type);
 
         if (!csn) {
-            this.logger.warn('Could not extract CSN from card data');
+            this.logger.warn('Could not extract CSN from card data. Raw structure:', Object.keys(cardData));
         }
 
         return {
@@ -439,19 +445,29 @@ class EnrollmentService {
             // Create user on device with card
             const deviceUserId = assignment.employeeId;
             
+            this.logger.info(`Enrolling user ${deviceUserId} (${assignment.employeeName}) on device ${supremaDeviceId}`);
+
             // Prepare user data for device
+            // Note: Use 'id' not 'userID' as userService.enrollUsers expects 'id'
             const userData = {
-                userID: deviceUserId,
+                id: deviceUserId,
                 name: assignment.employeeName || `Employee ${assignment.employeeId}`,
-                cards: [{
-                    type: this.getCardTypeCode(assignment.cardType),
-                    size: assignment.cardData.length,
-                    data: assignment.cardData
-                }]
+                numOfCard: 1
             };
 
-            // Enroll on device
+            // Enroll user on device first (creates the user)
             await this.userService.enrollUsers(supremaDeviceId, [userData]);
+
+            // Then set the card for the user
+            const cardData = [{
+                userId: deviceUserId,
+                cardData: assignment.cardData,
+                cardType: this.getCardTypeCode(assignment.cardType)
+            }];
+            
+            await this.userService.setUserCards(supremaDeviceId, cardData);
+            
+            this.logger.info(`Successfully enrolled user ${deviceUserId} with card on device ${supremaDeviceId}`);
 
             // Create or update enrollment record
             const enrollment = existingEnrollment
@@ -614,17 +630,24 @@ class EnrollmentService {
 
             for (const enrollment of enrollments) {
                 try {
+                    // Use 'id' not 'userID' as userService.enrollUsers expects 'id'
                     const userData = {
-                        userID: enrollment.deviceUserId,
+                        id: enrollment.deviceUserId,
                         name: enrollment.cardAssignment.employeeName || `Employee ${enrollment.cardAssignment.employeeId}`,
-                        cards: [{
-                            type: this.getCardTypeCode(enrollment.cardAssignment.cardType),
-                            size: enrollment.cardAssignment.cardData.length,
-                            data: enrollment.cardAssignment.cardData
-                        }]
+                        numOfCard: 1
                     };
 
+                    // Enroll user first
                     await this.userService.enrollUsers(supremaDeviceId, [userData]);
+                    
+                    // Then set the card
+                    const cardData = [{
+                        userId: enrollment.deviceUserId,
+                        cardData: enrollment.cardAssignment.cardData,
+                        cardType: this.getCardTypeCode(enrollment.cardAssignment.cardType)
+                    }];
+                    
+                    await this.userService.setUserCards(supremaDeviceId, cardData);
                     
                     await prisma.deviceEnrollment.update({
                         where: { id: enrollment.id },
