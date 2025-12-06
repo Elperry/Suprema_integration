@@ -315,6 +315,326 @@ export default (services) => {
         }
     });
 
+    /**
+     * Get users enrolled on a device
+     * GET /api/devices/direct/users
+     * Query: ip, port (optional, default 51211), deviceId (optional)
+     */
+    router.get('/direct/users', async (req, res) => {
+        try {
+            const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
+
+            let deviceId = parseDeviceId(providedDeviceId);
+
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
+                if (!ip) {
+                    return res.status(400).json({
+                        error: 'Bad Request',
+                        message: 'Either deviceId or IP address is required. Use ?ip=10.0.0.8&port=51211 or ?deviceId=546173337'
+                    });
+                }
+
+                // Get or establish connection
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
+                deviceId = connection.deviceId;
+            }
+
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
+            }
+
+            // Get user list from device
+            const userHeaders = await services.user.getUserList(deviceId);
+
+            // If we have user headers, optionally get full user details
+            let users = userHeaders;
+            if (userHeaders && userHeaders.length > 0 && req.query.details === 'true') {
+                const userIds = userHeaders.map(u => u.id);
+                users = await services.user.getUsers(deviceId, userIds);
+            }
+
+            res.json({
+                success: true,
+                source: 'direct_device',
+                connectionInfo: {
+                    ip: ip || 'N/A',
+                    port: parseInt(port, 10) || 51211,
+                    deviceId: deviceId
+                },
+                data: users,
+                total: users.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Device Communication Error',
+                message: error.message,
+                hint: 'Ensure the device is connected and the gateway is running'
+            });
+        }
+    });
+
+    /**
+     * Get detailed user information from a device
+     * GET /api/devices/direct/users/:userId
+     * Query: ip, port (optional, default 51211), deviceId (optional)
+     */
+    router.get('/direct/users/:userId', async (req, res) => {
+        try {
+            const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
+            const { userId } = req.params;
+
+            let deviceId = parseDeviceId(providedDeviceId);
+
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
+                if (!ip) {
+                    return res.status(400).json({
+                        error: 'Bad Request',
+                        message: 'Either deviceId or IP address is required. Use ?ip=10.0.0.8&port=51211 or ?deviceId=546173337'
+                    });
+                }
+
+                // Get or establish connection
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
+                deviceId = connection.deviceId;
+            }
+
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
+            }
+
+            // Get user details
+            const users = await services.user.getUsers(deviceId, [userId]);
+
+            if (!users || users.length === 0) {
+                return res.status(404).json({
+                    error: 'Not Found',
+                    message: `User ${userId} not found on device`
+                });
+            }
+
+            res.json({
+                success: true,
+                source: 'direct_device',
+                connectionInfo: {
+                    ip: ip || 'N/A',
+                    port: parseInt(port, 10) || 51211,
+                    deviceId: deviceId
+                },
+                data: users[0]
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Device Communication Error',
+                message: error.message,
+                hint: 'Ensure the device is connected and the gateway is running'
+            });
+        }
+    });
+
+    /**
+     * Get cards for a specific user on a device
+     * GET /api/devices/direct/users/:userId/cards
+     * Query: ip, port (optional, default 51211), deviceId (optional)
+     */
+    router.get('/direct/users/:userId/cards', async (req, res) => {
+        try {
+            const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
+            const { userId } = req.params;
+
+            let deviceId = parseDeviceId(providedDeviceId);
+
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
+                if (!ip) {
+                    return res.status(400).json({
+                        error: 'Bad Request',
+                        message: 'Either deviceId or IP address is required. Use ?ip=10.0.0.8&port=51211 or ?deviceId=546173337'
+                    });
+                }
+
+                // Get or establish connection
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
+                deviceId = connection.deviceId;
+            }
+
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
+            }
+
+            // Get user with card details
+            const users = await services.user.getUsers(deviceId, [userId]);
+
+            if (!users || users.length === 0) {
+                return res.status(404).json({
+                    error: 'Not Found',
+                    message: `User ${userId} not found on device`
+                });
+            }
+
+            const user = users[0];
+            
+            // Extract card information from user data
+            const cards = user.cardsList || user.cards || [];
+
+            res.json({
+                success: true,
+                source: 'direct_device',
+                connectionInfo: {
+                    ip: ip || 'N/A',
+                    port: parseInt(port, 10) || 51211,
+                    deviceId: deviceId
+                },
+                userId: userId,
+                data: cards,
+                total: cards.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Device Communication Error',
+                message: error.message,
+                hint: 'Ensure the device is connected and the gateway is running'
+            });
+        }
+    });
+
+    /**
+     * Get all users with their cards from a device (combined view)
+     * GET /api/devices/direct/users-cards
+     * Query: ip, port (optional, default 51211), deviceId (optional)
+     */
+    router.get('/direct/users-cards', async (req, res) => {
+        try {
+            const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
+
+            let deviceId = parseDeviceId(providedDeviceId);
+
+            // If deviceId not provided or invalid, try to find by IP
+            if (deviceId === null) {
+                if (!ip) {
+                    return res.status(400).json({
+                        error: 'Bad Request',
+                        message: 'Either deviceId or IP address is required. Use ?ip=10.0.0.8&port=51211 or ?deviceId=546173337'
+                    });
+                }
+
+                // Get or establish connection
+                const connection = await getOrConnectDevice(ip, parseInt(port, 10) || 51211);
+                deviceId = connection.deviceId;
+            }
+
+            // Ensure deviceId is a valid number
+            if (deviceId === null || isNaN(deviceId)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Please provide a valid numeric device ID or IP address.'
+                });
+            }
+
+            // Get user list headers first
+            const userHeaders = await services.user.getUserList(deviceId);
+
+            if (!userHeaders || userHeaders.length === 0) {
+                return res.json({
+                    success: true,
+                    source: 'direct_device',
+                    connectionInfo: {
+                        ip: ip || 'N/A',
+                        port: parseInt(port, 10) || 51211,
+                        deviceId: deviceId
+                    },
+                    data: [],
+                    total: 0,
+                    message: 'No users enrolled on this device'
+                });
+            }
+
+            // Get full user details including cards
+            const userIds = userHeaders.map(u => u.id);
+            const users = await services.user.getUsers(deviceId, userIds);
+
+            // Format response with card info
+            const usersWithCards = users.map(user => {
+                const cards = user.cardsList || user.cards || [];
+                
+                // Format cards for display
+                const formattedCards = cards.map(card => {
+                    // Handle CSN card data
+                    const csnData = card.csncarddata || card.csnCardData || card.csnCarddata || {};
+                    let cardHex = '';
+                    
+                    if (csnData.data) {
+                        if (typeof csnData.data === 'string') {
+                            // Base64 encoded from protobuf
+                            try {
+                                const buffer = Buffer.from(csnData.data, 'base64');
+                                cardHex = buffer.toString('hex').toUpperCase();
+                            } catch (e) {
+                                cardHex = csnData.data;
+                            }
+                        } else if (Buffer.isBuffer(csnData.data)) {
+                            cardHex = csnData.data.toString('hex').toUpperCase();
+                        }
+                    }
+
+                    return {
+                        type: card.type,
+                        cardType: csnData.type,
+                        size: csnData.size,
+                        data: cardHex,
+                        raw: card
+                    };
+                });
+
+                return {
+                    id: user.hdr?.id || user.id,
+                    name: user.name,
+                    numOfCard: user.hdr?.numofcard || user.numOfCard || 0,
+                    numOfFinger: user.hdr?.numoffinger || user.numOfFinger || 0,
+                    numOfFace: user.hdr?.numofface || user.numOfFace || 0,
+                    cards: formattedCards,
+                    raw: user
+                };
+            });
+
+            res.json({
+                success: true,
+                source: 'direct_device',
+                connectionInfo: {
+                    ip: ip || 'N/A',
+                    port: parseInt(port, 10) || 51211,
+                    deviceId: deviceId
+                },
+                data: usersWithCards,
+                total: usersWithCards.length,
+                summary: {
+                    totalUsers: usersWithCards.length,
+                    usersWithCards: usersWithCards.filter(u => u.cards.length > 0).length,
+                    totalCards: usersWithCards.reduce((sum, u) => sum + u.cards.length, 0)
+                }
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Device Communication Error',
+                message: error.message,
+                hint: 'Ensure the device is connected and the gateway is running'
+            });
+        }
+    });
+
     // =====================================================
     // DATABASE-BASED ROUTES (Original functionality)
     // =====================================================

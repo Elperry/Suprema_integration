@@ -170,3 +170,26 @@ model Event {
   @@index([authResult])
   @@map("events")
 }
+
+// Enrollment debug logs - stores verbose logging for troubleshooting
+model EnrollmentLog {
+  id              Int       @id @default(autoincrement())
+  operation       String    @db.VarChar(50)  // setUserCards, enrollUsers, scanCard, etc.
+  deviceId        Int?      // Device ID (numeric)
+  userId          String?   @db.VarChar(50)  // User ID being enrolled
+  cardDataHex     String?   @db.VarChar(512) // Hex representation of card data
+  cardSize        Int?      // Card size in bytes
+  cardType        Int?      // Card type code
+  bufferLength    Int?      // Actual buffer length
+  requestPayload  Json?     // Full request payload (serialized)
+  responsePayload Json?     // Response payload or error
+  success         Boolean   @default(false)
+  errorMessage    String?   @db.Text
+  createdAt       DateTime  @default(now())
+
+  @@index([deviceId])
+  @@index([operation])
+  @@index([success])
+  @@index([createdAt])
+  @@map("enrollment_logs")
+}
