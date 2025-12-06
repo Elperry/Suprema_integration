@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { enrollmentAPI, deviceAPI } from '../services/api'
+import './Enrollment.css'
 
 export default function Enrollment() {
   // State
@@ -65,10 +66,27 @@ export default function Enrollment() {
     }
   }
 
+  // Load all employees (paginated)
+  const loadAllEmployees = async () => {
+    try {
+      setLoading(true)
+      const res = await enrollmentAPI.getEmployeesWithStatus({ limit: 100 })
+      setEmployees(res.data.data || [])
+    } catch (e) {
+      console.error('Failed to load employees:', e)
+      setError('Failed to load employees from database')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // Search employees with debounce
   const searchEmployees = useCallback(async (query) => {
     if (!query || query.length < 2) {
-      setEmployees([])
+      // If no query, load all employees
+      if (!query) {
+        loadAllEmployees()
+      }
       return
     }
     
@@ -387,20 +405,36 @@ export default function Enrollment() {
           {scannedCard && !scannedCard.isAssigned && (
             <div className="card">
               <h3>Step 2: Select Employee</h3>
-              <div className="form-group">
-                <label>Search Employee</label>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search by name, ID, or department..."
-                  className="form-control"
-                />
+              <div className="employee-search-row">
+                <div className="form-group" style={{ flex: 1 }}>
+                  <label>Search Employee</label>
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="Search by name, ID, or department..."
+                    className="form-control"
+                  />
+                </div>
+                <button 
+                  onClick={loadAllEmployees}
+                  className="btn btn-secondary"
+                  disabled={loading}
+                  style={{ alignSelf: 'flex-end' }}
+                >
+                  {loading ? '⏳ Loading...' : '📋 Load All Employees'}
+                </button>
               </div>
 
               {/* Employee List */}
-              {employees.length > 0 && (
+              {loading ? (
+                <div className="loading-state">
+                  <div className="spinner"></div>
+                  <p>Loading employees from database...</p>
+                </div>
+              ) : employees.length > 0 ? (
                 <div className="employee-list">
+                  <p className="employee-count">{employees.length} employees found</p>
                   {employees.map(emp => (
                     <div 
                       key={emp.employee_id}
@@ -414,20 +448,25 @@ export default function Enrollment() {
                       </div>
                       <div className="employee-status">
                         {emp.hasCard ? (
-                          <span className="badge badge-info">Has Card</span>
+                          <span className="badge badge-warning">🎫 Has Card</span>
                         ) : (
-                          <span className="badge badge-secondary">No Card</span>
+                          <span className="badge badge-success">✅ Available</span>
                         )}
                       </div>
                     </div>
                   ))}
+                </div>
+              ) : (
+                <div className="empty-state">
+                  <p>🔍 Search for employees or click "Load All Employees" to see available employees</p>
                 </div>
               )}
 
               {/* Selected Employee */}
               {selectedEmployee && (
                 <div className="selected-employee">
-                  <h4>Selected: {selectedEmployee.name} (ID: {selectedEmployee.employee_id})</h4>
+                  <h4>✅ Selected: {selectedEmployee.name} (ID: {selectedEmployee.employee_id})</h4>
+                  {selectedEmployee.department && <p>Department: {selectedEmployee.department}</p>}
                 </div>
               )}
             </div>

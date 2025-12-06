@@ -41,8 +41,40 @@ export default function Users() {
     }
   }
 
+  // Helper to get user-friendly error message
+  const getErrorMessage = (error) => {
+    const message = error.response?.data?.message || error.message || 'Unknown error'
+    
+    // Handle common gRPC errors
+    if (message.includes('NOT_FOUND') && message.includes('connection')) {
+      return 'Device is not connected. Please connect to the device first.'
+    }
+    if (message.includes('UNAVAILABLE')) {
+      return 'Device gateway is not available. Please check the gateway service.'
+    }
+    if (message.includes('DEADLINE_EXCEEDED')) {
+      return 'Connection timed out. The device may be offline or unreachable.'
+    }
+    
+    return message
+  }
+
+  // Check if selected device is connected
+  const isDeviceConnected = () => {
+    const device = devices.find(d => d.id === parseInt(selectedDevice))
+    return device?.status === 'connected'
+  }
+
   const loadUsers = useCallback(async () => {
     if (!selectedDevice) return
+    
+    // Check if device is connected before making the call
+    const device = devices.find(d => d.id === parseInt(selectedDevice))
+    if (device && device.status !== 'connected') {
+      setError('Device is not connected. Please connect to the device first.')
+      setUsers([])
+      return
+    }
     
     try {
       setLoading(true)
@@ -50,11 +82,12 @@ export default function Users() {
       const res = await userAPI.getUsers(selectedDevice, true)
       setUsers(res.data.data || [])
     } catch (e) { 
-      setError('Failed to load users: ' + (e.response?.data?.message || e.message))
+      setError('Failed to load users: ' + getErrorMessage(e))
+      setUsers([])
     } finally {
       setLoading(false)
     }
-  }, [selectedDevice])
+  }, [selectedDevice, devices])
 
   useEffect(() => {
     if (selectedDevice) {
@@ -77,7 +110,7 @@ export default function Users() {
       setSuccess('User enrolled successfully!')
       loadUsers()
     } catch (e) { 
-      setError('Enrollment failed: ' + (e.response?.data?.message || e.message))
+      setError('Enrollment failed: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -92,7 +125,7 @@ export default function Users() {
       setSuccess('User deleted successfully')
       loadUsers()
     } catch (e) { 
-      setError('Delete failed: ' + (e.response?.data?.message || e.message))
+      setError('Delete failed: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -113,7 +146,7 @@ export default function Users() {
       setSelectedUsers([])
       loadUsers()
     } catch (e) {
-      setError('Batch delete failed: ' + (e.response?.data?.message || e.message))
+      setError('Batch delete failed: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -128,7 +161,7 @@ export default function Users() {
       await userAPI.sync(selectedDevice)
       setSuccess('Users synced to database successfully!')
     } catch (e) { 
-      setError('Sync failed: ' + (e.response?.data?.message || e.message))
+      setError('Sync failed: ' + getErrorMessage(e))
     } finally {
       setSyncing(false)
     }
@@ -141,7 +174,7 @@ export default function Users() {
       await userAPI.syncAll()
       setSuccess('All users synced to database successfully!')
     } catch (e) {
-      setError('Sync all failed: ' + (e.response?.data?.message || e.message))
+      setError('Sync all failed: ' + getErrorMessage(e))
     } finally {
       setSyncing(false)
     }
