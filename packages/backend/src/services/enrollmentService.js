@@ -625,11 +625,28 @@ class EnrollmentService {
     async searchEmployees(searchTerm, limit = 20) {
         try {
             // Query from the allemployees view
+            // Using correct column names: id, fullname, displayname, jobtitle, ssn
             const employees = await prisma.$queryRaw`
-                SELECT * FROM allemployees 
-                WHERE employee_id LIKE ${`%${searchTerm}%`}
-                   OR name LIKE ${`%${searchTerm}%`}
-                   OR department LIKE ${`%${searchTerm}%`}
+                SELECT 
+                    id as employee_id,
+                    COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
+                    jobtitle as department,
+                    fullname,
+                    displayname,
+                    firstname,
+                    lastname,
+                    email,
+                    mobile,
+                    ssn,
+                    card
+                FROM allemployees 
+                WHERE id LIKE ${`%${searchTerm}%`}
+                   OR fullname LIKE ${`%${searchTerm}%`}
+                   OR displayname LIKE ${`%${searchTerm}%`}
+                   OR firstname LIKE ${`%${searchTerm}%`}
+                   OR lastname LIKE ${`%${searchTerm}%`}
+                   OR jobtitle LIKE ${`%${searchTerm}%`}
+                   OR ssn LIKE ${`%${searchTerm}%`}
                 LIMIT ${limit}
             `;
 
@@ -670,9 +687,22 @@ class EnrollmentService {
         try {
             const { limit = 100, offset = 0, enrolled = null } = options;
 
+            // Using correct column names from allemployees table
             let employees = await prisma.$queryRaw`
-                SELECT * FROM allemployees 
-                ORDER BY name
+                SELECT 
+                    id as employee_id,
+                    COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
+                    jobtitle as department,
+                    fullname,
+                    displayname,
+                    firstname,
+                    lastname,
+                    email,
+                    mobile,
+                    ssn,
+                    card
+                FROM allemployees 
+                ORDER BY fullname
                 LIMIT ${limit} OFFSET ${offset}
             `;
 
