@@ -178,9 +178,28 @@ class EnrollmentService {
             this.logger.warn('Could not extract CSN from card data. Raw structure:', Object.keys(cardData));
         }
 
+        // Get the size from the original card data (important for device communication)
+        let size = 0;
+        if (csnCardData && csnCardData.size) {
+            size = csnCardData.size;
+        } else if (csn) {
+            // Calculate size from hex string (2 hex chars = 1 byte)
+            size = Math.floor(csn.length / 2);
+        }
+
+        // Get the type code from the original card data
+        let typeCode = 0x01; // Default CSN
+        if (csnCardData && csnCardData.type !== undefined) {
+            typeCode = csnCardData.type;
+        }
+
+        this.logger.info('Normalized card - size:', size, 'typeCode:', typeCode);
+
         return {
             csn,
             type,
+            typeCode,  // The numeric type code from proto enum
+            size,      // The byte size of the card data
             data: csn,
             raw: cardData
         };
@@ -448,21 +467,35 @@ class EnrollmentService {
             this.logger.info(`Enrolling user ${deviceUserId} (${assignment.employeeName}) on device ${supremaDeviceId}`);
 
             // Prepare user data for device
-            // Note: Use 'id' not 'userID' as userService.enrollUsers expects 'id'
+            // IMPORTANT: Set numOfCard to 0 during initial enrollment
+            // We will add the card separately using setUserCards
+            // Setting numOfCard: 1 without providing card data causes "Invalid card data" error
             const userData = {
                 id: deviceUserId,
                 name: assignment.employeeName || `Employee ${assignment.employeeId}`,
-                numOfCard: 1
+                numOfCard: 0  // Start with 0 cards, add card separately
             };
 
-            // Enroll user on device first (creates the user)
+            // Enroll user on device first (creates the user without cards)
             await this.userService.enrollUsers(supremaDeviceId, [userData]);
+
+            this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
 
             // Then set the card for the user
             const cardData = [{
                 userId: deviceUserId,
-                cardData: assignment.cardData,
-                cardType: this.getCardTypeCode(assignment.cardType)
+                // Normalize stored card hex string and provide size (bytes)
+                cardData: (() => {
+                    let hex = String(assignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
+                    if (hex.length % 2 === 1) hex = '0' + hex; // pad to even length
+                    return hex.toUpperCase();
+                })(),
+                cardType: this.getCardTypeCode(assignment.cardType),
+                cardSize: (() => {
+                    const hex = String(assignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
+                    const even = hex.length % 2 === 1 ? '0' + hex : hex;
+                    return Math.floor(even.length / 2);
+                })()
             }];
             
             await this.userService.setUserCards(supremaDeviceId, cardData);
@@ -630,23 +663,34 @@ class EnrollmentService {
 
             for (const enrollment of enrollments) {
                 try {
-                    // Use 'id' not 'userID' as userService.enrollUsers expects 'id'
+                    // IMPORTANT: Set numOfCard to 0 during initial enrollment
+                    // We will add the card separately using setUserCards
+                    // Setting numOfCard: 1 without providing card data causes "Invalid card data" error
                     const userData = {
                         id: enrollment.deviceUserId,
                         name: enrollment.cardAssignment.employeeName || `Employee ${enrollment.cardAssignment.employeeId}`,
-                        numOfCard: 1
+                        numOfCard: 0  // Start with 0 cards, add card separately
                     };
 
-                    // Enroll user first
+                    // Enroll user first (without cards)
                     await this.userService.enrollUsers(supremaDeviceId, [userData]);
                     
                     // Then set the card
                     const cardData = [{
                         userId: enrollment.deviceUserId,
-                        cardData: enrollment.cardAssignment.cardData,
-                        cardType: this.getCardTypeCode(enrollment.cardAssignment.cardType)
+                        cardData: (() => {
+                            let hex = String(enrollment.cardAssignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
+                            if (hex.length % 2 === 1) hex = '0' + hex;
+                            return hex.toUpperCase();
+                        })(),
+                        cardType: this.getCardTypeCode(enrollment.cardAssignment.cardType),
+                        cardSize: (() => {
+                            const hex = String(enrollment.cardAssignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
+                            const even = hex.length % 2 === 1 ? '0' + hex : hex;
+                            return Math.floor(even.length / 2);
+                        })()
                     }];
-                    
+
                     await this.userService.setUserCards(supremaDeviceId, cardData);
                     
                     await prisma.deviceEnrollment.update({
@@ -893,15 +937,32 @@ class EnrollmentService {
      * @returns {number} Card type code
      */
     getCardTypeCode(cardType) {
+        // From card.proto enum Type:
+        // CARD_TYPE_UNKNOWN         = 0x00
+        // CARD_TYPE_CSN             = 0x01
+        // CARD_TYPE_SECURE          = 0x02
+        // CARD_TYPE_ACCESS          = 0x03
+        // CARD_TYPE_CSN_MOBILE      = 0x04
+        // CARD_TYPE_WIEGAND_MOBILE  = 0x05
+        // CARD_TYPE_QR              = 0x06
+        // CARD_TYPE_SECURE_QR       = 0x07
+        // CARD_TYPE_WIEGAND         = 0x0A
+        // CARD_TYPE_CONFIG_CARD     = 0x0B
+        // CARD_TYPE_CUSTOM_SMART    = 0x0D
         const cardTypes = {
-            'CSN': 0,       // Card Serial Number
-            'SECURE': 1,    // Secure credential
-            'ACCESS': 2,    // Access credential
-            'WIEGAND': 3,   // Wiegand format
-            'QR': 4,        // QR Code
-            'BARCODE': 5    // Barcode
+            'UNKNOWN': 0x00,
+            'CSN': 0x01,            // Card Serial Number
+            'SECURE': 0x02,         // Secure credential
+            'ACCESS': 0x03,         // Access credential
+            'CSN_MOBILE': 0x04,     // CSN Mobile
+            'WIEGAND_MOBILE': 0x05, // Wiegand Mobile
+            'QR': 0x06,             // QR Code
+            'SECURE_QR': 0x07,      // Secure QR
+            'WIEGAND': 0x0A,        // Wiegand format
+            'CONFIG_CARD': 0x0B,    // Config card
+            'CUSTOM_SMART': 0x0D    // Custom smart card
         };
-        return cardTypes[cardType?.toUpperCase()] ?? 0;
+        return cardTypes[cardType?.toUpperCase()] ?? 0x01; // Default to CSN (1)
     }
 
     /**
