@@ -734,20 +734,18 @@ class SupremaUserService extends EventEmitter {
                     // If cardData is a string (hex card number), convert to bytes
                     if (typeof data.cardData === 'string') {
                         cardHex = data.cardData;
-                        const cardBuffer = Buffer.from(data.cardData, 'hex');
+                        cardBuffer = Buffer.from(data.cardData, 'hex');
                         bufferLength = cardBuffer.length;
-                        csnCardData.setData(cardBuffer);
                         this.logger.info(`[setUserCards] Card buffer (first 20 bytes): ${cardBuffer.slice(0, 20).toString('hex')}`);
                     } else if (Buffer.isBuffer(data.cardData)) {
+                        cardBuffer = data.cardData;
                         cardHex = data.cardData.toString('hex').toUpperCase();
                         bufferLength = data.cardData.length;
-                        csnCardData.setData(data.cardData);
                     } else if (data.cardData.data) {
                         // If it's already a structured object with data property
-                        const cardBuffer = Buffer.from(data.cardData.data);
+                        cardBuffer = Buffer.from(data.cardData.data);
                         cardHex = cardBuffer.toString('hex').toUpperCase();
                         bufferLength = cardBuffer.length;
-                        csnCardData.setData(cardBuffer);
                     }
                     
                     if (cardBuffer && cardBuffer.length > 0) {

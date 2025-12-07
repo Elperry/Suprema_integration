@@ -30,16 +30,51 @@
 
 .device-select {
   flex: 1;
-  min-width: 300px;
+  min-width: 250px;
   padding: 10px 12px;
   font-size: 1rem;
   border: 1px solid #ddd;
   border-radius: 6px;
 }
 
+.source-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.source-toggle label {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.source-toggle select {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+}
+
 .sync-buttons {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.info-banner {
+  background: #e3f2fd;
+  border: 1px solid #90caf9;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 15px;
+  color: #1565c0;
+  font-size: 0.9rem;
+}
+
+.info-banner .info-actions {
+  display: block;
+  margin-top: 5px;
+  font-size: 0.85rem;
+  color: #1976d2;
 }
 
 /* Enroll Form */

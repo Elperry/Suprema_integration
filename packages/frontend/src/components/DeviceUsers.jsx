@@ -57,10 +57,46 @@ const DeviceUsers = () => {
         setExpandedUser(expandedUser === userId ? null : userId);
     };
 
-    const formatCardData = (cardHex) => {
-        if (!cardHex) return 'N/A';
-        // Format as groups of 2 for readability
-        return cardHex.match(/.{1,2}/g)?.join(' ') || cardHex;
+    /**
+     * Decode Base64 card data to decimal number
+     */
+    const decodeCardToDecimal = (base64Data) => {
+        try {
+            if (!base64Data) return 'N/A';
+            
+            // Decode Base64 to binary
+            const binaryStr = atob(base64Data);
+            const bytes = new Uint8Array(binaryStr.length);
+            for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+            }
+            
+            // Find significant bytes (skip leading zeros)
+            let startIdx = 0;
+            while (startIdx < bytes.length && bytes[startIdx] === 0) {
+                startIdx++;
+            }
+            
+            // Extract significant bytes
+            const significantBytes = bytes.slice(startIdx);
+            
+            // Calculate decimal value using BigInt for large numbers
+            let cardNumber = 0n;
+            for (const byte of significantBytes) {
+                cardNumber = (cardNumber << 8n) | BigInt(byte);
+            }
+            
+            return cardNumber.toString();
+        } catch (e) {
+            console.error('Failed to decode card data:', e);
+            return 'Error';
+        }
+    };
+
+    const formatCardData = (cardData) => {
+        if (!cardData) return 'N/A';
+        // Return decimal card number
+        return decodeCardToDecimal(cardData);
     };
 
     const filteredUsers = users.filter(user => {

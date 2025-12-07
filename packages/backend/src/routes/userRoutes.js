@@ -1,12 +1,28 @@
 /**
  * User Management Routes
  * REST API endpoints for user operations
+ * 
+ * DATABASE IS THE SOURCE OF TRUTH
+ * - GET endpoints return data from database by default
+ * - Use ?source=device to fetch directly from device
+ * - Sync pushes database state to devices
  */
 
 import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import UserSyncService from '../services/userSyncService.js';
+
 const router = express.Router();
+const prisma = new PrismaClient();
 
 export default (services) => {
+    // Initialize sync service
+    const syncService = new UserSyncService(
+        services.user,
+        services.connection,
+        console
+    );
+
     /**
      * Helper function to get Suprema device ID from database ID
      */
@@ -36,19 +52,47 @@ export default (services) => {
         throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected. Please connect the device first.`);
     };
 
+    // ==================== STATIC ROUTES (must come before /:deviceId) ====================
+
     /**
-     * Sync users from all devices
+     * Sync database to ALL connected devices
      * POST /api/users/sync-all
-     * NOTE: This route must be defined BEFORE /:deviceId routes to avoid matching "sync-all" as a deviceId
+     * 
+     * Pushes all card assignments from database to all connected devices.
+     * This makes devices match the database state exactly.
      */
     router.post('/sync-all', async (req, res) => {
         try {
-            const results = await services.user.syncAllDevicesUsers();
+            console.log('[API] POST /api/users/sync-all - Syncing database to all devices');
+            const results = await syncService.syncDatabaseToAllDevices();
 
             res.json({
                 success: true,
-                message: 'All devices users synchronized',
-                results: results
+                message: 'Database synchronized to all devices',
+                ...results
+            });
+        } catch (error) {
+            console.error('[API] Sync all error:', error);
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get all users from database (centralized view)
+     * GET /api/users/all
+     */
+    router.get('/all', async (req, res) => {
+        try {
+            const users = await syncService.getUsersFromDB();
+            
+            res.json({
+                success: true,
+                source: 'database',
+                data: users,
+                total: users.length
             });
         } catch (error) {
             res.status(500).json({
@@ -59,90 +103,93 @@ export default (services) => {
     });
 
     /**
-     * Get all users from device
+     * Import users from device to database
+     * POST /api/users/import/:deviceId
+     */
+    router.post('/import/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            console.log(`[API] POST /api/users/import/${deviceId} - Importing users from device to DB`);
+            
+            const result = await syncService.importUsersFromDevice(deviceId);
+            
+            res.json({
+                success: true,
+                message: 'Users imported from device to database',
+                ...result
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Delete user from all devices
+     * DELETE /api/users/delete-all/:userId
+     */
+    router.delete('/delete-all/:userId', async (req, res) => {
+        try {
+            const { userId } = req.params;
+            const { revokeCard } = req.query;
+            
+            console.log(`[API] DELETE /api/users/delete-all/${userId} - Deleting from all devices`);
+            
+            const result = await syncService.deleteUserFromAllDevices(
+                userId, 
+                revokeCard === 'true'
+            );
+            
+            res.json({
+                success: true,
+                message: `User ${userId} deleted from all devices`,
+                ...result
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    // ==================== DEVICE-SPECIFIC ROUTES ====================
+
+    /**
+     * Get users for a device
      * GET /api/users/:deviceId
      * 
-     * Uses user headers + cards approach to avoid protobuf parsing errors
-     * that occur when fetching full user details with biometric data
+     * Query params:
+     *   - source=device : Fetch directly from device (default: database)
+     *   - detailed=true : Include card data
      */
     router.get('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const supremaDeviceId = await getSupremaDeviceId(deviceId);
-            const userHeaders = await services.user.getUserList(supremaDeviceId);
+            const source = req.query.source || 'database';
             
-            if (req.query.detailed === 'true' && userHeaders.length > 0) {
-                // Get user IDs that have cards
-                const userIdsWithCards = userHeaders
-                    .filter(h => h.numofcard > 0)
-                    .map(h => h.id);
-                
-                // Fetch cards separately (this is safer and more efficient)
-                let userCards = [];
-                if (userIdsWithCards.length > 0) {
-                    try {
-                        userCards = await services.user.getCards(supremaDeviceId, userIdsWithCards);
-                        console.log(`[getUsers] Got ${userCards.length} user card records`);
-                    } catch (cardError) {
-                        console.warn('Failed to fetch cards:', cardError.message);
-                    }
-                }
-                
-                // Create a map of userId -> cards for quick lookup
-                // Note: protobuf toObject() uses lowercase field names
-                const cardMap = new Map();
-                for (const uc of userCards) {
-                    // Handle both string and number user IDs
-                    const userId = String(uc.userid);
-                    const cards = uc.cardslist || uc.cardsList || [];
-                    cardMap.set(userId, cards);
-                }
-                
-                console.log(`[getUsers] Card map has ${cardMap.size} entries`);
-                
-                // Merge headers with card data
-                // Transform to frontend-expected format with userID at top level
-                const detailedUsers = userHeaders.map(header => {
-                    const cards = cardMap.get(String(header.id)) || [];
-                    return {
-                        userID: header.id,
-                        name: header.name || '',
-                        numOfCard: header.numofcard || 0,
-                        numOfFinger: header.numoffinger || 0,
-                        numOfFace: header.numofface || 0,
-                        cardsList: cards,
-                        // Include card data in a user-friendly format
-                        hasCard: cards.length > 0,
-                        cardData: cards.length > 0 ? cards[0].data : null,
-                        // Keep original header for reference
-                        hdr: header,
-                        fingersList: [],  // Skip biometrics to avoid protobuf errors
-                        facesList: [],
-                        accessgroupidsList: header.accessgroupidsList || []
-                    };
-                });
-                
+            if (source === 'device') {
+                // Fetch from device directly
+                const users = await syncService.getUsersFromDevice(deviceId);
                 return res.json({
                     success: true,
-                    data: detailedUsers,
-                    total: detailedUsers.length
+                    source: 'device',
+                    data: users,
+                    total: users.length
                 });
             }
-
-            // Transform non-detailed response to include userID for frontend compatibility
-            const transformedHeaders = userHeaders.map(h => ({
-                userID: h.id,
-                name: h.name || '',
-                numOfCard: h.numofcard || 0,
-                numOfFinger: h.numoffinger || 0,
-                numOfFace: h.numofface || 0,
-                hasCard: (h.numofcard || 0) > 0
-            }));
-
+            
+            // Default: Fetch from database
+            const dbDeviceId = parseInt(deviceId) < 100000 ? parseInt(deviceId) : null;
+            const users = await syncService.getUsersFromDB(dbDeviceId);
+            
             res.json({
                 success: true,
-                data: transformedHeaders,
-                total: transformedHeaders.length
+                source: 'database',
+                data: users,
+                total: users.length
             });
         } catch (error) {
             res.status(500).json({
@@ -185,13 +232,14 @@ export default (services) => {
     });
 
     /**
-     * Delete users from device
+     * Delete users from device and update database
      * DELETE /api/users/:deviceId
+     * 
+     * Deletes users from the device and marks their enrollment as 'removed' in database
      */
     router.delete('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userIds } = req.body;
 
             if (!userIds || !Array.isArray(userIds)) {
@@ -201,12 +249,23 @@ export default (services) => {
                 });
             }
 
-            await services.user.deleteUsers(supremaDeviceId, userIds);
+            const results = [];
+            for (const userId of userIds) {
+                try {
+                    await syncService.deleteUserFromDevice(deviceId, userId);
+                    results.push({ userId, success: true });
+                } catch (error) {
+                    results.push({ userId, success: false, error: error.message });
+                }
+            }
+
+            const successCount = results.filter(r => r.success).length;
 
             res.json({
                 success: true,
-                message: `Successfully deleted ${userIds.length} users`,
-                deletedUsers: userIds.length
+                message: `Deleted ${successCount}/${userIds.length} users from device and updated database`,
+                deletedUsers: successCount,
+                results
             });
         } catch (error) {
             res.status(500).json({
@@ -696,12 +755,12 @@ export default (services) => {
         try {
             const { deviceId } = req.params;
             const supremaDeviceId = await getSupremaDeviceId(deviceId);
-            const result = await services.user.syncUsersToDatabase(supremaDeviceId);
+            const result = await syncService.importUsersFromDevice(supremaDeviceId);
 
             res.json({
                 success: true,
                 message: 'Users synchronized to database',
-                synced: result.synced,
+                synced: result.imported,
                 deviceId: deviceId
             });
         } catch (error) {

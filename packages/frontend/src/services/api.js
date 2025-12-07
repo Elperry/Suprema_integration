@@ -158,8 +158,11 @@ export const deviceAPI = {
 // ==================== USER ENDPOINTS ====================
 
 export const userAPI = {
-  // User operations
-  getUsers: (deviceId, detailed = false) => api.get(`/users/${deviceId}?detailed=${detailed}`),
+  // User operations - Database is source of truth
+  // Use source=device to fetch directly from device
+  getUsers: (deviceId, detailed = false, source = 'database') => 
+    api.get(`/users/${deviceId}?detailed=${detailed}&source=${source}`),
+  getAllUsers: () => api.get('/users/all'),  // Get all users from database
   getUserById: (deviceId, userId) => api.get(`/users/${deviceId}/user/${userId}`),
   enroll: (deviceId, users) => api.post(`/users/${deviceId}`, { users }),
   enrollMulti: (deviceIds, users) => api.post('/users/enroll-multi', { deviceIds, users }),
@@ -167,6 +170,10 @@ export const userAPI = {
   updateMulti: (deviceIds, users) => api.put('/users/update-multi', { deviceIds, users }),
   delete: (deviceId, userIds) => api.delete(`/users/${deviceId}`, { data: { userIds } }),
   deleteMulti: (deviceIds, userIds) => api.delete('/users/delete-multi', { data: { deviceIds, userIds } }),
+  deleteFromAll: (userId, revokeCard = false) => api.delete(`/users/delete-all/${userId}?revokeCard=${revokeCard}`),
+  
+  // Import users from device to database
+  importFromDevice: (deviceId) => api.post(`/users/import/${deviceId}`),
   
   // Biometric credentials
   setFingerprints: (deviceId, userFingerData) => api.post(`/users/${deviceId}/fingerprints`, { userFingerData }),

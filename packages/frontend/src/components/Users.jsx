@@ -16,41 +16,66 @@ const decodeCardData = (base64Data) => {
     }
     
     // Convert to hex string for display
-    const hexStr = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase()
+    const hexStr = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase()
     
-    // The card number is typically in the last 4 bytes (big-endian)
-    // For CSN cards, it's often the last non-zero bytes
-    // Find the significant bytes (skip leading zeros)
+    // Find significant bytes (skip leading zeros)
     let startIdx = 0
     while (startIdx < bytes.length && bytes[startIdx] === 0) {
       startIdx++
     }
     
-    // Extract card number from significant bytes (last 4-8 bytes typically)
-    const significantBytes = bytes.slice(Math.max(startIdx, bytes.length - 8))
+    // Extract significant bytes
+    const significantBytes = bytes.slice(startIdx)
     
-    // Calculate decimal value (big-endian)
+    // Calculate decimal value using BigInt for large numbers
     let cardNumber = 0n
     for (const byte of significantBytes) {
       cardNumber = (cardNumber << 8n) | BigInt(byte)
     }
     
-    // Also calculate a smaller version using just last 4 bytes for common formats
-    const last4Bytes = bytes.slice(-4)
-    let cardNumber32 = 0
-    for (const byte of last4Bytes) {
-      cardNumber32 = (cardNumber32 << 8) | byte
-    }
-    
     return {
       hex: hexStr,
       decimal: cardNumber.toString(),
-      decimal32: cardNumber32,
       bytes: Array.from(bytes)
     }
   } catch (e) {
     console.error('Failed to decode card data:', e)
-    return { hex: 'Error', decimal: 'Error', decimal32: 0, bytes: [] }
+    return { hex: 'Error', decimal: 'Error', bytes: [] }
+  }
+}
+
+/**
+ * Decode hex string card data to decimal
+ * Used for database card data which is stored as hex string
+ */
+const decodeHexCardData = (hexData) => {
+  try {
+    if (!hexData) return { hex: '', decimal: '0' }
+    
+    // Remove any spaces and ensure uppercase
+    let cleanHex = hexData.replace(/\s/g, '').toUpperCase()
+    
+    // Pad to even length if needed
+    if (cleanHex.length % 2 === 1) {
+      cleanHex = '0' + cleanHex
+    }
+    
+    // Strip leading zeros but keep at least 2 chars
+    let significant = cleanHex.replace(/^0+/, '') || '0'
+    if (significant.length % 2 === 1) {
+      significant = '0' + significant
+    }
+    
+    // Convert to decimal using BigInt for large numbers
+    const cardNumber = BigInt('0x' + significant)
+    
+    return {
+      hex: cleanHex,
+      decimal: cardNumber.toString()
+    }
+  } catch (e) {
+    console.error('Failed to decode hex card data:', e)
+    return { hex: hexData || '', decimal: 'Error' }
   }
 }
 
@@ -61,11 +86,13 @@ export default function Users() {
   const [formData, setFormData] = useState({ userID: '', name: '' })
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedUsers, setSelectedUsers] = useState([])
   const [viewMode, setViewMode] = useState('table') // table, grid
+  const [dataSource, setDataSource] = useState('database') // database, device
   const [cardAssignments, setCardAssignments] = useState([])
   const [showCardModal, setShowCardModal] = useState(false)
   const [selectedUserForCard, setSelectedUserForCard] = useState(null)
@@ -120,18 +147,21 @@ export default function Users() {
   const loadUsers = useCallback(async () => {
     if (!selectedDevice) return
     
-    // Check if device is connected before making the call
-    const device = devices.find(d => d.id === parseInt(selectedDevice))
-    if (device && device.status !== 'connected') {
-      setError('Device is not connected. Please connect to the device first.')
-      setUsers([])
-      return
+    // For device source, check if device is connected
+    if (dataSource === 'device') {
+      const device = devices.find(d => d.id === parseInt(selectedDevice))
+      if (device && device.status !== 'connected') {
+        setError('Device is not connected. Please connect to the device first.')
+        setUsers([])
+        return
+      }
     }
     
     try {
       setLoading(true)
       setError(null)
-      const res = await userAPI.getUsers(selectedDevice, true)
+      // Pass dataSource to API call
+      const res = await userAPI.getUsers(selectedDevice, true, dataSource)
       setUsers(res.data.data || [])
     } catch (e) { 
       setError('Failed to load users: ' + getErrorMessage(e))
@@ -139,13 +169,13 @@ export default function Users() {
     } finally {
       setLoading(false)
     }
-  }, [selectedDevice, devices])
+  }, [selectedDevice, devices, dataSource])
 
   useEffect(() => {
     if (selectedDevice) {
       loadUsers()
     }
-  }, [selectedDevice, loadUsers])
+  }, [selectedDevice, loadUsers, dataSource])
 
   const handleEnroll = async (e) => {
     e.preventDefault()
@@ -211,7 +241,8 @@ export default function Users() {
       setSyncing(true)
       setError(null)
       await userAPI.sync(selectedDevice)
-      setSuccess('Users synced to database successfully!')
+      setSuccess('Database synced to device successfully!')
+      loadUsers()
     } catch (e) { 
       setError('Sync failed: ' + getErrorMessage(e))
     } finally {
@@ -223,12 +254,34 @@ export default function Users() {
     try {
       setSyncing(true)
       setError(null)
-      await userAPI.syncAll()
-      setSuccess('All users synced to database successfully!')
+      const res = await userAPI.syncAll()
+      const results = res.data.results || []
+      const successCount = results.filter(r => r.success).length
+      setSuccess(`Database synced to ${successCount}/${results.length} devices!`)
+      loadUsers()
     } catch (e) {
       setError('Sync all failed: ' + getErrorMessage(e))
     } finally {
       setSyncing(false)
+    }
+  }
+
+  // Import users from device to database
+  const handleImportFromDevice = async () => {
+    if (!selectedDevice) return
+    if (!confirm('Import all users from device to database? This will add new card assignments for users not already in the database.')) return
+    
+    try {
+      setImporting(true)
+      setError(null)
+      const res = await userAPI.importFromDevice(selectedDevice)
+      setSuccess(`Imported ${res.data.imported} users from device. ${res.data.skipped} skipped (already exist).`)
+      loadCardAssignments()
+      loadUsers()
+    } catch (e) {
+      setError('Import failed: ' + getErrorMessage(e))
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -328,22 +381,57 @@ export default function Users() {
             </optgroup>
           </select>
           
+          {/* Data Source Toggle */}
+          <div className="source-toggle">
+            <label>Data Source:</label>
+            <select 
+              value={dataSource} 
+              onChange={(e) => setDataSource(e.target.value)}
+              className="form-control"
+            >
+              <option value="database">💾 Database (Centralized)</option>
+              <option value="device">📱 Device (Live)</option>
+            </select>
+          </div>
+          
           <div className="sync-buttons">
+            <button 
+              onClick={handleImportFromDevice} 
+              className="btn btn-info"
+              disabled={!selectedDevice || importing || !isDeviceConnected()}
+              title="Import users from device to database"
+            >
+              {importing ? '⏳' : '📥'} Import from Device
+            </button>
             <button 
               onClick={handleSync} 
               className="btn btn-secondary"
-              disabled={!selectedDevice || syncing}
+              disabled={!selectedDevice || syncing || !isDeviceConnected()}
+              title="Push database users to this device"
             >
-              {syncing ? '⏳' : '🔄'} Sync Device
+              {syncing ? '⏳' : '�'} Push to Device
             </button>
             <button 
               onClick={handleSyncAll} 
               className="btn btn-primary"
               disabled={syncing}
+              title="Push database users to all connected devices"
             >
-              {syncing ? '⏳' : '🔄'} Sync All
+              {syncing ? '⏳' : '🔄'} Sync All Devices
             </button>
           </div>
+        </div>
+        
+        {/* Info Banner */}
+        <div className="info-banner">
+          <strong>💾 Database is the source of truth.</strong> 
+          {dataSource === 'database' 
+            ? ' Showing users from centralized database.' 
+            : ' Showing live data from device.'}
+          <span className="info-actions">
+            Use <em>Import</em> to copy device users → database. 
+            Use <em>Sync</em> to push database → devices.
+          </span>
         </div>
       </div>
 
@@ -444,6 +532,17 @@ export default function Users() {
                     // Check if user has card from device data or from database
                     const hasDeviceCard = u.hasCard || (u.cardsList && u.cardsList.length > 0)
                     const hasCard = hasDeviceCard || cardAssign
+                    
+                    // Get decoded card number for tooltip
+                    let cardTooltip = 'No card'
+                    if (hasDeviceCard && u.cardsList && u.cardsList.length > 0) {
+                      const decoded = decodeCardData(u.cardsList[0].data)
+                      cardTooltip = `Card: ${decoded.decimal}`
+                    } else if (cardAssign) {
+                      const decoded = decodeHexCardData(cardAssign.cardData)
+                      cardTooltip = `Card: ${decoded.decimal}`
+                    }
+                    
                     return (
                       <tr key={u.userID} className={selectedUsers.includes(u.userID) ? 'selected-row' : ''}>
                         <td>
@@ -459,12 +558,12 @@ export default function Users() {
                         <td>{u.name || 'N/A'}</td>
                         <td>
                           {hasDeviceCard ? (
-                            <span className="badge badge-success" title={u.cardData || 'Card on device'}>
-                              🎫 Card ({u.numOfCard || 1})
+                            <span className="badge badge-success" title={cardTooltip}>
+                              🎫 {u.cardsList && u.cardsList.length > 0 ? decodeCardData(u.cardsList[0].data).decimal : 'Card'}
                             </span>
                           ) : cardAssign ? (
-                            <span className="badge badge-warning" title={cardAssign.cardData}>
-                              🎫 {cardAssign.cardType || 'DB Only'}
+                            <span className="badge badge-warning" title={cardTooltip}>
+                              🎫 {decodeHexCardData(cardAssign.cardData).decimal}
                             </span>
                           ) : (
                             <span className="badge badge-secondary">No Card</span>
@@ -552,15 +651,8 @@ export default function Users() {
                         <p><strong>Size:</strong> {card.size} bytes</p>
                         <div className="card-number-display">
                           <p><strong>Card Number (Decimal):</strong></p>
-                          <code className="card-number">{decoded.decimal32}</code>
-                          {decoded.decimal !== decoded.decimal32.toString() && (
-                            <p className="card-number-full"><small>Full value: {decoded.decimal}</small></p>
-                          )}
+                          <code className="card-number">{decoded.decimal}</code>
                         </div>
-                        <p><strong>Data (Hex):</strong></p>
-                        <code className="card-data-display">{decoded.hex}</code>
-                        <p><strong>Data (Base64):</strong></p>
-                        <code className="card-data-display">{card.data}</code>
                       </div>
                     )
                   })}
@@ -571,12 +663,20 @@ export default function Users() {
               {getCardAssignment(selectedUserForCard.userID) && (
                 <div className="db-cards">
                   <h4>💾 Card in Database</h4>
-                  <p><strong>Card Type:</strong> {getCardAssignment(selectedUserForCard.userID).cardType}</p>
-                  <p><strong>Card Data:</strong></p>
-                  <code className="card-data-display">
-                    {getCardAssignment(selectedUserForCard.userID).cardData}
-                  </code>
-                  <p><strong>Status:</strong> {getCardAssignment(selectedUserForCard.userID).status}</p>
+                  {(() => {
+                    const cardAssign = getCardAssignment(selectedUserForCard.userID)
+                    const decoded = decodeHexCardData(cardAssign.cardData)
+                    return (
+                      <>
+                        <p><strong>Card Type:</strong> {cardAssign.cardType}</p>
+                        <div className="card-number-display">
+                          <p><strong>Card Number (Decimal):</strong></p>
+                          <code className="card-number">{decoded.decimal}</code>
+                        </div>
+                        <p><strong>Status:</strong> {cardAssign.status}</p>
+                      </>
+                    )
+                  })()}
                 </div>
               )}
               

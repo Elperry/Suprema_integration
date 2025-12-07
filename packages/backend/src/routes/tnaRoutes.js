@@ -74,32 +74,94 @@ export default (services) => {
         try {
             const { 
                 deviceId, 
-                startTime, 
-                endTime, 
+                startTime,
+                startDate,
+                endTime,
+                endDate, 
+                employeeId,
                 userIds = [],
-                maxLogs = 1000 
+                maxLogs = 1000,
+                page = 1,
+                pageSize = 50
             } = req.query;
 
-            if (!deviceId) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'deviceId is required'
-                });
+            // If no deviceId, try to get from all connected devices
+            let targetDeviceIds = [];
+            if (deviceId) {
+                targetDeviceIds = [deviceId];
+            } else {
+                // Get all connected devices
+                const connectedDevices = await services.connection.getConnectedDevices();
+                // Extract device IDs - connectedDevices returns protobuf objects with .deviceid property
+                targetDeviceIds = connectedDevices.map(d => d.deviceid || d.id);
+                
+                if (targetDeviceIds.length === 0) {
+                    return res.json({
+                        success: true,
+                        data: [],
+                        total: 0,
+                        message: 'No devices connected'
+                    });
+                }
             }
 
+            // Convert dates to timestamps if provided
+            const startTimestamp = startTime || (startDate ? new Date(startDate).getTime() : undefined);
+            const endTimestamp = endTime || (endDate ? new Date(endDate + 'T23:59:59').getTime() : undefined);
+
             const filters = {
-                startTime: startTime,
-                endTime: endTime,
-                userIds: Array.isArray(userIds) ? userIds : userIds ? [userIds] : [],
+                startTime: startTimestamp,
+                endTime: endTimestamp,
+                userIds: employeeId ? [employeeId] : (Array.isArray(userIds) ? userIds : userIds ? [userIds] : []),
                 maxLogs: parseInt(maxLogs)
             };
 
-            const logs = await services.tna.getTNALogs(deviceId, filters);
+            // Collect logs from all target devices
+            let allLogs = [];
+            for (const devId of targetDeviceIds) {
+                try {
+                    // getTNALogs(deviceId, startEventId, maxEvents)
+                    const logs = await services.tna.getTNALogs(devId, 0, filters.maxLogs);
+                    allLogs = allLogs.concat(logs.map(log => ({ ...log, deviceId: devId })));
+                } catch (e) {
+                    console.error(`Failed to get logs from device ${devId}:`, e.message);
+                }
+            }
+
+            // Filter by date if provided
+            if (filters.startTime || filters.endTime) {
+                allLogs = allLogs.filter(log => {
+                    const logTime = log.timestamp * 1000; // Convert to milliseconds
+                    if (filters.startTime && logTime < filters.startTime) return false;
+                    if (filters.endTime && logTime > filters.endTime) return false;
+                    return true;
+                });
+            }
+
+            // Filter by userIds if provided
+            if (filters.userIds && filters.userIds.length > 0) {
+                allLogs = allLogs.filter(log => filters.userIds.includes(log.userid || log.userId));
+            }
+
+            // Sort by timestamp descending
+            allLogs.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+            // Paginate
+            const total = allLogs.length;
+            const totalPages = Math.ceil(total / parseInt(pageSize));
+            const startIdx = (parseInt(page) - 1) * parseInt(pageSize);
+            const paginatedLogs = allLogs.slice(startIdx, startIdx + parseInt(pageSize));
 
             res.json({
                 success: true,
-                data: logs,
-                total: logs.length,
+                data: paginatedLogs,
+                total: total,
+                pagination: {
+                    page: parseInt(page),
+                    pageSize: parseInt(pageSize),
+                    total: total,
+                    totalPages: totalPages
+                },
                 filters: filters
             });
         } catch (error) {
@@ -210,22 +272,32 @@ export default (services) => {
     router.get('/summary', async (req, res) => {
         try {
             const { 
-                deviceId, 
+                deviceId,
+                employeeId, 
                 userId, 
                 period = 'weekly',
                 startDate,
                 endDate
             } = req.query;
 
-            if (!deviceId) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'deviceId is required'
-                });
+            // If no deviceId, try to get from first connected device
+            let targetDeviceId = deviceId;
+            if (!targetDeviceId) {
+                const connectedDevices = await services.connection.getConnectedDevices();
+                if (connectedDevices.length > 0) {
+                    // Extract device ID - protobuf objects have .deviceid property
+                    targetDeviceId = connectedDevices[0].deviceid || connectedDevices[0].id;
+                } else {
+                    return res.json({
+                        success: true,
+                        data: null,
+                        message: 'No devices connected'
+                    });
+                }
             }
 
-            const summary = await services.tna.getAttendanceSummary(deviceId, {
-                userId: userId,
+            const summary = await services.tna.getAttendanceSummary(targetDeviceId, {
+                userId: employeeId || userId,
                 period: period,
                 startDate: startDate,
                 endDate: endDate
