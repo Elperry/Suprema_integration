@@ -8,17 +8,47 @@ const router = express.Router();
 
 export default (services) => {
     /**
+     * Helper function to get Suprema device ID from database ID
+     */
+    const getSupremaDeviceId = async (dbDeviceId) => {
+        // Check if it's already a Suprema device ID (large number)
+        if (parseInt(dbDeviceId) > 100000) {
+            return parseInt(dbDeviceId);
+        }
+        
+        // Look up the connected device by database ID
+        const connectedDevices = await services.connection.getConnectedDevices();
+        const devices = await services.connection.getAllDevicesFromDB();
+        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
+        
+        if (!dbDevice) {
+            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
+        }
+        
+        // Find matching connected device by IP
+        for (const device of connectedDevices) {
+            const info = device.toObject ? device.toObject() : device;
+            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
+                return info.deviceid;
+            }
+        }
+        
+        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected. Please connect the device first.`);
+    };
+
+    /**
      * Get all users from device
      * GET /api/users/:deviceId
      */
     router.get('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const userHeaders = await services.user.getUserList(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const userHeaders = await services.user.getUserList(supremaDeviceId);
             
             if (req.query.detailed === 'true' && userHeaders.length > 0) {
                 const userIds = userHeaders.map(header => header.id);
-                const detailedUsers = await services.user.getUsers(deviceId, userIds);
+                const detailedUsers = await services.user.getUsers(supremaDeviceId, userIds);
                 return res.json({
                     success: true,
                     data: detailedUsers,
@@ -46,6 +76,7 @@ export default (services) => {
     router.post('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { users } = req.body;
 
             if (!users || !Array.isArray(users)) {
@@ -55,7 +86,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.enrollUsers(deviceId, users);
+            await services.user.enrollUsers(supremaDeviceId, users);
 
             res.json({
                 success: true,
@@ -77,6 +108,7 @@ export default (services) => {
     router.delete('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userIds } = req.body;
 
             if (!userIds || !Array.isArray(userIds)) {
@@ -86,7 +118,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.deleteUsers(deviceId, userIds);
+            await services.user.deleteUsers(supremaDeviceId, userIds);
 
             res.json({
                 success: true,
@@ -108,9 +140,10 @@ export default (services) => {
     router.post('/:deviceId/fingerprints', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userFingerData } = req.body;
 
-            await services.user.setUserFingerprints(deviceId, userFingerData);
+            await services.user.setUserFingerprints(supremaDeviceId, userFingerData);
 
             res.json({
                 success: true,
@@ -131,9 +164,10 @@ export default (services) => {
     router.post('/:deviceId/cards', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userCardData } = req.body;
 
-            await services.user.setUserCards(deviceId, userCardData);
+            await services.user.setUserCards(supremaDeviceId, userCardData);
 
             res.json({
                 success: true,
@@ -154,9 +188,10 @@ export default (services) => {
     router.get('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             
             // Get user details including card information
-            const users = await services.user.getUsers(deviceId, [userId]);
+            const users = await services.user.getUsers(supremaDeviceId, [userId]);
             
             if (!users || users.length === 0) {
                 return res.status(404).json({
@@ -191,6 +226,7 @@ export default (services) => {
     router.put('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { cardData, cardIndex } = req.body;
 
             if (!cardData) {
@@ -201,7 +237,7 @@ export default (services) => {
             }
 
             // Update card for single user
-            await services.user.setUserCards(deviceId, [{
+            await services.user.setUserCards(supremaDeviceId, [{
                 userId: userId,
                 cardData: cardData,
                 cardIndex: cardIndex || 0
@@ -226,10 +262,11 @@ export default (services) => {
     router.delete('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { cardIndex } = req.query;
 
             // Set empty card data to remove the card
-            await services.user.setUserCards(deviceId, [{
+            await services.user.setUserCards(supremaDeviceId, [{
                 userId: userId,
                 cardData: null,
                 cardIndex: parseInt(cardIndex) || 0
@@ -254,6 +291,7 @@ export default (services) => {
     router.post('/:deviceId/cards/blacklist', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { action, cardInfos } = req.body;
 
             if (!action || !['add', 'delete'].includes(action)) {
@@ -270,7 +308,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.manageCardBlacklist(deviceId, cardInfos, action);
+            await services.user.manageCardBlacklist(supremaDeviceId, cardInfos, action);
 
             res.json({
                 success: true,
@@ -291,9 +329,10 @@ export default (services) => {
     router.post('/:deviceId/faces', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userFaceData } = req.body;
 
-            await services.user.setUserFaces(deviceId, userFaceData);
+            await services.user.setUserFaces(supremaDeviceId, userFaceData);
 
             res.json({
                 success: true,
@@ -314,7 +353,8 @@ export default (services) => {
     router.get('/:deviceId/statistics', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const stats = await services.user.getUserStatistics(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const stats = await services.user.getUserStatistics(supremaDeviceId);
 
             res.json({
                 success: true,
@@ -336,6 +376,7 @@ export default (services) => {
     router.get('/:deviceId/access-groups', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userIds } = req.query;
 
             if (!userIds) {
@@ -346,7 +387,7 @@ export default (services) => {
             }
 
             const userIdArray = userIds.split(',');
-            const accessGroups = await services.user.getAccessGroups(deviceId, userIdArray);
+            const accessGroups = await services.user.getAccessGroups(supremaDeviceId, userIdArray);
 
             res.json({
                 success: true,
@@ -368,6 +409,7 @@ export default (services) => {
     router.post('/:deviceId/access-groups', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userAccessGroups } = req.body;
 
             if (!userAccessGroups || !Array.isArray(userAccessGroups)) {
@@ -377,7 +419,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.setAccessGroups(deviceId, userAccessGroups);
+            await services.user.setAccessGroups(supremaDeviceId, userAccessGroups);
 
             res.json({
                 success: true,
@@ -510,6 +552,7 @@ export default (services) => {
     router.put('/:deviceId/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userInfo } = req.body;
 
             if (!userInfo) {
@@ -519,7 +562,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.updateUser(deviceId, { ...userInfo, userID: userId });
+            await services.user.updateUser(supremaDeviceId, { ...userInfo, userID: userId });
 
             res.json({
                 success: true,
@@ -540,7 +583,8 @@ export default (services) => {
     router.get('/:deviceId/user/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
-            const users = await services.user.getUsers(deviceId, [userId]);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const users = await services.user.getUsers(supremaDeviceId, [userId]);
 
             if (!users || users.length === 0) {
                 return res.status(404).json({
@@ -568,7 +612,8 @@ export default (services) => {
     router.post('/:deviceId/sync', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const result = await services.user.syncUsersToDatabase(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const result = await services.user.syncUsersToDatabase(supremaDeviceId);
 
             res.json({
                 success: true,

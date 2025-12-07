@@ -141,6 +141,181 @@ class SupremaUserService extends EventEmitter {
     }
 
     /**
+     * Get card information for specific users (uses GetCard API)
+     * This is more efficient than GetUsers when only card data is needed
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} userIds - Array of user IDs
+     * @returns {Promise<Array>} Array of UserCard objects with userId and cardsList
+     */
+    async getCards(deviceId, userIds) {
+        try {
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            
+            const req = new userMessage.GetCardRequest();
+            req.setDeviceid(numericDeviceId);
+            req.setUseridsList(userIds || []);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.getCard(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`Failed to get cards for device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    const userCards = response.toObject().usercardsList;
+                    resolve(userCards);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error getting user cards:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Find the user who currently has a specific card on the device
+     * Uses batched queries to handle large user counts
+     * @param {string|number} deviceId - Device ID
+     * @param {string} cardHex - Card data in hex format
+     * @returns {Promise<string|null>} User ID who has the card, or null if not found
+     */
+    async findUserWithCard(deviceId, cardHex) {
+        try {
+            const normalizedCardHex = cardHex.toUpperCase();
+            this.logger.info(`[findUserWithCard] Searching for card ${normalizedCardHex} on device ${deviceId}`);
+
+            // Get list of all users on device
+            const userHeaders = await this.getUserList(deviceId);
+            
+            if (!userHeaders || userHeaders.length === 0) {
+                this.logger.info(`[findUserWithCard] No users found on device ${deviceId}`);
+                return null;
+            }
+
+            // Filter to users who have cards (protobuf uses lowercase field names: numofcard)
+            const usersWithCards = userHeaders.filter(u => (u.numofcard || u.numOfCard || 0) > 0);
+            
+            this.logger.info(`[findUserWithCard] Total users: ${userHeaders.length}, users with cards (numofcard > 0): ${usersWithCards.length}`);
+            
+            if (usersWithCards.length === 0) {
+                this.logger.info(`[findUserWithCard] No users with cards found on device ${deviceId}`);
+                return null;
+            }
+
+            // Use GetCard API instead of GetUsers - it's lighter and only returns card data
+            const userIds = usersWithCards.map(u => u.id);
+            
+            // Batch in groups of 100 to avoid parsing errors
+            const BATCH_SIZE = 100;
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                this.logger.info(`[findUserWithCard] Checking batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(userIds.length/BATCH_SIZE)} (${batchIds.length} users)`);
+                
+                try {
+                    const userCards = await this.getCards(deviceId, batchIds);
+                    
+                    for (const userCard of userCards) {
+                        if (userCard.cardsList && userCard.cardsList.length > 0) {
+                            for (const card of userCard.cardsList) {
+                                let existingCardHex = '';
+                                if (card.data) {
+                                    if (typeof card.data === 'string') {
+                                        // Base64 encoded
+                                        existingCardHex = Buffer.from(card.data, 'base64').toString('hex').toUpperCase();
+                                    } else if (card.data instanceof Uint8Array || Buffer.isBuffer(card.data)) {
+                                        existingCardHex = Buffer.from(card.data).toString('hex').toUpperCase();
+                                    }
+                                }
+                                
+                                if (existingCardHex === normalizedCardHex) {
+                                    this.logger.info(`[findUserWithCard] Found matching card on user ${userCard.userid}`);
+                                    return userCard.userid;
+                                }
+                            }
+                        }
+                    }
+                } catch (batchError) {
+                    this.logger.warn(`[findUserWithCard] Batch ${Math.floor(i/BATCH_SIZE) + 1} failed, skipping: ${batchError.message}`);
+                    // Continue with next batch
+                }
+            }
+
+            this.logger.info(`[findUserWithCard] Card not found on any user`);
+            return null;
+        } catch (error) {
+            this.logger.error('Error finding user with card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Clear all cards from a specific user on the device
+     * @param {string|number} deviceId - Device ID  
+     * @param {string} userId - User ID to clear cards from
+     * @returns {Promise<boolean>} Success status
+     */
+    async clearUserCards(deviceId, userId) {
+        try {
+            this.logger.info(`[clearUserCards] Clearing all cards from user ${userId} on device ${deviceId}`);
+
+            // Create an empty card list to clear all cards
+            const userCard = new userMessage.UserCard();
+            userCard.setUserid(String(userId));
+            // Don't add any cards - this clears them
+
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+
+            const req = new userMessage.SetCardRequest();
+            req.setDeviceid(numericDeviceId);
+            req.setUsercardsList([userCard]);
+
+            return new Promise((resolve, reject) => {
+                this.userClient.setCard(req, (err, response) => {
+                    if (err) {
+                        this.logger.error(`[clearUserCards] FAILED for user ${userId} on device ${deviceId}:`, err);
+                        reject(err);
+                        return;
+                    }
+
+                    this.logger.info(`[clearUserCards] Successfully cleared cards from user ${userId}`);
+                    resolve(true);
+                });
+            });
+        } catch (error) {
+            this.logger.error('Error clearing user cards:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Remove duplicate card assignment before setting new card
+     * If the card is already assigned to another user, clear it first
+     * @param {string|number} deviceId - Device ID
+     * @param {string} cardHex - Card data in hex format
+     * @param {string} newUserId - The user ID that will receive this card
+     * @returns {Promise<void>}
+     */
+    async removeDuplicateCardAssignment(deviceId, cardHex, newUserId) {
+        try {
+            const existingUserId = await this.findUserWithCard(deviceId, cardHex);
+            
+            if (existingUserId && existingUserId !== String(newUserId)) {
+                this.logger.info(`[removeDuplicateCardAssignment] Card ${cardHex} is assigned to user ${existingUserId}, clearing before reassignment to ${newUserId}`);
+                await this.clearUserCards(deviceId, existingUserId);
+                this.logger.info(`[removeDuplicateCardAssignment] Successfully cleared card from user ${existingUserId}`);
+            } else if (existingUserId === String(newUserId)) {
+                this.logger.info(`[removeDuplicateCardAssignment] Card is already assigned to the target user ${newUserId}`);
+            } else {
+                this.logger.info(`[removeDuplicateCardAssignment] Card ${cardHex} is not currently assigned to any user`);
+            }
+        } catch (error) {
+            this.logger.error('Error removing duplicate card assignment:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Enroll new users to device
      * @param {string} deviceId - Device ID
      * @param {Array} users - Array of user objects
@@ -475,6 +650,26 @@ class SupremaUserService extends EventEmitter {
         this.logger.info(`[setUserCards] INPUT card data: ${JSON.stringify(userCardData, null, 2)}`);
 
         try {
+            // STEP 1: Remove any existing duplicate card assignments
+            for (const data of userCardData) {
+                let cardHex = '';
+                if (data.cardData) {
+                    if (typeof data.cardData === 'string') {
+                        cardHex = data.cardData.toUpperCase();
+                    } else if (Buffer.isBuffer(data.cardData)) {
+                        cardHex = data.cardData.toString('hex').toUpperCase();
+                    } else if (data.cardData.data) {
+                        cardHex = Buffer.from(data.cardData.data).toString('hex').toUpperCase();
+                    }
+                }
+                
+                if (cardHex) {
+                    this.logger.info(`[setUserCards] Checking for duplicate card assignment: ${cardHex}`);
+                    await this.removeDuplicateCardAssignment(deviceId, cardHex, data.userId);
+                }
+            }
+
+            // STEP 2: Build the card data protobuf messages
             const userCards = userCardData.map(data => {
                 const userCard = new userMessage.UserCard();
                 
