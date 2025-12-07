@@ -622,7 +622,7 @@ export default function Enrollment() {
                       <td><code className="card-number">{decodeHexToDecimal(ca.cardData)}</code></td>
                       <td>{ca.cardType}</td>
                       <td>{getStatusBadge(ca.status)}</td>
-                      <td>{new Date(ca.assignedAt).toLocaleDateString()}</td>
+                      <td>{new Date(ca.assignedAt).toLocaleDateString('en-EG', { timeZone: 'Africa/Cairo' })}</td>
                       <td>
                         {ca.enrollments?.filter(e => e.status === 'active').length || 0} devices
                       </td>

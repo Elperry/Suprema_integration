@@ -204,7 +204,16 @@ export default function Settings() {
 
   const formatLastSync = (timestamp) => {
     if (!timestamp) return 'Never';
-    return new Date(timestamp).toLocaleString();
+    return new Date(timestamp).toLocaleString('en-EG', {
+      timeZone: 'Africa/Cairo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
   };
 
   const getSyncStatusIcon = (status) => {
@@ -287,7 +296,7 @@ export default function Settings() {
           </div>
           <div className="info-item">
             <span className="label">Last Health Check:</span>
-            <span className="value">{healthData?.timestamp ? new Date(healthData.timestamp).toLocaleString() : 'N/A'}</span>
+            <span className="value">{healthData?.timestamp ? new Date(healthData.timestamp).toLocaleString('en-EG', { timeZone: 'Africa/Cairo', hour12: false }) : 'N/A'}</span>
           </div>
         </div>
       </div>

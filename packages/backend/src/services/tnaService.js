@@ -361,7 +361,7 @@ class SupremaTNAService extends EventEmitter {
     // ================ T&A EVENT PROCESSING ================
 
     /**
-     * Enhance T&A event with additional information
+     * Enhance T&A event with additional fields
      * @param {Object} event - Raw T&A event
      * @param {string} deviceId - Device ID
      * @returns {Object} Enhanced T&A event
@@ -369,7 +369,7 @@ class SupremaTNAService extends EventEmitter {
     enhanceTNAEvent(event, deviceId) {
         const enhanced = { ...event };
         
-        // Add readable timestamp
+        // Add readable timestamp (UTC from device)
         enhanced.timestamp = new Date(event.datetime * 1000).toISOString();
         enhanced.dateString = moment(event.datetime * 1000).format('YYYY-MM-DD');
         enhanced.timeString = moment(event.datetime * 1000).format('HH:mm:ss');

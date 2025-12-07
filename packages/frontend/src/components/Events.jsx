@@ -279,7 +279,19 @@ export default function Events() {
   const formatTimestamp = (timestamp) => {
     if (!timestamp) return 'N/A'
     try {
-      return new Date(timestamp).toLocaleString()
+      const date = new Date(timestamp)
+      // Format in Egypt timezone (Africa/Cairo = UTC+2)
+      // Using en-GB format for DD/MM/YYYY, HH:mm:ss display
+      return date.toLocaleString('en-GB', { 
+        timeZone: 'Africa/Cairo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      })
     } catch {
       return 'Invalid Date'
     }

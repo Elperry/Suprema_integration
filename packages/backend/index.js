@@ -20,6 +20,7 @@ import SupremaEventService from './src/services/eventService.js';
 import SupremaDoorService from './src/services/doorService.js';
 import SupremaTNAService from './src/services/tnaService.js';
 import SupremaBiometricService from './src/services/biometricService.js';
+import SupremaTimeService from './src/services/timeService.js';
 import SyncService from './src/services/syncService.js';
 
 // Import database
@@ -38,6 +39,7 @@ import employeeRoutes from './src/routes/employeeRoutes.js';
 import cardRoutes from './src/routes/cardRoutes.js';
 import enrollmentRoutes from './src/routes/enrollmentRoutes.js';
 import locationRoutes from './src/routes/locationRoutes.js';
+import timeRoutes from './src/routes/timeRoutes.js';
 
 // Import enrollment service
 import EnrollmentService from './src/services/enrollmentService.js';
@@ -135,6 +137,7 @@ class SupremaHRIntegrationApp {
             this.services.door = new SupremaDoorService(this.services.connection, this.database);
             this.services.tna = new SupremaTNAService(this.services.connection, this.services.event, this.database);
             this.services.biometric = new SupremaBiometricService(this.services.connection, this.database);
+            this.services.time = new SupremaTimeService(this.services.connection, this.database);
             
             // Card service is provided by biometricService (scanCard, getBlacklist, etc.)
             // This creates a unified interface for card operations via /api/cards routes
@@ -153,6 +156,9 @@ class SupremaHRIntegrationApp {
                 this.services.biometric,
                 this.services.connection
             );
+
+            // Sync time and timezone for all connected devices on startup
+            await this.syncDeviceTime();
 
             // Setup event listeners for HR integration
             this.setupHREventListeners();
@@ -242,6 +248,7 @@ class SupremaHRIntegrationApp {
                         door: !!this.services.door,
                         tna: !!this.services.tna,
                         biometric: !!this.services.biometric,
+                        time: !!this.services.time,
                         sync: !!this.services.sync,
                         enrollment: !!this.services.enrollment
                     }
@@ -271,6 +278,7 @@ class SupremaHRIntegrationApp {
         this.app.use('/api/cards', cardRoutes(this.services));
         this.app.use('/api/enrollment', enrollmentRoutes(this.services));
         this.app.use('/api/locations', locationRoutes({ ...this.services, database: this.database }));
+        this.app.use('/api/time', timeRoutes(this.services));
 
         // API documentation
         this.app.get('/api', (req, res) => {
@@ -289,7 +297,8 @@ class SupremaHRIntegrationApp {
                     gateEvents: '/api/gate-events',
                     employees: '/api/employees',
                     cards: '/api/cards',
-                    enrollment: '/api/enrollment'
+                    enrollment: '/api/enrollment',
+                    time: '/api/time'
                 },
                 health: '/health'
             });
@@ -398,6 +407,58 @@ class SupremaHRIntegrationApp {
             };
             this.sendToHRSystem('user_management', hrEvent);
         });
+    }
+
+    /**
+     * Sync time and timezone for all connected devices
+     * Called on backend startup to ensure all devices have correct time
+     */
+    async syncDeviceTime() {
+        try {
+            if (!this.services.time) {
+                this.logger.warn('Time service not available for device time sync');
+                return;
+            }
+
+            // Check if time sync is enabled (default: true)
+            const enableTimeSync = process.env.ENABLE_DEVICE_TIME_SYNC !== 'false';
+            if (!enableTimeSync) {
+                this.logger.info('Device time sync is disabled via ENABLE_DEVICE_TIME_SYNC=false');
+                return;
+            }
+
+            // Determine which timezone to use
+            const useSystemTimezone = process.env.USE_SYSTEM_TIMEZONE === 'true';
+            
+            this.logger.info('═══════════════════════════════════════════════════════════');
+            this.logger.info('           DEVICE TIME SYNCHRONIZATION                     ');
+            this.logger.info('═══════════════════════════════════════════════════════════');
+
+            let result;
+            if (useSystemTimezone) {
+                this.logger.info('Using system timezone for device sync');
+                result = await this.services.time.syncWithSystemTimezone();
+            } else {
+                // Use configured timezone offset or default (0 = UTC)
+                const timezoneOffset = parseInt(process.env.DEVICE_TIMEZONE_OFFSET) || 0;
+                this.logger.info(`Using configured timezone offset: ${timezoneOffset}s (${timezoneOffset / 3600}h)`);
+                result = await this.services.time.syncAllDevices(timezoneOffset);
+            }
+
+            if (result.success) {
+                this.logger.info(`✓ Time sync completed: ${result.devicesCount} devices synchronized`);
+                this.logger.info(`  Server time: ${result.serverTime}`);
+                this.logger.info(`  Timezone: ${result.timezone.description}`);
+            } else {
+                this.logger.warn('Time sync completed with some errors:', result);
+            }
+
+            this.logger.info('═══════════════════════════════════════════════════════════');
+
+        } catch (error) {
+            // Don't fail startup if time sync fails, just log the error
+            this.logger.error('Failed to sync device time (non-fatal):', error.message);
+        }
     }
 
     /**
