@@ -685,7 +685,8 @@ class SupremaUserService extends EventEmitter {
 
                 // Set card data from the provided data
                 if (data.cardData) {
-                    // If cardData is a string (card number), convert to bytes
+                    let cardBuffer;
+                    // If cardData is a string (hex card number), convert to bytes
                     if (typeof data.cardData === 'string') {
                         cardHex = data.cardData;
                         const cardBuffer = Buffer.from(data.cardData, 'hex');
@@ -703,6 +704,19 @@ class SupremaUserService extends EventEmitter {
                         bufferLength = cardBuffer.length;
                         csnCardData.setData(cardBuffer);
                     }
+                    
+                    if (cardBuffer && cardBuffer.length > 0) {
+                        csnCardData.setData(cardBuffer);
+                        // Set size based on actual data length
+                        csnCardData.setSize(cardBuffer.length);
+                        this.logger.info(`CSN card data set: size=${cardBuffer.length}, hex=${cardBuffer.toString('hex')}`);
+                    } else {
+                        this.logger.error('Card buffer is empty or invalid!');
+                        throw new Error('Invalid card data: buffer is empty');
+                    }
+                } else {
+                    this.logger.error('No card data provided!');
+                    throw new Error('No card data provided');
                 }
                 
                 // Set card type and size if provided
