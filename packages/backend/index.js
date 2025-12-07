@@ -136,6 +136,10 @@ class SupremaHRIntegrationApp {
             this.services.tna = new SupremaTNAService(this.services.connection, this.services.event, this.database);
             this.services.biometric = new SupremaBiometricService(this.services.connection, this.database);
             
+            // Card service is provided by biometricService (scanCard, getBlacklist, etc.)
+            // This creates a unified interface for card operations via /api/cards routes
+            this.services.card = this.services.biometric;
+            
             // Expose database on the shared services object so route factories
             // and other modules can access the DatabaseManager via services.database
             this.services.database = this.database;

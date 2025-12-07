@@ -80,7 +80,27 @@ export default (services) => {
                 userIds: employeeIds ? employeeIds.split(',') : null
             };
 
-            const attendanceData = await services.tna.getFilteredTNALogs(deviceId, filters);
+            // Add timeout to prevent indefinite hangs (15 second limit)
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Attendance data request timed out after 15 seconds')), 15000)
+            );
+
+            let attendanceData;
+            try {
+                attendanceData = await Promise.race([
+                    services.tna.getFilteredTNALogs(deviceId, filters),
+                    timeoutPromise
+                ]);
+            } catch (timeoutErr) {
+                // Return empty data on timeout
+                return res.json({
+                    success: true,
+                    data: [],
+                    total: 0,
+                    filters,
+                    note: timeoutErr.message
+                });
+            }
 
             // Transform to HR-friendly format
             const hrAttendanceData = attendanceData.map(event => ({
@@ -215,7 +235,27 @@ export default (services) => {
             }
 
             filters.eventCodes = eventCodes;
-            const events = await services.event.getFilteredEventLogs(deviceId, filters);
+            
+            // Add timeout to prevent indefinite hangs (15 second limit)
+            const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Access events request timed out after 15 seconds')), 15000)
+            );
+
+            let events;
+            try {
+                events = await Promise.race([
+                    services.event.getFilteredEventLogs(deviceId, filters),
+                    timeoutPromise
+                ]);
+            } catch (timeoutErr) {
+                return res.json({
+                    success: true,
+                    data: [],
+                    total: 0,
+                    filters,
+                    note: timeoutErr.message
+                });
+            }
 
             // Transform to HR-friendly format
             const hrAccessEvents = events.map(event => ({
@@ -311,12 +351,29 @@ export default (services) => {
     });
 
     /**
+     * Helper function to wrap async operations with timeout
+     * @param {Promise} promise - The promise to wrap
+     * @param {number} timeoutMs - Timeout in milliseconds
+     * @param {string} operation - Description of the operation (for error message)
+     * @returns {Promise} The result or timeout error
+     */
+    const withTimeout = (promise, timeoutMs, operation) => {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => 
+                setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
+            )
+        ]);
+    };
+
+    /**
      * Bulk enroll employee biometrics
      * POST /api/hr/employees/biometric-enrollment
      */
     router.post('/employees/biometric-enrollment', async (req, res) => {
         try {
             const { deviceId, enrollments } = req.body;
+            const timeout = req.body.timeout || 30000; // Default 30 second timeout per enrollment
 
             if (!deviceId || !enrollments || !Array.isArray(enrollments)) {
                 return res.status(400).json({
@@ -334,9 +391,10 @@ export default (services) => {
                 try {
                     const { employeeId, biometricType, data } = enrollment;
 
+                    let enrollmentPromise;
                     switch (biometricType) {
                         case 'fingerprint':
-                            await services.user.setUserFingerprints(deviceId, [{
+                            enrollmentPromise = services.user.setUserFingerprints(deviceId, [{
                                 userId: employeeId,
                                 templates: data.templates,
                                 fingerIndex: data.fingerIndex || 0
@@ -344,7 +402,7 @@ export default (services) => {
                             break;
 
                         case 'card':
-                            await services.user.setUserCards(deviceId, [{
+                            enrollmentPromise = services.user.setUserCards(deviceId, [{
                                 userId: employeeId,
                                 cardData: data.cardData,
                                 cardIndex: data.cardIndex || 0
@@ -352,7 +410,7 @@ export default (services) => {
                             break;
 
                         case 'face':
-                            await services.user.setUserFaces(deviceId, [{
+                            enrollmentPromise = services.user.setUserFaces(deviceId, [{
                                 userId: employeeId,
                                 faceData: data.faceData,
                                 faceIndex: data.faceIndex || 0
@@ -362,6 +420,13 @@ export default (services) => {
                         default:
                             throw new Error(`Unsupported biometric type: ${biometricType}`);
                     }
+
+                    // Wrap with timeout
+                    await withTimeout(
+                        enrollmentPromise, 
+                        timeout, 
+                        `${biometricType} enrollment for ${employeeId}`
+                    );
 
                     results.successful.push({
                         employeeId,
@@ -398,22 +463,37 @@ export default (services) => {
      */
     router.get('/system-status', async (req, res) => {
         try {
-            const devices = await services.connection.getConnectedDevices();
-            const connectionStats = services.connection.getConnectionStats();
-            const eventStatus = services.event.getMonitoringStatus();
+            let devices = [];
+            let connectionStats = { gatewayConnected: false, connectedDeviceCount: 0 };
+            let eventStatus = { isMonitoring: false, monitoredDevices: [] };
+
+            // Safely get connection info
+            try {
+                devices = await services.connection.getConnectedDevices();
+                connectionStats = services.connection.getConnectionStats();
+            } catch (connErr) {
+                console.warn('Failed to get connection info:', connErr.message);
+            }
+
+            // Safely get event status
+            try {
+                eventStatus = services.event.getMonitoringStatus();
+            } catch (eventErr) {
+                console.warn('Failed to get event status:', eventErr.message);
+            }
 
             const systemStatus = {
-                overall: 'healthy',
+                overall: connectionStats.gatewayConnected ? 'healthy' : 'degraded',
                 timestamp: new Date().toISOString(),
                 gateway: {
                     connected: connectionStats.gatewayConnected,
-                    address: `${process.env.GATEWAY_IP}:${process.env.GATEWAY_PORT}`
+                    address: `${process.env.GATEWAY_IP || 'N/A'}:${process.env.GATEWAY_PORT || 'N/A'}`
                 },
                 devices: {
                     total: devices.length,
                     connected: connectionStats.connectedDeviceCount,
                     list: devices.map(device => ({
-                        id: device.id,
+                        id: device.id || device.deviceid,
                         ip: device.ipaddr,
                         port: device.port,
                         status: device.status || 'connected'
@@ -421,7 +501,7 @@ export default (services) => {
                 },
                 monitoring: {
                     enabled: eventStatus.isMonitoring,
-                    monitoredDevices: eventStatus.monitoredDevices.length
+                    monitoredDevices: eventStatus.monitoredDevices?.length || 0
                 },
                 services: {
                     connection: !!services.connection,

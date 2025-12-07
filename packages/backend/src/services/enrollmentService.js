@@ -346,7 +346,6 @@ class EnrollmentService {
                     employeeId: String(employeeId),
                     employeeName: employeeName || null,
                     cardData: String(cardData),
-                    cardSize: cardSize || 0,
                     cardType: cardType || 'CSN',
                     cardFormat: cardFormat || 0,
                     notes: notes || null
@@ -454,7 +453,7 @@ class EnrollmentService {
                 throw new Error('Cannot enroll inactive card assignment');
             }
 
-            // Check if already enrolled on this device
+            // Check if already enrolled on this device (by card assignment)
             const existingEnrollment = await prisma.deviceEnrollment.findUnique({
                 where: {
                     deviceId_cardAssignmentId: {
@@ -467,6 +466,15 @@ class EnrollmentService {
             if (existingEnrollment && existingEnrollment.status === 'active') {
                 throw new Error('Already enrolled on this device');
             }
+
+            // Also check if this user (by deviceUserId/employeeId) already has enrollment on this device
+            // This handles the case where employee has a new card but already exists on device
+            const existingUserEnrollment = await prisma.deviceEnrollment.findFirst({
+                where: {
+                    deviceId,
+                    deviceUserId: assignment.employeeId
+                }
+            });
 
             // Get Suprema device ID
             const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
@@ -486,12 +494,16 @@ class EnrollmentService {
                 numOfCard: 0  // Start with 0 cards, add card separately
             };
 
-            // Enroll user on device first (creates the user without cards)
-            await this.userService.enrollUsers(supremaDeviceId, [userData]);
+            // Only create user on device if they don't already exist
+            if (!existingUserEnrollment) {
+                // Enroll user on device first (creates the user without cards)
+                await this.userService.enrollUsers(supremaDeviceId, [userData]);
+                this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
+            } else {
+                this.logger.info(`User ${deviceUserId} already exists on device, updating card...`);
+            }
 
-            this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
-
-            // Then set the card for the user
+            // Then set the card for the user (this updates/replaces existing card)
             const cardData = [{
                 userId: deviceUserId,
                 // Normalize stored card hex string and provide size (bytes)
@@ -512,9 +524,12 @@ class EnrollmentService {
             
             this.logger.info(`Successfully enrolled user ${deviceUserId} with card on device ${supremaDeviceId}`);
 
-            // Create or update enrollment record
-            const enrollment = existingEnrollment
-                ? await prisma.deviceEnrollment.update({
+            // Determine which enrollment record to update/create
+            let enrollment;
+            
+            if (existingEnrollment) {
+                // Update existing enrollment for this assignment
+                enrollment = await prisma.deviceEnrollment.update({
                     where: { id: existingEnrollment.id },
                     data: {
                         status: 'active',
@@ -522,8 +537,23 @@ class EnrollmentService {
                         lastSyncAt: new Date()
                     },
                     include: { device: true, cardAssignment: true }
-                })
-                : await prisma.deviceEnrollment.create({
+                });
+            } else if (existingUserEnrollment) {
+                // User already on device with different assignment - update to new assignment
+                enrollment = await prisma.deviceEnrollment.update({
+                    where: { id: existingUserEnrollment.id },
+                    data: {
+                        cardAssignmentId: assignmentId,
+                        status: 'active',
+                        enrolledAt: new Date(),
+                        lastSyncAt: new Date()
+                    },
+                    include: { device: true, cardAssignment: true }
+                });
+                this.logger.info(`Updated enrollment ${existingUserEnrollment.id} to use new card assignment ${assignmentId}`);
+            } else {
+                // Create new enrollment
+                enrollment = await prisma.deviceEnrollment.create({
                     data: {
                         deviceId,
                         cardAssignmentId: assignmentId,
@@ -532,6 +562,7 @@ class EnrollmentService {
                     },
                     include: { device: true, cardAssignment: true }
                 });
+            }
 
             this.logger.info(`Enrolled assignment ${assignmentId} on device ${deviceId}`);
             return enrollment;

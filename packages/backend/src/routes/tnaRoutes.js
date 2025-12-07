@@ -22,12 +22,32 @@ export default (services) => {
                 });
             }
 
-            const config = await services.tna.getTNAConfig(deviceId);
+            try {
+                const config = await services.tna.getTNAConfig(deviceId);
 
-            res.json({
-                success: true,
-                data: config
-            });
+                res.json({
+                    success: true,
+                    data: config
+                });
+            } catch (grpcError) {
+                // Handle gRPC parsing errors gracefully
+                if (grpcError.message && grpcError.message.includes('parsing error')) {
+                    console.warn('gRPC parsing error for TNA config, returning defaults:', grpcError.message);
+                    res.json({
+                        success: true,
+                        data: {
+                            mode: 0,
+                            key: 0,
+                            isrequired: false,
+                            schedulesList: [],
+                            labelsList: ['In', 'Out', 'Break Out', 'Break In']
+                        },
+                        warning: 'Could not parse device config, returning defaults'
+                    });
+                } else {
+                    throw grpcError;
+                }
+            }
         } catch (error) {
             res.status(500).json({
                 error: 'Internal Server Error',

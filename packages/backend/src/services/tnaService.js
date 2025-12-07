@@ -86,9 +86,36 @@ class SupremaTNAService extends EventEmitter {
                         return;
                     }
 
-                    const config = response.toObject().config;
-                    this.logger.info(`Retrieved T&A config from device ${deviceId}`);
-                    resolve(config);
+                    try {
+                        // Try to get config with toObject()
+                        const config = response.toObject().config;
+                        this.logger.info(`Retrieved T&A config from device ${deviceId}`);
+                        resolve(config);
+                    } catch (parseError) {
+                        // If parsing fails, manually extract what we can
+                        this.logger.warn(`Failed to parse T&A config response, using fallback: ${parseError.message}`);
+                        try {
+                            const config = response.getConfig();
+                            const fallbackConfig = {
+                                mode: config ? config.getMode() : 0,
+                                key: config ? config.getKey() : 0,
+                                isrequired: config ? config.getIsrequired() : false,
+                                schedulesList: [],
+                                labelsList: config ? config.getLabelsList() : []
+                            };
+                            resolve(fallbackConfig);
+                        } catch (fallbackError) {
+                            this.logger.error(`Fallback parsing also failed: ${fallbackError.message}`);
+                            // Return default config if all parsing fails
+                            resolve({
+                                mode: 0,
+                                key: 0,
+                                isrequired: false,
+                                schedulesList: [],
+                                labelsList: ['In', 'Out', 'Break Out', 'Break In']
+                            });
+                        }
+                    }
                 });
             });
         } catch (error) {
@@ -244,11 +271,17 @@ class SupremaTNAService extends EventEmitter {
                         return;
                     }
 
-                    const events = response.toObject().eventsList;
-                    const enhancedEvents = events.map(event => this.enhanceTNAEvent(event, deviceId));
-                    
-                    this.logger.info(`Retrieved ${enhancedEvents.length} T&A events from device ${deviceId}`);
-                    resolve(enhancedEvents);
+                    try {
+                        const events = response.toObject().eventsList;
+                        const enhancedEvents = events.map(event => this.enhanceTNAEvent(event, deviceId));
+                        
+                        this.logger.info(`Retrieved ${enhancedEvents.length} T&A events from device ${deviceId}`);
+                        resolve(enhancedEvents);
+                    } catch (parseError) {
+                        this.logger.warn(`Failed to parse T&A logs response: ${parseError.message}`);
+                        // Return empty array if parsing fails
+                        resolve([]);
+                    }
                 });
             });
         } catch (error) {
@@ -748,6 +781,118 @@ class SupremaTNAService extends EventEmitter {
         }
 
         return result;
+    }
+
+    /**
+     * Get attendance summary for a user or all users
+     * @param {string} deviceId - Device ID
+     * @param {Object} options - Summary options
+     * @returns {Promise<Object>} Attendance summary
+     */
+    async getAttendanceSummary(deviceId, options = {}) {
+        try {
+            const { userId, period = 'today', startDate, endDate } = options;
+
+            // Determine date range based on period
+            let start, end;
+            const now = new Date();
+            
+            switch (period) {
+                case 'today':
+                    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+                    break;
+                case 'week':
+                    const weekStart = new Date(now);
+                    weekStart.setDate(now.getDate() - now.getDay());
+                    start = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
+                    end = now;
+                    break;
+                case 'month':
+                    start = new Date(now.getFullYear(), now.getMonth(), 1);
+                    end = now;
+                    break;
+                case 'custom':
+                    start = startDate ? new Date(startDate) : new Date(now.getFullYear(), now.getMonth(), 1);
+                    end = endDate ? new Date(endDate) : now;
+                    break;
+                default:
+                    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    end = now;
+            }
+
+            // Get T&A logs for the period
+            const logs = await this.getFilteredTNALogs(deviceId, {
+                userIds: userId ? [userId] : null,
+                startDate: start.toISOString(),
+                endDate: end.toISOString()
+            });
+
+            // Calculate summary
+            const summary = {
+                period: {
+                    type: period,
+                    start: start.toISOString(),
+                    end: end.toISOString()
+                },
+                totalEvents: logs.length,
+                byUser: {},
+                byDay: {},
+                byEventType: {
+                    in: 0,
+                    out: 0,
+                    breakOut: 0,
+                    breakIn: 0,
+                    other: 0
+                }
+            };
+
+            // Process logs
+            for (const log of logs) {
+                const logUserId = log.userid || log.userId;
+                const logDate = log.dateString || new Date(log.datetime * 1000).toISOString().split('T')[0];
+                
+                // Group by user
+                if (!summary.byUser[logUserId]) {
+                    summary.byUser[logUserId] = { events: 0, firstIn: null, lastOut: null };
+                }
+                summary.byUser[logUserId].events++;
+                
+                // Group by day
+                if (!summary.byDay[logDate]) {
+                    summary.byDay[logDate] = { events: 0, users: new Set() };
+                }
+                summary.byDay[logDate].events++;
+                summary.byDay[logDate].users.add(logUserId);
+
+                // Count by event type
+                const eventLabel = (log.tnaLabel || log.eventType || '').toLowerCase();
+                if (eventLabel.includes('in') && !eventLabel.includes('break')) {
+                    summary.byEventType.in++;
+                } else if (eventLabel.includes('out') && !eventLabel.includes('break')) {
+                    summary.byEventType.out++;
+                } else if (eventLabel.includes('break') && eventLabel.includes('out')) {
+                    summary.byEventType.breakOut++;
+                } else if (eventLabel.includes('break') && eventLabel.includes('in')) {
+                    summary.byEventType.breakIn++;
+                } else {
+                    summary.byEventType.other++;
+                }
+            }
+
+            // Convert Sets to counts for JSON serialization
+            for (const day of Object.keys(summary.byDay)) {
+                summary.byDay[day].uniqueUsers = summary.byDay[day].users.size;
+                delete summary.byDay[day].users;
+            }
+
+            this.logger.info(`Generated attendance summary for device ${deviceId}: ${logs.length} events`);
+            return summary;
+
+        } catch (error) {
+            this.logger.error('Error getting attendance summary:', error);
+            throw error;
+        }
     }
 }
 

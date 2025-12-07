@@ -52,18 +52,33 @@ const decodeHexCardData = (hexData) => {
   try {
     if (!hexData) return { hex: '', decimal: '0' }
     
-    // Remove any spaces and ensure uppercase
-    let cleanHex = hexData.replace(/\s/g, '').toUpperCase()
+    // Convert to string if not already
+    const hexString = String(hexData)
+    
+    // Remove any spaces, newlines, and non-hex characters
+    let cleanHex = hexString.replace(/[^0-9A-Fa-f]/g, '').toUpperCase()
+    
+    // Return early if empty after cleaning
+    if (!cleanHex || cleanHex.length === 0) {
+      return { hex: '', decimal: '0' }
+    }
     
     // Pad to even length if needed
     if (cleanHex.length % 2 === 1) {
       cleanHex = '0' + cleanHex
     }
     
-    // Strip leading zeros but keep at least 2 chars
-    let significant = cleanHex.replace(/^0+/, '') || '0'
-    if (significant.length % 2 === 1) {
-      significant = '0' + significant
+    // Strip leading zeros but keep at least one character
+    let significant = cleanHex.replace(/^0+/, '')
+    
+    // If all zeros or empty, return '0'
+    if (!significant || significant.length === 0) {
+      return { hex: cleanHex, decimal: '0' }
+    }
+    
+    // Ensure we have valid hex before BigInt conversion
+    if (!/^[0-9A-Fa-f]+$/.test(significant)) {
+      return { hex: cleanHex, decimal: 'Invalid' }
     }
     
     // Convert to decimal using BigInt for large numbers
@@ -75,7 +90,7 @@ const decodeHexCardData = (hexData) => {
     }
   } catch (e) {
     console.error('Failed to decode hex card data:', e)
-    return { hex: hexData || '', decimal: 'Error' }
+    return { hex: String(hexData || ''), decimal: 'Error' }
   }
 }
 
