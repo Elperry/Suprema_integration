@@ -118,22 +118,46 @@ class SupremaUserService extends EventEmitter {
             // Convert deviceId to number if it's a string
             const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
             
-            const req = new userMessage.GetRequest();
-            req.setDeviceid(numericDeviceId);
-            req.setUseridsList(userIds || []);
+            // If no userIds provided or empty array, return empty
+            if (!userIds || userIds.length === 0) {
+                return [];
+            }
+            
+            // Batch requests to avoid protobuf parsing errors with large responses
+            const BATCH_SIZE = 50;  // Safe batch size for user details
+            const allUsers = [];
+            
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                this.logger.info(`[getUsers] Fetching batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(userIds.length/BATCH_SIZE)} (${batchIds.length} users)`);
+                
+                try {
+                    const req = new userMessage.GetRequest();
+                    req.setDeviceid(numericDeviceId);
+                    req.setUseridsList(batchIds);
 
-            return new Promise((resolve, reject) => {
-                this.userClient.get(req, (err, response) => {
-                    if (err) {
-                        this.logger.error(`Failed to get users for device ${deviceId}:`, err);
-                        reject(err);
-                        return;
-                    }
+                    const batchUsers = await new Promise((resolve, reject) => {
+                        this.userClient.get(req, (err, response) => {
+                            if (err) {
+                                this.logger.error(`Failed to get users batch for device ${deviceId}:`, err);
+                                reject(err);
+                                return;
+                            }
 
-                    const users = response.toObject().usersList;
-                    resolve(users);
-                });
-            });
+                            const users = response.toObject().usersList;
+                            resolve(users);
+                        });
+                    });
+                    
+                    allUsers.push(...batchUsers);
+                } catch (batchError) {
+                    this.logger.warn(`[getUsers] Batch ${Math.floor(i/BATCH_SIZE) + 1} failed: ${batchError.message}`);
+                    // Continue with next batch instead of failing entirely
+                }
+            }
+            
+            this.logger.info(`[getUsers] Retrieved ${allUsers.length} users from device ${deviceId}`);
+            return allUsers;
         } catch (error) {
             this.logger.error('Error getting users:', error);
             throw error;
@@ -151,22 +175,43 @@ class SupremaUserService extends EventEmitter {
         try {
             const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
             
-            const req = new userMessage.GetCardRequest();
-            req.setDeviceid(numericDeviceId);
-            req.setUseridsList(userIds || []);
+            // If no userIds provided or empty array, return empty
+            if (!userIds || userIds.length === 0) {
+                return [];
+            }
+            
+            // Batch requests to avoid protobuf parsing errors with large responses
+            const BATCH_SIZE = 100;  // Cards are smaller, can use larger batch
+            const allCards = [];
+            
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                
+                try {
+                    const req = new userMessage.GetCardRequest();
+                    req.setDeviceid(numericDeviceId);
+                    req.setUseridsList(batchIds);
 
-            return new Promise((resolve, reject) => {
-                this.userClient.getCard(req, (err, response) => {
-                    if (err) {
-                        this.logger.error(`Failed to get cards for device ${deviceId}:`, err);
-                        reject(err);
-                        return;
-                    }
+                    const batchCards = await new Promise((resolve, reject) => {
+                        this.userClient.getCard(req, (err, response) => {
+                            if (err) {
+                                reject(err);
+                                return;
+                            }
 
-                    const userCards = response.toObject().usercardsList;
-                    resolve(userCards);
-                });
-            });
+                            const userCards = response.toObject().usercardsList;
+                            resolve(userCards);
+                        });
+                    });
+                    
+                    allCards.push(...batchCards);
+                } catch (batchError) {
+                    this.logger.warn(`[getCards] Batch failed: ${batchError.message}`);
+                    // Continue with next batch
+                }
+            }
+            
+            return allCards;
         } catch (error) {
             this.logger.error('Error getting user cards:', error);
             throw error;
@@ -1209,6 +1254,60 @@ class SupremaUserService extends EventEmitter {
             return stats;
         } catch (error) {
             this.logger.error('Error getting user statistics:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Sync users from all connected devices
+     * @returns {Promise<Object>} Sync results per device
+     */
+    async syncAllDevicesUsers() {
+        try {
+            const results = [];
+            
+            // Get all connected devices from connection service
+            const connectedDevices = await this.connectionService.getConnectedDevices();
+            
+            if (!connectedDevices || connectedDevices.length === 0) {
+                this.logger.warn('No connected devices found for sync');
+                return { success: true, message: 'No connected devices', results: [] };
+            }
+
+            this.logger.info(`Syncing users from ${connectedDevices.length} devices`);
+
+            for (const device of connectedDevices) {
+                const deviceInfo = device.toObject ? device.toObject() : device;
+                const deviceId = deviceInfo.deviceid;
+                
+                try {
+                    const userHeaders = await this.getUserList(deviceId);
+                    
+                    results.push({
+                        deviceId: deviceId,
+                        success: true,
+                        userCount: userHeaders.length,
+                        usersWithCards: userHeaders.filter(u => u.numofcard > 0).length
+                    });
+                    
+                    this.logger.info(`Synced ${userHeaders.length} users from device ${deviceId}`);
+                } catch (deviceError) {
+                    this.logger.error(`Failed to sync users from device ${deviceId}:`, deviceError.message);
+                    results.push({
+                        deviceId: deviceId,
+                        success: false,
+                        error: deviceError.message
+                    });
+                }
+            }
+
+            return {
+                success: true,
+                totalDevices: connectedDevices.length,
+                results: results
+            };
+        } catch (error) {
+            this.logger.error('Error syncing all devices users:', error);
             throw error;
         }
     }

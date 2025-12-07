@@ -37,8 +37,33 @@ export default (services) => {
     };
 
     /**
+     * Sync users from all devices
+     * POST /api/users/sync-all
+     * NOTE: This route must be defined BEFORE /:deviceId routes to avoid matching "sync-all" as a deviceId
+     */
+    router.post('/sync-all', async (req, res) => {
+        try {
+            const results = await services.user.syncAllDevicesUsers();
+
+            res.json({
+                success: true,
+                message: 'All devices users synchronized',
+                results: results
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
      * Get all users from device
      * GET /api/users/:deviceId
+     * 
+     * Uses user headers + cards approach to avoid protobuf parsing errors
+     * that occur when fetching full user details with biometric data
      */
     router.get('/:deviceId', async (req, res) => {
         try {
@@ -47,8 +72,56 @@ export default (services) => {
             const userHeaders = await services.user.getUserList(supremaDeviceId);
             
             if (req.query.detailed === 'true' && userHeaders.length > 0) {
-                const userIds = userHeaders.map(header => header.id);
-                const detailedUsers = await services.user.getUsers(supremaDeviceId, userIds);
+                // Get user IDs that have cards
+                const userIdsWithCards = userHeaders
+                    .filter(h => h.numofcard > 0)
+                    .map(h => h.id);
+                
+                // Fetch cards separately (this is safer and more efficient)
+                let userCards = [];
+                if (userIdsWithCards.length > 0) {
+                    try {
+                        userCards = await services.user.getCards(supremaDeviceId, userIdsWithCards);
+                        console.log(`[getUsers] Got ${userCards.length} user card records`);
+                    } catch (cardError) {
+                        console.warn('Failed to fetch cards:', cardError.message);
+                    }
+                }
+                
+                // Create a map of userId -> cards for quick lookup
+                // Note: protobuf toObject() uses lowercase field names
+                const cardMap = new Map();
+                for (const uc of userCards) {
+                    // Handle both string and number user IDs
+                    const userId = String(uc.userid);
+                    const cards = uc.cardslist || uc.cardsList || [];
+                    cardMap.set(userId, cards);
+                }
+                
+                console.log(`[getUsers] Card map has ${cardMap.size} entries`);
+                
+                // Merge headers with card data
+                // Transform to frontend-expected format with userID at top level
+                const detailedUsers = userHeaders.map(header => {
+                    const cards = cardMap.get(String(header.id)) || [];
+                    return {
+                        userID: header.id,
+                        name: header.name || '',
+                        numOfCard: header.numofcard || 0,
+                        numOfFinger: header.numoffinger || 0,
+                        numOfFace: header.numofface || 0,
+                        cardsList: cards,
+                        // Include card data in a user-friendly format
+                        hasCard: cards.length > 0,
+                        cardData: cards.length > 0 ? cards[0].data : null,
+                        // Keep original header for reference
+                        hdr: header,
+                        fingersList: [],  // Skip biometrics to avoid protobuf errors
+                        facesList: [],
+                        accessgroupidsList: header.accessgroupidsList || []
+                    };
+                });
+                
                 return res.json({
                     success: true,
                     data: detailedUsers,
@@ -56,10 +129,20 @@ export default (services) => {
                 });
             }
 
+            // Transform non-detailed response to include userID for frontend compatibility
+            const transformedHeaders = userHeaders.map(h => ({
+                userID: h.id,
+                name: h.name || '',
+                numOfCard: h.numofcard || 0,
+                numOfFinger: h.numoffinger || 0,
+                numOfFace: h.numofface || 0,
+                hasCard: (h.numofcard || 0) > 0
+            }));
+
             res.json({
                 success: true,
-                data: userHeaders,
-                total: userHeaders.length
+                data: transformedHeaders,
+                total: transformedHeaders.length
             });
         } catch (error) {
             res.status(500).json({
@@ -620,27 +703,6 @@ export default (services) => {
                 message: 'Users synchronized to database',
                 synced: result.synced,
                 deviceId: deviceId
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    });
-
-    /**
-     * Sync users from all devices
-     * POST /api/users/sync-all
-     */
-    router.post('/sync-all', async (req, res) => {
-        try {
-            const results = await services.user.syncAllDevicesUsers();
-
-            res.json({
-                success: true,
-                message: 'All devices users synchronized',
-                results: results
             });
         } catch (error) {
             res.status(500).json({

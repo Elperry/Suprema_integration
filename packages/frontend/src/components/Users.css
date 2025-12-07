@@ -457,3 +457,83 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Card Details Modal */
+.device-cards,
+.db-cards {
+  margin-top: 15px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+.device-cards h4,
+.db-cards h4 {
+  margin: 0 0 12px 0;
+  font-size: 1rem;
+  color: #495057;
+}
+
+.card-item {
+  background: white;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 10px;
+  border: 1px solid #dee2e6;
+}
+
+.card-item:last-child {
+  margin-bottom: 0;
+}
+
+.card-item p {
+  margin: 5px 0;
+}
+
+.card-data-display {
+  display: block;
+  background: #2d3748;
+  color: #68d391;
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-family: 'Monaco', 'Consolas', monospace;
+  font-size: 0.85rem;
+  word-break: break-all;
+  margin: 8px 0;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.card-number-display {
+  background: #e8f5e9;
+  padding: 12px;
+  border-radius: 6px;
+  margin: 10px 0;
+  border: 2px solid #4caf50;
+}
+
+.card-number {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #2e7d32;
+  font-family: 'Monaco', 'Consolas', monospace;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+  text-align: center;
+}
+
+.card-number-full {
+  margin: 5px 0 0 0;
+  color: #666;
+  text-align: center;
+}
+
+.no-cards {
+  color: #6c757d;
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}

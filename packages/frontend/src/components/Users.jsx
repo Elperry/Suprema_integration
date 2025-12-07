@@ -2,6 +2,58 @@ import { useState, useEffect, useCallback } from 'react'
 import { userAPI, deviceAPI, enrollmentAPI } from '../services/api'
 import './Users.css'
 
+/**
+ * Decode Base64 card data and extract card number
+ * Suprema card data is 32 bytes, with the card number in the last few bytes
+ */
+const decodeCardData = (base64Data) => {
+  try {
+    // Decode Base64 to binary
+    const binaryStr = atob(base64Data)
+    const bytes = new Uint8Array(binaryStr.length)
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i)
+    }
+    
+    // Convert to hex string for display
+    const hexStr = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ').toUpperCase()
+    
+    // The card number is typically in the last 4 bytes (big-endian)
+    // For CSN cards, it's often the last non-zero bytes
+    // Find the significant bytes (skip leading zeros)
+    let startIdx = 0
+    while (startIdx < bytes.length && bytes[startIdx] === 0) {
+      startIdx++
+    }
+    
+    // Extract card number from significant bytes (last 4-8 bytes typically)
+    const significantBytes = bytes.slice(Math.max(startIdx, bytes.length - 8))
+    
+    // Calculate decimal value (big-endian)
+    let cardNumber = 0n
+    for (const byte of significantBytes) {
+      cardNumber = (cardNumber << 8n) | BigInt(byte)
+    }
+    
+    // Also calculate a smaller version using just last 4 bytes for common formats
+    const last4Bytes = bytes.slice(-4)
+    let cardNumber32 = 0
+    for (const byte of last4Bytes) {
+      cardNumber32 = (cardNumber32 << 8) | byte
+    }
+    
+    return {
+      hex: hexStr,
+      decimal: cardNumber.toString(),
+      decimal32: cardNumber32,
+      bytes: Array.from(bytes)
+    }
+  } catch (e) {
+    console.error('Failed to decode card data:', e)
+    return { hex: 'Error', decimal: 'Error', decimal32: 0, bytes: [] }
+  }
+}
+
 export default function Users() {
   const [devices, setDevices] = useState([])
   const [selectedDevice, setSelectedDevice] = useState('')
@@ -389,6 +441,9 @@ export default function Users() {
                 <tbody>
                   {filteredUsers.map(u => {
                     const cardAssign = getCardAssignment(u.userID)
+                    // Check if user has card from device data or from database
+                    const hasDeviceCard = u.hasCard || (u.cardsList && u.cardsList.length > 0)
+                    const hasCard = hasDeviceCard || cardAssign
                     return (
                       <tr key={u.userID} className={selectedUsers.includes(u.userID) ? 'selected-row' : ''}>
                         <td>
@@ -403,16 +458,20 @@ export default function Users() {
                         </td>
                         <td>{u.name || 'N/A'}</td>
                         <td>
-                          {cardAssign ? (
-                            <span className="badge badge-success" title={cardAssign.cardData}>
-                              🎫 {cardAssign.cardType || 'Card'}
+                          {hasDeviceCard ? (
+                            <span className="badge badge-success" title={u.cardData || 'Card on device'}>
+                              🎫 Card ({u.numOfCard || 1})
+                            </span>
+                          ) : cardAssign ? (
+                            <span className="badge badge-warning" title={cardAssign.cardData}>
+                              🎫 {cardAssign.cardType || 'DB Only'}
                             </span>
                           ) : (
                             <span className="badge badge-secondary">No Card</span>
                           )}
                         </td>
                         <td className="action-buttons">
-                          {cardAssign && (
+                          {hasCard && (
                             <button 
                               className="btn btn-sm btn-info"
                               onClick={() => handleViewCard(u)}
@@ -478,16 +537,53 @@ export default function Users() {
               <button className="btn-close" onClick={() => setShowCardModal(false)}>×</button>
             </div>
             <div className="modal-body">
-              <p><strong>User:</strong> {selectedUserForCard.name} ({selectedUserForCard.userID})</p>
+              <p><strong>User:</strong> {selectedUserForCard.name || 'N/A'} ({selectedUserForCard.userID})</p>
+              
+              {/* Show cards from device */}
+              {selectedUserForCard.cardsList && selectedUserForCard.cardsList.length > 0 && (
+                <div className="device-cards">
+                  <h4>📱 Cards on Device ({selectedUserForCard.cardsList.length})</h4>
+                  {selectedUserForCard.cardsList.map((card, idx) => {
+                    const decoded = decodeCardData(card.data)
+                    return (
+                      <div key={idx} className="card-item">
+                        <p><strong>Card {idx + 1}:</strong></p>
+                        <p><strong>Type:</strong> {card.type === 1 ? 'CSN' : card.type === 2 ? 'Secure' : card.type === 256 ? 'Wiegand' : `Type ${card.type}`}</p>
+                        <p><strong>Size:</strong> {card.size} bytes</p>
+                        <div className="card-number-display">
+                          <p><strong>Card Number (Decimal):</strong></p>
+                          <code className="card-number">{decoded.decimal32}</code>
+                          {decoded.decimal !== decoded.decimal32.toString() && (
+                            <p className="card-number-full"><small>Full value: {decoded.decimal}</small></p>
+                          )}
+                        </div>
+                        <p><strong>Data (Hex):</strong></p>
+                        <code className="card-data-display">{decoded.hex}</code>
+                        <p><strong>Data (Base64):</strong></p>
+                        <code className="card-data-display">{card.data}</code>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              
+              {/* Show cards from database */}
               {getCardAssignment(selectedUserForCard.userID) && (
-                <>
+                <div className="db-cards">
+                  <h4>💾 Card in Database</h4>
                   <p><strong>Card Type:</strong> {getCardAssignment(selectedUserForCard.userID).cardType}</p>
                   <p><strong>Card Data:</strong></p>
                   <code className="card-data-display">
                     {getCardAssignment(selectedUserForCard.userID).cardData}
                   </code>
                   <p><strong>Status:</strong> {getCardAssignment(selectedUserForCard.userID).status}</p>
-                </>
+                </div>
+              )}
+              
+              {/* No cards found */}
+              {(!selectedUserForCard.cardsList || selectedUserForCard.cardsList.length === 0) && 
+               !getCardAssignment(selectedUserForCard.userID) && (
+                <p className="no-cards">No card data available for this user.</p>
               )}
             </div>
           </div>

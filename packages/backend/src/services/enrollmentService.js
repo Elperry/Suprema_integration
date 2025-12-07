@@ -188,7 +188,6 @@ class EnrollmentService {
         }
 
         // Get the size from the original card data (important for device communication)
-        let size = 0;
         if (csnCardData && csnCardData.size) {
             size = csnCardData.size;
         } else if (csn) {
