@@ -94,6 +94,11 @@ class EnrollmentService {
      * Normalize card data from different sources
      * @param {Object} cardData - Raw card data from device
      * @returns {Object} Normalized card data
+     * 
+     * G-SDK Documentation Notes:
+     * - CSNCardData.size is ALWAYS 32 for CSN cards
+     * - CSNCardData.data contains the full 32-byte card data
+     * - The actual card serial number may be shorter (e.g., 4-8 bytes) and is typically at the end
      */
     normalizeCardData(cardData) {
         // Handle various card data formats from Suprema devices
@@ -103,9 +108,11 @@ class EnrollmentService {
 
         this.logger.info('normalizeCardData input:', JSON.stringify(cardData));
 
-        let csn = '';
+        let csn = '';          // Human-readable CSN (trimmed)
+        let fullData = '';     // Full 32-byte data as hex for device operations
+        let rawBase64 = '';    // Original base64 data from protobuf
         let type = 'CSN';
-        let size = 0;
+        let size = 32;         // G-SDK: Always 32 for CSN cards
 
         // Extract card data from various Suprema protobuf formats
         // CardData.toObject() returns: { type, csncarddata: { type, size, data (base64) }, smartcarddata: {...} }
@@ -116,43 +123,66 @@ class EnrollmentService {
         if (csnCardData) {
             // CSN card format - data is base64 encoded from protobuf toObject()
             type = 'CSN';
-            size = csnCardData.size || 0;
+            size = csnCardData.size || 32;  // Should always be 32 per G-SDK docs
             if (csnCardData.data) {
                 // The data field from protobuf is base64 encoded
                 if (typeof csnCardData.data === 'string' && csnCardData.data.length > 0) {
-                    // Convert base64 to hex for consistent storage
+                    rawBase64 = csnCardData.data;  // Preserve raw base64 for device operations
                     try {
                         const buffer = Buffer.from(csnCardData.data, 'base64');
-                        // If size is provided, only use that many bytes from the end
-                        if (size > 0 && size < buffer.length) {
-                            const trimmedBuffer = buffer.slice(buffer.length - size);
-                            csn = trimmedBuffer.toString('hex').toUpperCase();
-                            this.logger.info(`CSN from base64 data (trimmed to size ${size}):`, csn);
+                        fullData = buffer.toString('hex').toUpperCase();  // Full 32-byte hex
+                        
+                        // For display purposes, extract the meaningful CSN bytes (typically last 4-8 bytes)
+                        // But preserve full data for device operations
+                        if (size > 0 && size <= buffer.length) {
+                            // The meaningful CSN is typically in the last 'size' bytes, but since size=32
+                            // we need to detect trailing zeros and extract the actual card number
+                            // Most CSN cards have the actual ID at the end, padded with zeros at start
+                            let actualBytes = buffer;
+                            // Find first non-zero byte from the start
+                            let firstNonZero = 0;
+                            for (let i = 0; i < buffer.length; i++) {
+                                if (buffer[i] !== 0) {
+                                    firstNonZero = i;
+                                    break;
+                                }
+                            }
+                            // Extract the meaningful part for display
+                            const meaningfulPart = buffer.slice(firstNonZero);
+                            csn = meaningfulPart.toString('hex').toUpperCase();
+                            this.logger.info(`CSN extracted: ${csn} (from byte ${firstNonZero})`);
                         } else {
-                            csn = buffer.toString('hex').toUpperCase();
-                            this.logger.info('CSN from base64 data:', csn);
+                            csn = fullData;
                         }
+                        this.logger.info(`Full 32-byte data: ${fullData}`);
                     } catch (e) {
                         // If not valid base64, use as-is
                         csn = csnCardData.data;
+                        fullData = csnCardData.data;
                         this.logger.info('CSN from raw data string:', csn);
                     }
                 } else if (Buffer.isBuffer(csnCardData.data)) {
-                    csn = csnCardData.data.toString('hex').toUpperCase();
+                    fullData = csnCardData.data.toString('hex').toUpperCase();
+                    csn = fullData;  // For buffers, use full data
                 } else if (Array.isArray(csnCardData.data) || csnCardData.data instanceof Uint8Array) {
-                    csn = Buffer.from(csnCardData.data).toString('hex').toUpperCase();
+                    const buffer = Buffer.from(csnCardData.data);
+                    fullData = buffer.toString('hex').toUpperCase();
+                    csn = fullData;
                 }
             }
-            this.logger.info('Extracted CSN card data:', csn, 'size:', size);
+            this.logger.info('Extracted CSN card data - CSN:', csn, 'Full:', fullData, 'size:', size);
         } else if (smartCardData) {
             type = 'SmartCard';
             if (smartCardData.data) {
                 if (typeof smartCardData.data === 'string' && smartCardData.data.length > 0) {
+                    rawBase64 = smartCardData.data;
                     try {
                         const buffer = Buffer.from(smartCardData.data, 'base64');
-                        csn = buffer.toString('hex').toUpperCase();
+                        fullData = buffer.toString('hex').toUpperCase();
+                        csn = fullData;
                     } catch (e) {
                         csn = smartCardData.data;
+                        fullData = csn;
                     }
                 }
             }
@@ -161,39 +191,36 @@ class EnrollmentService {
             type = 'Access';
             if (accessCardData.data) {
                 if (typeof accessCardData.data === 'string' && accessCardData.data.length > 0) {
+                    rawBase64 = accessCardData.data;
                     try {
                         const buffer = Buffer.from(accessCardData.data, 'base64');
-                        csn = buffer.toString('hex').toUpperCase();
+                        fullData = buffer.toString('hex').toUpperCase();
+                        csn = fullData;
                     } catch (e) {
                         csn = accessCardData.data;
+                        fullData = csn;
                     }
                 }
             }
             this.logger.info('Extracted Access card data:', csn);
         } else if (cardData.csn && typeof cardData.csn === 'string') {
             csn = cardData.csn;
+            fullData = csn;
             this.logger.info('Using direct csn property:', csn);
         } else if (cardData.data && typeof cardData.data === 'string') {
             csn = cardData.data;
+            fullData = csn;
             this.logger.info('Using direct data property:', csn);
         } else if (typeof cardData === 'string') {
             csn = cardData;
+            fullData = csn;
             this.logger.info('Card data is string:', csn);
         }
 
-        this.logger.info('Normalized card data - CSN:', csn, 'Type:', type, 'Size:', size);
+        this.logger.info('Normalized card data - CSN:', csn, 'Type:', type, 'Size:', size, 'FullData length:', fullData.length);
 
         if (!csn) {
             this.logger.warn('Could not extract CSN from card data. Raw structure:', Object.keys(cardData));
-        }
-
-        // Get the size from the original card data (important for device communication)
-        let size = 0;
-        if (csnCardData && csnCardData.size) {
-            size = csnCardData.size;
-        } else if (csn) {
-            // Calculate size from hex string (2 hex chars = 1 byte)
-            size = Math.floor(csn.length / 2);
         }
 
         // Get the type code from the original card data
@@ -205,13 +232,14 @@ class EnrollmentService {
         this.logger.info('Normalized card - size:', size, 'typeCode:', typeCode);
 
         return {
-            csn,
-            type,
-            typeCode,  // The numeric type code from proto enum
-            size,      // The byte size of the card data
-            data: csn,
-            size,  // Include original size for accurate reconstruction
-            raw: cardData
+            csn,           // Human-readable card number (trimmed, for display)
+            fullData,      // Full 32-byte hex data (for device operations)
+            rawBase64,     // Original base64 from protobuf (for direct device operations)
+            type,          // Card type string (CSN, SmartCard, Access)
+            typeCode,      // The numeric type code from proto enum
+            size: 32,      // G-SDK: Always 32 for CSN cards
+            data: csn,     // Alias for csn (backward compatibility)
+            raw: cardData  // Original raw card data object
         };
     }
 
@@ -493,20 +521,19 @@ class EnrollmentService {
             this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
 
             // Then set the card for the user
+            // The cardData stored in DB should be the full 32-byte hex from the scan
+            // G-SDK requires size=32 for CSN cards
             const cardData = [{
                 userId: deviceUserId,
-                // Normalize stored card hex string and provide size (bytes)
+                // Use stored card data directly (should be full 32-byte hex)
                 cardData: (() => {
                     let hex = String(assignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
                     if (hex.length % 2 === 1) hex = '0' + hex; // pad to even length
                     return hex.toUpperCase();
                 })(),
                 cardType: this.getCardTypeCode(assignment.cardType),
-                cardSize: (() => {
-                    const hex = String(assignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
-                    const even = hex.length % 2 === 1 ? '0' + hex : hex;
-                    return Math.floor(even.length / 2);
-                })()
+                // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
+                cardSize: 32
             }];
             
             await this.userService.setUserCards(supremaDeviceId, cardData);
@@ -687,6 +714,8 @@ class EnrollmentService {
                     await this.userService.enrollUsers(supremaDeviceId, [userData]);
                     
                     // Then set the card
+                    // The cardData stored in DB should be the full 32-byte hex from the scan
+                    // G-SDK requires size=32 for CSN cards
                     const cardData = [{
                         userId: enrollment.deviceUserId,
                         cardData: (() => {
@@ -695,11 +724,8 @@ class EnrollmentService {
                             return hex.toUpperCase();
                         })(),
                         cardType: this.getCardTypeCode(enrollment.cardAssignment.cardType),
-                        cardSize: (() => {
-                            const hex = String(enrollment.cardAssignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
-                            const even = hex.length % 2 === 1 ? '0' + hex : hex;
-                            return Math.floor(even.length / 2);
-                        })()
+                        // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
+                        cardSize: 32
                     }];
 
                     await this.userService.setUserCards(supremaDeviceId, cardData);

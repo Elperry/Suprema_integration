@@ -110,8 +110,8 @@ model CardAssignment {
   id            Int       @id @default(autoincrement())
   employeeId    String    @db.VarChar(50)  // References HR employee ID
   employeeName  String?   @db.VarChar(255) // Cached employee name for quick lookup
-  cardData      String    @db.VarChar(255) // CSN/card data (base64 or hex)
-  cardSize      Int       @default(0)      // Original card data size in bytes
+  cardData      String    @db.VarChar(255) // Full 32-byte card data as hex (G-SDK CSN always 32 bytes)
+  cardSize      Int       @default(32)     // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
   cardType      String    @default("CSN") @db.VarChar(50) // CSN, SmartCard, QR, etc.
   cardFormat    Int       @default(0)      // Card format type from Suprema
   status        String    @default("active") @db.VarChar(20) // active, revoked, lost, expired

@@ -7,6 +7,7 @@ import './App.css'
 import Dashboard from './components/Dashboard'
 import Devices from './components/Devices'
 import Users from './components/Users'
+import DeviceUsers from './components/DeviceUsers'
 import CardScanning from './components/CardScanning'
 import Events from './components/Events'
 import Settings from './components/Settings'
@@ -73,6 +74,7 @@ function AppContent() {
         <NavLink to="/devices" icon="🖥️">Devices</NavLink>
         <NavLink to="/enrollment" icon="🎫">Enrollment</NavLink>
         <NavLink to="/users" icon="👥">Users & Cards</NavLink>
+        <NavLink to="/device-users" icon="📟">Device Users</NavLink>
         <NavLink to="/scanning" icon="🔍">Card Scanning</NavLink>
         <NavLink to="/tna" icon="⏰">Time & Attendance</NavLink>
         <NavLink to="/events" icon="📋">Events</NavLink>
@@ -92,6 +94,7 @@ function AppContent() {
             <Route path="/devices" element={<Devices />} />
             <Route path="/enrollment" element={<Enrollment />} />
             <Route path="/users" element={<Users />} />
+            <Route path="/device-users" element={<DeviceUsers />} />
             <Route path="/scanning" element={<CardScanning />} />
             <Route path="/tna" element={<TNA />} />
             <Route path="/events" element={<Events />} />

@@ -465,6 +465,10 @@ class SupremaUserService extends EventEmitter {
      * @param {string} deviceId - Device ID
      * @param {Array} userCardData - Array of user card data objects
      * @returns {Promise<boolean>} Success status
+     * 
+     * According to G-SDK documentation:
+     * - CSNCardData.size is ALWAYS 32 for CSN cards
+     * - CSNCardData.data is the full 32-byte card data
      */
     async setUserCards(deviceId, userCardData) {
         // Prepare logging data for each card
@@ -488,51 +492,61 @@ class SupremaUserService extends EventEmitter {
                 const csnCardData = new cardMessage.CSNCardData();
                 
                 let cardHex = '';
-                let bufferLength = 0;
+                let cardBuffer = null;
 
                 // Set card data from the provided data
                 if (data.cardData) {
-                    let cardBuffer;
                     // If cardData is a string (hex card number), convert to bytes
                     if (typeof data.cardData === 'string') {
                         cardHex = data.cardData;
-                        const cardBuffer = Buffer.from(data.cardData, 'hex');
-                        bufferLength = cardBuffer.length;
-                        csnCardData.setData(cardBuffer);
-                        this.logger.info(`[setUserCards] Card buffer (first 20 bytes): ${cardBuffer.slice(0, 20).toString('hex')}`);
+                        cardBuffer = Buffer.from(data.cardData, 'hex');
                     } else if (Buffer.isBuffer(data.cardData)) {
                         cardHex = data.cardData.toString('hex').toUpperCase();
-                        bufferLength = data.cardData.length;
-                        csnCardData.setData(data.cardData);
+                        cardBuffer = data.cardData;
                     } else if (data.cardData.data) {
                         // If it's already a structured object with data property
-                        const cardBuffer = Buffer.from(data.cardData.data);
+                        cardBuffer = Buffer.from(data.cardData.data);
                         cardHex = cardBuffer.toString('hex').toUpperCase();
-                        bufferLength = cardBuffer.length;
-                        csnCardData.setData(cardBuffer);
                     }
                     
                     if (cardBuffer && cardBuffer.length > 0) {
-                        csnCardData.setData(cardBuffer);
-                        // Set size based on actual data length
-                        csnCardData.setSize(cardBuffer.length);
-                        this.logger.info(`CSN card data set: size=${cardBuffer.length}, hex=${cardBuffer.toString('hex')}`);
+                        // G-SDK Documentation: CSNCardData.size is ALWAYS 32 for CSN cards
+                        // If we have less than 32 bytes, pad with zeros at the beginning
+                        // If we have more than 32 bytes, use as-is (shouldn't happen)
+                        const CSN_CARD_SIZE = 32;
+                        let finalBuffer = cardBuffer;
+                        
+                        if (cardBuffer.length < CSN_CARD_SIZE) {
+                            // Pad with leading zeros to make it 32 bytes
+                            finalBuffer = Buffer.alloc(CSN_CARD_SIZE, 0);
+                            cardBuffer.copy(finalBuffer, CSN_CARD_SIZE - cardBuffer.length);
+                            this.logger.info(`[setUserCards] Padded ${cardBuffer.length} bytes to ${CSN_CARD_SIZE} bytes`);
+                        }
+                        
+                        csnCardData.setData(finalBuffer);
+                        // G-SDK: size is ALWAYS 32 for CSN cards
+                        csnCardData.setSize(CSN_CARD_SIZE);
+                        this.logger.info(`[setUserCards] CSN card data set: size=${CSN_CARD_SIZE}, original=${cardBuffer.length} bytes, hex=${finalBuffer.toString('hex')}`);
                     } else {
                         this.logger.error('Card buffer is empty or invalid!');
                         throw new Error('Invalid card data: buffer is empty');
                     }
+                } else if (data.rawCardData) {
+                    // If rawCardData is provided (base64 from scan), use it directly
+                    cardBuffer = Buffer.from(data.rawCardData, 'base64');
+                    cardHex = cardBuffer.toString('hex').toUpperCase();
+                    csnCardData.setData(cardBuffer);
+                    csnCardData.setSize(32); // Always 32 for CSN
+                    this.logger.info(`[setUserCards] Using raw card data: ${cardBuffer.length} bytes`);
                 } else {
                     this.logger.error('No card data provided!');
                     throw new Error('No card data provided');
                 }
                 
-                // Set card type and size if provided
-                if (data.cardType !== undefined) {
-                    csnCardData.setType(data.cardType);
-                }
-                if (data.cardSize !== undefined) {
-                    csnCardData.setSize(data.cardSize);
-                }
+                // Set card type (default to CSN = 0x01)
+                const cardType = data.cardType !== undefined ? data.cardType : 0x01;
+                csnCardData.setType(cardType);
+                this.logger.info(`[setUserCards] Card type: ${cardType}`);
 
                 // Log the protobuf object
                 const csnCardObj = csnCardData.toObject();
@@ -544,16 +558,16 @@ class SupremaUserService extends EventEmitter {
                     deviceId: typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId,
                     userId: String(data.userId),
                     cardDataHex: cardHex,
-                    cardSize: data.cardSize ?? null,
-                    cardType: data.cardType ?? null,
-                    bufferLength: bufferLength,
+                    cardSize: 32,  // Always 32 for CSN per G-SDK docs
+                    cardType: cardType,
+                    bufferLength: cardBuffer ? cardBuffer.length : 0,
                     requestPayload: {
                         inputUserId: data.userId,
                         inputUserIdType: typeof data.userId,
                         cardDataHex: cardHex,
-                        cardSize: data.cardSize,
-                        cardType: data.cardType,
-                        bufferLength: bufferLength,
+                        cardSize: 32,
+                        cardType: cardType,
+                        bufferLength: cardBuffer ? cardBuffer.length : 0,
                         csnCardProtobuf: csnCardObj
                     },
                     success: false,

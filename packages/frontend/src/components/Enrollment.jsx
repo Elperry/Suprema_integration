@@ -147,8 +147,9 @@ export default function Enrollment() {
       return
     }
 
-    // Get card data - try multiple possible property names
-    const cardData = scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
+    // Get card data - prefer fullData (32-byte) for device operations, fallback to csn for display
+    // G-SDK requires the full 32-byte data for card enrollment on devices
+    const cardData = scannedCard.fullData || scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
     if (!cardData) {
       setError('Card data is missing. Please scan the card again.')
       console.error('Scanned card object:', scannedCard)
@@ -162,8 +163,8 @@ export default function Enrollment() {
       const payload = {
         employeeId: String(selectedEmployee.employee_id),
         employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
-        cardData: cardData,
-        cardSize: scannedCard.size || 0,
+        cardData: cardData,  // Use fullData for device operations
+        cardSize: 32,  // G-SDK: Always 32 for CSN cards
         cardType: scannedCard.type || 'CSN'
       }
       
@@ -204,8 +205,9 @@ export default function Enrollment() {
       return
     }
 
-    // Get card data - try multiple possible property names
-    const cardData = scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
+    // Get card data - prefer fullData (32-byte) for device operations
+    // G-SDK requires the full 32-byte data for card enrollment on devices
+    const cardData = scannedCard.fullData || scannedCard.csn || scannedCard.data || scannedCard.cardData || scannedCard.cardNumber
     if (!cardData) {
       setError('Card data is missing. Please scan the card again.')
       console.error('Scanned card object:', scannedCard)
@@ -224,8 +226,8 @@ export default function Enrollment() {
       const payload = {
         employeeId: String(selectedEmployee.employee_id),
         employeeName: selectedEmployee.name || selectedEmployee.fullname || selectedEmployee.displayname,
-        cardData: cardData,
-        cardSize: scannedCard.size || 0,
+        cardData: cardData,  // Use fullData for device operations
+        cardSize: 32,  // G-SDK: Always 32 for CSN cards
         cardType: scannedCard.type || 'CSN',
         deviceIds: selectedDevices.map(d => parseInt(d))
       }
