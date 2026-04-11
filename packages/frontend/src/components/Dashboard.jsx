@@ -70,17 +70,20 @@ export default function Dashboard({ health }) {
   const formatTime = (timestamp) => {
     if (!timestamp) return 'N/A';
     const date = new Date(timestamp);
-    return date.toLocaleTimeString('en-US', {
+    return date.toLocaleTimeString('en-EG', {
+      timeZone: 'Africa/Cairo',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit'
+      second: '2-digit',
+      hour12: false
     });
   };
 
   const formatDate = (timestamp) => {
     if (!timestamp) return 'N/A';
     const date = new Date(timestamp);
-    return date.toLocaleDateString('en-US', {
+    return date.toLocaleDateString('en-EG', {
+      timeZone: 'Africa/Cairo',
       month: 'short',
       day: 'numeric'
     });

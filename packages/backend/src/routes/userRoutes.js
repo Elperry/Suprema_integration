@@ -1,35 +1,195 @@
 /**
  * User Management Routes
  * REST API endpoints for user operations
+ * 
+ * DATABASE IS THE SOURCE OF TRUTH
+ * - GET endpoints return data from database by default
+ * - Use ?source=device to fetch directly from device
+ * - Sync pushes database state to devices
  */
 
 import express from 'express';
+import { PrismaClient } from '@prisma/client';
+import UserSyncService from '../services/userSyncService.js';
+
 const router = express.Router();
+const prisma = new PrismaClient();
 
 export default (services) => {
+    // Initialize sync service
+    const syncService = new UserSyncService(
+        services.user,
+        services.connection,
+        console
+    );
+
     /**
-     * Get all users from device
+     * Helper function to get Suprema device ID from database ID
+     */
+    const getSupremaDeviceId = async (dbDeviceId) => {
+        // Check if it's already a Suprema device ID (large number)
+        if (parseInt(dbDeviceId) > 100000) {
+            return parseInt(dbDeviceId);
+        }
+        
+        // Look up the connected device by database ID
+        const connectedDevices = await services.connection.getConnectedDevices();
+        const devices = await services.connection.getAllDevicesFromDB();
+        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
+        
+        if (!dbDevice) {
+            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
+        }
+        
+        // Find matching connected device by IP
+        for (const device of connectedDevices) {
+            const info = device.toObject ? device.toObject() : device;
+            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
+                return info.deviceid;
+            }
+        }
+        
+        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected. Please connect the device first.`);
+    };
+
+    // ==================== STATIC ROUTES (must come before /:deviceId) ====================
+
+    /**
+     * Sync database to ALL connected devices
+     * POST /api/users/sync-all
+     * 
+     * Pushes all card assignments from database to all connected devices.
+     * This makes devices match the database state exactly.
+     */
+    router.post('/sync-all', async (req, res) => {
+        try {
+            console.log('[API] POST /api/users/sync-all - Syncing database to all devices');
+            const results = await syncService.syncDatabaseToAllDevices();
+
+            res.json({
+                success: true,
+                message: 'Database synchronized to all devices',
+                ...results
+            });
+        } catch (error) {
+            console.error('[API] Sync all error:', error);
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Get all users from database (centralized view)
+     * GET /api/users/all
+     */
+    router.get('/all', async (req, res) => {
+        try {
+            const users = await syncService.getUsersFromDB();
+            
+            res.json({
+                success: true,
+                source: 'database',
+                data: users,
+                total: users.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Import users from device to database
+     * POST /api/users/import/:deviceId
+     */
+    router.post('/import/:deviceId', async (req, res) => {
+        try {
+            const { deviceId } = req.params;
+            console.log(`[API] POST /api/users/import/${deviceId} - Importing users from device to DB`);
+            
+            const result = await syncService.importUsersFromDevice(deviceId);
+            
+            res.json({
+                success: true,
+                message: 'Users imported from device to database',
+                ...result
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    /**
+     * Delete user from all devices
+     * DELETE /api/users/delete-all/:userId
+     */
+    router.delete('/delete-all/:userId', async (req, res) => {
+        try {
+            const { userId } = req.params;
+            const { revokeCard } = req.query;
+            
+            console.log(`[API] DELETE /api/users/delete-all/${userId} - Deleting from all devices`);
+            
+            const result = await syncService.deleteUserFromAllDevices(
+                userId, 
+                revokeCard === 'true'
+            );
+            
+            res.json({
+                success: true,
+                message: `User ${userId} deleted from all devices`,
+                ...result
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    });
+
+    // ==================== DEVICE-SPECIFIC ROUTES ====================
+
+    /**
+     * Get users for a device
      * GET /api/users/:deviceId
+     * 
+     * Query params:
+     *   - source=device : Fetch directly from device (default: database)
+     *   - detailed=true : Include card data
      */
     router.get('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const userHeaders = await services.user.getUserList(deviceId);
+            const source = req.query.source || 'database';
             
-            if (req.query.detailed === 'true' && userHeaders.length > 0) {
-                const userIds = userHeaders.map(header => header.id);
-                const detailedUsers = await services.user.getUsers(deviceId, userIds);
+            if (source === 'device') {
+                // Fetch from device directly
+                const users = await syncService.getUsersFromDevice(deviceId);
                 return res.json({
                     success: true,
-                    data: detailedUsers,
-                    total: detailedUsers.length
+                    source: 'device',
+                    data: users,
+                    total: users.length
                 });
             }
-
+            
+            // Default: Fetch from database
+            const dbDeviceId = parseInt(deviceId) < 100000 ? parseInt(deviceId) : null;
+            const users = await syncService.getUsersFromDB(dbDeviceId);
+            
             res.json({
                 success: true,
-                data: userHeaders,
-                total: userHeaders.length
+                source: 'database',
+                data: users,
+                total: users.length
             });
         } catch (error) {
             res.status(500).json({
@@ -46,6 +206,7 @@ export default (services) => {
     router.post('/:deviceId', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { users } = req.body;
 
             if (!users || !Array.isArray(users)) {
@@ -55,7 +216,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.enrollUsers(deviceId, users);
+            await services.user.enrollUsers(supremaDeviceId, users);
 
             res.json({
                 success: true,
@@ -71,8 +232,10 @@ export default (services) => {
     });
 
     /**
-     * Delete users from device
+     * Delete users from device and update database
      * DELETE /api/users/:deviceId
+     * 
+     * Deletes users from the device and marks their enrollment as 'removed' in database
      */
     router.delete('/:deviceId', async (req, res) => {
         try {
@@ -86,12 +249,23 @@ export default (services) => {
                 });
             }
 
-            await services.user.deleteUsers(deviceId, userIds);
+            const results = [];
+            for (const userId of userIds) {
+                try {
+                    await syncService.deleteUserFromDevice(deviceId, userId);
+                    results.push({ userId, success: true });
+                } catch (error) {
+                    results.push({ userId, success: false, error: error.message });
+                }
+            }
+
+            const successCount = results.filter(r => r.success).length;
 
             res.json({
                 success: true,
-                message: `Successfully deleted ${userIds.length} users`,
-                deletedUsers: userIds.length
+                message: `Deleted ${successCount}/${userIds.length} users from device and updated database`,
+                deletedUsers: successCount,
+                results
             });
         } catch (error) {
             res.status(500).json({
@@ -108,9 +282,10 @@ export default (services) => {
     router.post('/:deviceId/fingerprints', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userFingerData } = req.body;
 
-            await services.user.setUserFingerprints(deviceId, userFingerData);
+            await services.user.setUserFingerprints(supremaDeviceId, userFingerData);
 
             res.json({
                 success: true,
@@ -131,9 +306,10 @@ export default (services) => {
     router.post('/:deviceId/cards', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userCardData } = req.body;
 
-            await services.user.setUserCards(deviceId, userCardData);
+            await services.user.setUserCards(supremaDeviceId, userCardData);
 
             res.json({
                 success: true,
@@ -154,9 +330,10 @@ export default (services) => {
     router.get('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             
             // Get user details including card information
-            const users = await services.user.getUsers(deviceId, [userId]);
+            const users = await services.user.getUsers(supremaDeviceId, [userId]);
             
             if (!users || users.length === 0) {
                 return res.status(404).json({
@@ -191,6 +368,7 @@ export default (services) => {
     router.put('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { cardData, cardIndex } = req.body;
 
             if (!cardData) {
@@ -201,7 +379,7 @@ export default (services) => {
             }
 
             // Update card for single user
-            await services.user.setUserCards(deviceId, [{
+            await services.user.setUserCards(supremaDeviceId, [{
                 userId: userId,
                 cardData: cardData,
                 cardIndex: cardIndex || 0
@@ -226,10 +404,11 @@ export default (services) => {
     router.delete('/:deviceId/cards/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { cardIndex } = req.query;
 
             // Set empty card data to remove the card
-            await services.user.setUserCards(deviceId, [{
+            await services.user.setUserCards(supremaDeviceId, [{
                 userId: userId,
                 cardData: null,
                 cardIndex: parseInt(cardIndex) || 0
@@ -254,6 +433,7 @@ export default (services) => {
     router.post('/:deviceId/cards/blacklist', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { action, cardInfos } = req.body;
 
             if (!action || !['add', 'delete'].includes(action)) {
@@ -270,7 +450,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.manageCardBlacklist(deviceId, cardInfos, action);
+            await services.user.manageCardBlacklist(supremaDeviceId, cardInfos, action);
 
             res.json({
                 success: true,
@@ -291,9 +471,10 @@ export default (services) => {
     router.post('/:deviceId/faces', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userFaceData } = req.body;
 
-            await services.user.setUserFaces(deviceId, userFaceData);
+            await services.user.setUserFaces(supremaDeviceId, userFaceData);
 
             res.json({
                 success: true,
@@ -314,7 +495,8 @@ export default (services) => {
     router.get('/:deviceId/statistics', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const stats = await services.user.getUserStatistics(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const stats = await services.user.getUserStatistics(supremaDeviceId);
 
             res.json({
                 success: true,
@@ -336,6 +518,7 @@ export default (services) => {
     router.get('/:deviceId/access-groups', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userIds } = req.query;
 
             if (!userIds) {
@@ -346,7 +529,7 @@ export default (services) => {
             }
 
             const userIdArray = userIds.split(',');
-            const accessGroups = await services.user.getAccessGroups(deviceId, userIdArray);
+            const accessGroups = await services.user.getAccessGroups(supremaDeviceId, userIdArray);
 
             res.json({
                 success: true,
@@ -368,6 +551,7 @@ export default (services) => {
     router.post('/:deviceId/access-groups', async (req, res) => {
         try {
             const { deviceId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userAccessGroups } = req.body;
 
             if (!userAccessGroups || !Array.isArray(userAccessGroups)) {
@@ -377,7 +561,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.setAccessGroups(deviceId, userAccessGroups);
+            await services.user.setAccessGroups(supremaDeviceId, userAccessGroups);
 
             res.json({
                 success: true,
@@ -510,6 +694,7 @@ export default (services) => {
     router.put('/:deviceId/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
             const { userInfo } = req.body;
 
             if (!userInfo) {
@@ -519,7 +704,7 @@ export default (services) => {
                 });
             }
 
-            await services.user.updateUser(deviceId, { ...userInfo, userID: userId });
+            await services.user.updateUser(supremaDeviceId, { ...userInfo, userID: userId });
 
             res.json({
                 success: true,
@@ -540,7 +725,8 @@ export default (services) => {
     router.get('/:deviceId/user/:userId', async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
-            const users = await services.user.getUsers(deviceId, [userId]);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const users = await services.user.getUsers(supremaDeviceId, [userId]);
 
             if (!users || users.length === 0) {
                 return res.status(404).json({
@@ -568,34 +754,14 @@ export default (services) => {
     router.post('/:deviceId/sync', async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const result = await services.user.syncUsersToDatabase(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const result = await syncService.importUsersFromDevice(supremaDeviceId);
 
             res.json({
                 success: true,
                 message: 'Users synchronized to database',
-                synced: result.synced,
+                synced: result.imported,
                 deviceId: deviceId
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    });
-
-    /**
-     * Sync users from all devices
-     * POST /api/users/sync-all
-     */
-    router.post('/sync-all', async (req, res) => {
-        try {
-            const results = await services.user.syncAllDevicesUsers();
-
-            res.json({
-                success: true,
-                message: 'All devices users synchronized',
-                results: results
             });
         } catch (error) {
             res.status(500).json({

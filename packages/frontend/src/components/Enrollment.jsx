@@ -2,6 +2,37 @@ import { useState, useEffect, useCallback } from 'react'
 import { enrollmentAPI, deviceAPI } from '../services/api'
 import './Enrollment.css'
 
+/**
+ * Decode hex string card data to decimal number
+ */
+const decodeHexToDecimal = (hexData) => {
+  try {
+    if (!hexData) return 'N/A'
+    
+    // Remove any spaces and ensure proper format
+    let cleanHex = hexData.replace(/\s/g, '').toUpperCase()
+    
+    // Pad to even length if needed
+    if (cleanHex.length % 2 === 1) {
+      cleanHex = '0' + cleanHex
+    }
+    
+    // Strip leading zeros but keep at least 2 chars
+    let significant = cleanHex.replace(/^0+/, '') || '0'
+    if (significant.length % 2 === 1) {
+      significant = '0' + significant
+    }
+    
+    // Convert to decimal using BigInt for large numbers
+    const cardNumber = BigInt('0x' + significant)
+    
+    return cardNumber.toString()
+  } catch (e) {
+    console.error('Failed to decode card data:', e)
+    return 'Error'
+  }
+}
+
 export default function Enrollment() {
   // State
   const [devices, setDevices] = useState([])
@@ -431,7 +462,7 @@ export default function Enrollment() {
               <div className={`scanned-card ${scannedCard.isAssigned ? 'assigned' : 'available'}`}>
                 <h4>📇 Scanned Card</h4>
                 <div className="card-details">
-                  <p><strong>Card Data:</strong> <code>{scannedCard.csn || scannedCard.data}</code></p>
+                  <p><strong>Card Number:</strong> <code className="card-number">{decodeHexToDecimal(scannedCard.csn || scannedCard.data)}</code></p>
                   <p><strong>Type:</strong> {scannedCard.type || 'CSN'}</p>
                   <p><strong>Status:</strong> {scannedCard.isAssigned ? '❌ Already Assigned' : '✅ Available'}</p>
                 </div>
@@ -590,10 +621,10 @@ export default function Enrollment() {
                         <br />
                         <small>ID: {ca.employeeId}</small>
                       </td>
-                      <td><code>{ca.cardData?.substring(0, 20)}...</code></td>
+                      <td><code className="card-number">{decodeHexToDecimal(ca.cardData)}</code></td>
                       <td>{ca.cardType}</td>
                       <td>{getStatusBadge(ca.status)}</td>
-                      <td>{new Date(ca.assignedAt).toLocaleDateString()}</td>
+                      <td>{new Date(ca.assignedAt).toLocaleDateString('en-EG', { timeZone: 'Africa/Cairo' })}</td>
                       <td>
                         {ca.enrollments?.filter(e => e.status === 'active').length || 0} devices
                       </td>
@@ -666,7 +697,7 @@ export default function Enrollment() {
             <div className="modal-body">
               <p>
                 <strong>Employee:</strong> {selectedAssignment.employeeName}<br />
-                <strong>Card:</strong> {selectedAssignment.cardData?.substring(0, 20)}...
+                <strong>Card:</strong> <code className="card-number">{decodeHexToDecimal(selectedAssignment.cardData)}</code>
               </p>
               
               <div className="form-group">

@@ -118,24 +118,244 @@ class SupremaUserService extends EventEmitter {
             // Convert deviceId to number if it's a string
             const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
             
-            const req = new userMessage.GetRequest();
+            // If no userIds provided or empty array, return empty
+            if (!userIds || userIds.length === 0) {
+                return [];
+            }
+            
+            // Batch requests to avoid protobuf parsing errors with large responses
+            const BATCH_SIZE = 50;  // Safe batch size for user details
+            const allUsers = [];
+            
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                this.logger.info(`[getUsers] Fetching batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(userIds.length/BATCH_SIZE)} (${batchIds.length} users)`);
+                
+                try {
+                    const req = new userMessage.GetRequest();
+                    req.setDeviceid(numericDeviceId);
+                    req.setUseridsList(batchIds);
+
+                    const batchUsers = await new Promise((resolve, reject) => {
+                        this.userClient.get(req, (err, response) => {
+                            if (err) {
+                                this.logger.error(`Failed to get users batch for device ${deviceId}:`, err);
+                                reject(err);
+                                return;
+                            }
+
+                            const users = response.toObject().usersList;
+                            resolve(users);
+                        });
+                    });
+                    
+                    allUsers.push(...batchUsers);
+                } catch (batchError) {
+                    this.logger.warn(`[getUsers] Batch ${Math.floor(i/BATCH_SIZE) + 1} failed: ${batchError.message}`);
+                    // Continue with next batch instead of failing entirely
+                }
+            }
+            
+            this.logger.info(`[getUsers] Retrieved ${allUsers.length} users from device ${deviceId}`);
+            return allUsers;
+        } catch (error) {
+            this.logger.error('Error getting users:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get card information for specific users (uses GetCard API)
+     * This is more efficient than GetUsers when only card data is needed
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} userIds - Array of user IDs
+     * @returns {Promise<Array>} Array of UserCard objects with userId and cardsList
+     */
+    async getCards(deviceId, userIds) {
+        try {
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            
+            // If no userIds provided or empty array, return empty
+            if (!userIds || userIds.length === 0) {
+                return [];
+            }
+            
+            // Batch requests to avoid protobuf parsing errors with large responses
+            const BATCH_SIZE = 100;  // Cards are smaller, can use larger batch
+            const allCards = [];
+            
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                
+                try {
+                    const req = new userMessage.GetCardRequest();
+                    req.setDeviceid(numericDeviceId);
+                    req.setUseridsList(batchIds);
+
+                    const batchCards = await new Promise((resolve, reject) => {
+                        this.userClient.getCard(req, (err, response) => {
+                            if (err) {
+                                reject(err);
+                                return;
+                            }
+
+                            const userCards = response.toObject().usercardsList;
+                            resolve(userCards);
+                        });
+                    });
+                    
+                    allCards.push(...batchCards);
+                } catch (batchError) {
+                    this.logger.warn(`[getCards] Batch failed: ${batchError.message}`);
+                    // Continue with next batch
+                }
+            }
+            
+            return allCards;
+        } catch (error) {
+            this.logger.error('Error getting user cards:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Find the user who currently has a specific card on the device
+     * Uses batched queries to handle large user counts
+     * @param {string|number} deviceId - Device ID
+     * @param {string} cardHex - Card data in hex format
+     * @returns {Promise<string|null>} User ID who has the card, or null if not found
+     */
+    async findUserWithCard(deviceId, cardHex) {
+        try {
+            const normalizedCardHex = cardHex.toUpperCase();
+            this.logger.info(`[findUserWithCard] Searching for card ${normalizedCardHex} on device ${deviceId}`);
+
+            // Get list of all users on device
+            const userHeaders = await this.getUserList(deviceId);
+            
+            if (!userHeaders || userHeaders.length === 0) {
+                this.logger.info(`[findUserWithCard] No users found on device ${deviceId}`);
+                return null;
+            }
+
+            // Filter to users who have cards (protobuf uses lowercase field names: numofcard)
+            const usersWithCards = userHeaders.filter(u => (u.numofcard || u.numOfCard || 0) > 0);
+            
+            this.logger.info(`[findUserWithCard] Total users: ${userHeaders.length}, users with cards (numofcard > 0): ${usersWithCards.length}`);
+            
+            if (usersWithCards.length === 0) {
+                this.logger.info(`[findUserWithCard] No users with cards found on device ${deviceId}`);
+                return null;
+            }
+
+            // Use GetCard API instead of GetUsers - it's lighter and only returns card data
+            const userIds = usersWithCards.map(u => u.id);
+            
+            // Batch in groups of 100 to avoid parsing errors
+            const BATCH_SIZE = 100;
+            for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+                const batchIds = userIds.slice(i, i + BATCH_SIZE);
+                this.logger.info(`[findUserWithCard] Checking batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(userIds.length/BATCH_SIZE)} (${batchIds.length} users)`);
+                
+                try {
+                    const userCards = await this.getCards(deviceId, batchIds);
+                    
+                    for (const userCard of userCards) {
+                        if (userCard.cardsList && userCard.cardsList.length > 0) {
+                            for (const card of userCard.cardsList) {
+                                let existingCardHex = '';
+                                if (card.data) {
+                                    if (typeof card.data === 'string') {
+                                        // Base64 encoded
+                                        existingCardHex = Buffer.from(card.data, 'base64').toString('hex').toUpperCase();
+                                    } else if (card.data instanceof Uint8Array || Buffer.isBuffer(card.data)) {
+                                        existingCardHex = Buffer.from(card.data).toString('hex').toUpperCase();
+                                    }
+                                }
+                                
+                                if (existingCardHex === normalizedCardHex) {
+                                    this.logger.info(`[findUserWithCard] Found matching card on user ${userCard.userid}`);
+                                    return userCard.userid;
+                                }
+                            }
+                        }
+                    }
+                } catch (batchError) {
+                    this.logger.warn(`[findUserWithCard] Batch ${Math.floor(i/BATCH_SIZE) + 1} failed, skipping: ${batchError.message}`);
+                    // Continue with next batch
+                }
+            }
+
+            this.logger.info(`[findUserWithCard] Card not found on any user`);
+            return null;
+        } catch (error) {
+            this.logger.error('Error finding user with card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Clear all cards from a specific user on the device
+     * @param {string|number} deviceId - Device ID  
+     * @param {string} userId - User ID to clear cards from
+     * @returns {Promise<boolean>} Success status
+     */
+    async clearUserCards(deviceId, userId) {
+        try {
+            this.logger.info(`[clearUserCards] Clearing all cards from user ${userId} on device ${deviceId}`);
+
+            // Create an empty card list to clear all cards
+            const userCard = new userMessage.UserCard();
+            userCard.setUserid(String(userId));
+            // Don't add any cards - this clears them
+
+            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+
+            const req = new userMessage.SetCardRequest();
             req.setDeviceid(numericDeviceId);
-            req.setUseridsList(userIds || []);
+            req.setUsercardsList([userCard]);
 
             return new Promise((resolve, reject) => {
-                this.userClient.get(req, (err, response) => {
+                this.userClient.setCard(req, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to get users for device ${deviceId}:`, err);
+                        this.logger.error(`[clearUserCards] FAILED for user ${userId} on device ${deviceId}:`, err);
                         reject(err);
                         return;
                     }
 
-                    const users = response.toObject().usersList;
-                    resolve(users);
+                    this.logger.info(`[clearUserCards] Successfully cleared cards from user ${userId}`);
+                    resolve(true);
                 });
             });
         } catch (error) {
-            this.logger.error('Error getting users:', error);
+            this.logger.error('Error clearing user cards:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Remove duplicate card assignment before setting new card
+     * If the card is already assigned to another user, clear it first
+     * @param {string|number} deviceId - Device ID
+     * @param {string} cardHex - Card data in hex format
+     * @param {string} newUserId - The user ID that will receive this card
+     * @returns {Promise<void>}
+     */
+    async removeDuplicateCardAssignment(deviceId, cardHex, newUserId) {
+        try {
+            const existingUserId = await this.findUserWithCard(deviceId, cardHex);
+            
+            if (existingUserId && existingUserId !== String(newUserId)) {
+                this.logger.info(`[removeDuplicateCardAssignment] Card ${cardHex} is assigned to user ${existingUserId}, clearing before reassignment to ${newUserId}`);
+                await this.clearUserCards(deviceId, existingUserId);
+                this.logger.info(`[removeDuplicateCardAssignment] Successfully cleared card from user ${existingUserId}`);
+            } else if (existingUserId === String(newUserId)) {
+                this.logger.info(`[removeDuplicateCardAssignment] Card is already assigned to the target user ${newUserId}`);
+            } else {
+                this.logger.info(`[removeDuplicateCardAssignment] Card ${cardHex} is not currently assigned to any user`);
+            }
+        } catch (error) {
+            this.logger.error('Error removing duplicate card assignment:', error);
             throw error;
         }
     }
@@ -479,8 +699,26 @@ class SupremaUserService extends EventEmitter {
         this.logger.info(`[setUserCards] INPUT card data: ${JSON.stringify(userCardData, null, 2)}`);
 
         try {
-            this.logger.info(`Setting cards for device ${deviceId}:`, JSON.stringify(userCardData));
+            // STEP 1: Remove any existing duplicate card assignments
+            for (const data of userCardData) {
+                let cardHex = '';
+                if (data.cardData) {
+                    if (typeof data.cardData === 'string') {
+                        cardHex = data.cardData.toUpperCase();
+                    } else if (Buffer.isBuffer(data.cardData)) {
+                        cardHex = data.cardData.toString('hex').toUpperCase();
+                    } else if (data.cardData.data) {
+                        cardHex = Buffer.from(data.cardData.data).toString('hex').toUpperCase();
+                    }
+                }
+                
+                if (cardHex) {
+                    this.logger.info(`[setUserCards] Checking for duplicate card assignment: ${cardHex}`);
+                    await this.removeDuplicateCardAssignment(deviceId, cardHex, data.userId);
+                }
+            }
 
+            // STEP 2: Build the card data protobuf messages
             const userCards = userCardData.map(data => {
                 const userCard = new userMessage.UserCard();
                 
@@ -500,13 +738,17 @@ class SupremaUserService extends EventEmitter {
                     if (typeof data.cardData === 'string') {
                         cardHex = data.cardData;
                         cardBuffer = Buffer.from(data.cardData, 'hex');
+                        bufferLength = cardBuffer.length;
+                        this.logger.info(`[setUserCards] Card buffer (first 20 bytes): ${cardBuffer.slice(0, 20).toString('hex')}`);
                     } else if (Buffer.isBuffer(data.cardData)) {
-                        cardHex = data.cardData.toString('hex').toUpperCase();
                         cardBuffer = data.cardData;
+                        cardHex = data.cardData.toString('hex').toUpperCase();
+                        bufferLength = data.cardData.length;
                     } else if (data.cardData.data) {
                         // If it's already a structured object with data property
                         cardBuffer = Buffer.from(data.cardData.data);
                         cardHex = cardBuffer.toString('hex').toUpperCase();
+                        bufferLength = cardBuffer.length;
                     }
                     
                     if (cardBuffer && cardBuffer.length > 0) {
@@ -1030,6 +1272,60 @@ class SupremaUserService extends EventEmitter {
             return stats;
         } catch (error) {
             this.logger.error('Error getting user statistics:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Sync users from all connected devices
+     * @returns {Promise<Object>} Sync results per device
+     */
+    async syncAllDevicesUsers() {
+        try {
+            const results = [];
+            
+            // Get all connected devices from connection service
+            const connectedDevices = await this.connectionService.getConnectedDevices();
+            
+            if (!connectedDevices || connectedDevices.length === 0) {
+                this.logger.warn('No connected devices found for sync');
+                return { success: true, message: 'No connected devices', results: [] };
+            }
+
+            this.logger.info(`Syncing users from ${connectedDevices.length} devices`);
+
+            for (const device of connectedDevices) {
+                const deviceInfo = device.toObject ? device.toObject() : device;
+                const deviceId = deviceInfo.deviceid;
+                
+                try {
+                    const userHeaders = await this.getUserList(deviceId);
+                    
+                    results.push({
+                        deviceId: deviceId,
+                        success: true,
+                        userCount: userHeaders.length,
+                        usersWithCards: userHeaders.filter(u => u.numofcard > 0).length
+                    });
+                    
+                    this.logger.info(`Synced ${userHeaders.length} users from device ${deviceId}`);
+                } catch (deviceError) {
+                    this.logger.error(`Failed to sync users from device ${deviceId}:`, deviceError.message);
+                    results.push({
+                        deviceId: deviceId,
+                        success: false,
+                        error: deviceError.message
+                    });
+                }
+            }
+
+            return {
+                success: true,
+                totalDevices: connectedDevices.length,
+                results: results
+            };
+        } catch (error) {
+            this.logger.error('Error syncing all devices users:', error);
             throw error;
         }
     }

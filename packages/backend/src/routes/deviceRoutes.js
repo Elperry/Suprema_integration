@@ -75,6 +75,52 @@ export default (services) => {
     };
 
     /**
+     * Helper function to resolve device ID (DB ID or Suprema ID) to Suprema device ID
+     * @param {string|number} paramDeviceId - The device ID from request params
+     * @returns {Promise<{supremaDeviceId: number, deviceRecord: object|null}>}
+     * @throws {Error} If device not found or no IP configured
+     */
+    const resolveSupremaDeviceId = async (paramDeviceId) => {
+        const parsedId = parseInt(paramDeviceId, 10);
+        
+        if (isNaN(parsedId)) {
+            throw new Error('Invalid device ID format. Must be a number.');
+        }
+        
+        let supremaDeviceId = parsedId;
+        let deviceRecord = null;
+        
+        // If it's a small number (likely DB ID), lookup the device and connect by IP
+        if (parsedId < 1000) {
+            // Use the getModel method to get the Device model
+            const Device = services.database.getModel('Device');
+            deviceRecord = await Device.findByPk(parsedId);
+            
+            if (!deviceRecord) {
+                const error = new Error(`Device with DB ID ${parsedId} not found`);
+                error.statusCode = 404;
+                throw error;
+            }
+            
+            if (!deviceRecord.ip) {
+                const error = new Error(`Device ${parsedId} has no IP address configured`);
+                error.statusCode = 400;
+                throw error;
+            }
+            
+            // Get or establish connection using device IP
+            const connection = await getOrConnectDevice(
+                deviceRecord.ip, 
+                deviceRecord.port || 51211, 
+                deviceRecord.useSSL || false
+            );
+            supremaDeviceId = connection.deviceId;
+        }
+        
+        return { supremaDeviceId, deviceRecord };
+    };
+
+    /**
      * Get device info directly from device using IP
      * GET /api/devices/direct/info
      * Query: ip, port (optional, default 51211), deviceId (optional, use if already connected)
@@ -782,64 +828,92 @@ export default (services) => {
     });
 
     /**
-     * Get device information
+     * Get device information by DB ID or Suprema device ID
      * GET /api/devices/:deviceId/info
+     * 
+     * The deviceId parameter can be:
+     * 1. A small number (1-999) - treated as DB ID, will lookup device IP and connect
+     * 2. A large number (>999) - treated as Suprema device ID, used directly
+     * 
+     * This allows both:
+     * - /api/devices/1/info (DB ID)
+     * - /api/devices/546173337/info (Suprema device ID)
      */
     router.get('/:deviceId/info', async (req, res) => {
         try {
-            const deviceId = req.params.deviceId; // deviceId can be string or number depending on service
-            const info = await services.connection.getDeviceInfo(deviceId);
+            const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
+            
+            const info = await services.connection.getDeviceInfo(supremaDeviceId);
+            
+            // Convert protobuf to plain object
+            const deviceInfo = info.toObject ? info.toObject() : info;
 
             res.json({
                 success: true,
-                data: info
+                data: {
+                    ...deviceInfo,
+                    ...(deviceRecord && {
+                        dbId: deviceRecord.id,
+                        dbName: deviceRecord.name,
+                        dbIp: deviceRecord.ip
+                    })
+                }
             });
         } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
+            const statusCode = error.statusCode || 500;
+            res.status(statusCode).json({
+                error: statusCode === 404 ? 'Not Found' : 'Internal Server Error',
+                message: error.message,
+                hint: 'For DB IDs (1-999), ensure device has IP configured. For Suprema IDs (large numbers), ensure device is connected.'
             });
         }
     });
 
     /**
-     * Get device capabilities
+     * Get device capabilities by DB ID or Suprema device ID
      * GET /api/devices/:deviceId/capabilities
      */
     router.get('/:deviceId/capabilities', async (req, res) => {
         try {
-            const { deviceId } = req.params;
-            const capabilities = await services.connection.getDeviceCapabilities(deviceId);
+            const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
+            const capabilities = await services.connection.getDeviceCapabilities(supremaDeviceId);
+            
+            // Convert protobuf to plain object
+            const capData = capabilities.toObject ? capabilities.toObject() : capabilities;
 
             res.json({
                 success: true,
-                data: capabilities
+                data: capData,
+                ...(deviceRecord && { dbId: deviceRecord.id, dbName: deviceRecord.name })
             });
         } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
+            const statusCode = error.statusCode || 500;
+            res.status(statusCode).json({
+                error: statusCode === 404 ? 'Not Found' : 'Internal Server Error',
                 message: error.message
             });
         }
     });
 
     /**
-     * Test device connection
+     * Test device connection by DB ID or Suprema device ID
      * GET /api/devices/:deviceId/test
      */
     router.get('/:deviceId/test', async (req, res) => {
         try {
-            const { deviceId } = req.params;
-            const isConnected = await services.connection.testDeviceConnection(deviceId);
+            const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
+            const isConnected = await services.connection.testDeviceConnection(supremaDeviceId);
 
             res.json({
                 success: true,
                 connected: isConnected,
-                deviceId: deviceId
+                deviceId: supremaDeviceId,
+                ...(deviceRecord && { dbId: deviceRecord.id, dbName: deviceRecord.name })
             });
         } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
+            const statusCode = error.statusCode || 500;
+            res.status(statusCode).json({
+                error: statusCode === 404 ? 'Not Found' : 'Internal Server Error',
                 message: error.message
             });
         }

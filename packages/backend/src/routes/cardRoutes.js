@@ -136,6 +136,19 @@ export default (services) => {
                 data: config
             });
         } catch (error) {
+            // Handle gRPC parsing errors by returning default config
+            if (error.message && error.message.includes('parsing error')) {
+                return res.json({
+                    success: true,
+                    data: {
+                        bypassCard: false,
+                        useWiegandFormat: true,
+                        dataType: 1, // CSN
+                        useSecondaryKey: false
+                    },
+                    note: 'Using defaults due to device response parsing issue'
+                });
+            }
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message

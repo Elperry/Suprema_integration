@@ -443,21 +443,32 @@ class SupremaBiometricService extends EventEmitter {
             const req = new cardMessage.GetBlacklistRequest();
             req.setDeviceid(deviceId);
 
-            return new Promise((resolve, reject) => {
-                this.cardClient.getBlacklist(req, (err, response) => {
-                    if (err) {
-                        this.logger.error(`Failed to get card blacklist for device ${deviceId}:`, err);
-                        reject(err);
-                        return;
-                    }
+            // Wrap in timeout to prevent indefinite hangs
+            const timeoutMs = 10000;
+            return await Promise.race([
+                new Promise((resolve, reject) => {
+                    this.cardClient.getBlacklist(req, (err, response) => {
+                        if (err) {
+                            this.logger.error(`Failed to get card blacklist for device ${deviceId}:`, err);
+                            reject(err);
+                            return;
+                        }
 
-                    const blacklist = response.toObject().blacklistList;
-                    this.logger.info(`Retrieved ${blacklist.length} blacklisted cards from device ${deviceId}`);
-                    resolve(blacklist);
-                });
-            });
+                        const blacklist = response.toObject().blacklistList || [];
+                        this.logger.info(`Retrieved ${blacklist.length} blacklisted cards from device ${deviceId}`);
+                        resolve(blacklist);
+                    });
+                }),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error(`Blacklist request timed out after ${timeoutMs}ms`)), timeoutMs)
+                )
+            ]);
         } catch (error) {
             this.logger.error('Error getting card blacklist:', error);
+            // Return empty array on error instead of throwing (more graceful)
+            if (error.message && (error.message.includes('timed out') || error.message.includes('NOT_FOUND'))) {
+                return [];
+            }
             throw error;
         }
     }
@@ -877,6 +888,167 @@ class SupremaBiometricService extends EventEmitter {
             return true;
         } catch (error) {
             this.logger.error('Error optimizing biometric settings:', error);
+            throw error;
+        }
+    }
+
+    // ================ CARD SERVICE INTERFACE METHODS ================
+    // These methods provide the interface expected by cardRoutes.js
+    // They delegate to the underlying card methods or provide sensible defaults
+
+    /**
+     * Get blacklist (alias for getCardBlacklist)
+     * @param {string|number} deviceId - Device ID
+     * @returns {Promise<Array>} Blacklisted cards
+     */
+    async getBlacklist(deviceId) {
+        return this.getCardBlacklist(deviceId);
+    }
+
+    /**
+     * Add cards to blacklist (alias for addCardToBlacklist)
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} cardInfos - Array of card info objects
+     * @returns {Promise<boolean>}
+     */
+    async addToBlacklist(deviceId, cardInfos) {
+        return this.addCardToBlacklist(deviceId, cardInfos);
+    }
+
+    /**
+     * Remove cards from blacklist (alias for removeCardFromBlacklist)
+     * @param {string|number} deviceId - Device ID
+     * @param {Array} cardInfos - Array of card info objects
+     * @returns {Promise<boolean>}
+     */
+    async deleteFromBlacklist(deviceId, cardInfos) {
+        return this.removeCardFromBlacklist(deviceId, cardInfos);
+    }
+
+    /**
+     * Get card config (alias for getCardConfig)
+     * @param {string|number} deviceId - Device ID
+     * @returns {Promise<Object>} Card configuration
+     */
+    async getConfig(deviceId) {
+        return this.getCardConfig(deviceId);
+    }
+
+    /**
+     * Set card config (alias for setCardConfig)
+     * @param {string|number} deviceId - Device ID
+     * @param {Object} config - Card configuration
+     * @returns {Promise<boolean>}
+     */
+    async setConfig(deviceId, config) {
+        return this.setCardConfig(deviceId, config);
+    }
+
+    /**
+     * Get QR code configuration from device
+     * Note: This is a placeholder - actual implementation depends on device capabilities
+     * @param {string|number} deviceId - Device ID
+     * @returns {Promise<Object>} QR configuration
+     */
+    async getQRConfig(deviceId) {
+        // QR code configuration may not be available on all devices
+        // Return a default config or attempt to get from device
+        try {
+            // Try to get actual QR config if available
+            const req = new cardMessage.GetQRConfigRequest ? new cardMessage.GetQRConfigRequest() : null;
+            if (req && this.cardClient.getQRConfig) {
+                req.setDeviceid(deviceId);
+                return new Promise((resolve, reject) => {
+                    this.cardClient.getQRConfig(req, (err, response) => {
+                        if (err) {
+                            this.logger.warn(`QR config not available on device ${deviceId}, returning defaults`);
+                            resolve({ enabled: false, format: 'NONE' });
+                            return;
+                        }
+                        resolve(response.toObject());
+                    });
+                });
+            }
+            
+            // Return default if not available
+            return { enabled: false, format: 'NONE', message: 'QR config not supported on this device' };
+        } catch (error) {
+            this.logger.warn('Error getting QR config:', error.message);
+            return { enabled: false, format: 'NONE', error: error.message };
+        }
+    }
+
+    /**
+     * Set QR code configuration on device
+     * Note: This is a placeholder - actual implementation depends on device capabilities
+     * @param {string|number} deviceId - Device ID
+     * @param {Object} qrConfig - QR configuration
+     * @returns {Promise<boolean>}
+     */
+    async setQRConfig(deviceId, qrConfig) {
+        // QR code configuration may not be available on all devices
+        this.logger.warn('setQRConfig: QR configuration is not supported on all devices');
+        return { success: false, message: 'QR configuration not implemented for this device' };
+    }
+
+    /**
+     * Verify a card against the device
+     * @param {string|number} deviceId - Device ID
+     * @param {string} cardData - Card data to verify
+     * @returns {Promise<boolean>} Whether card is valid
+     */
+    async verifyCard(deviceId, cardData) {
+        try {
+            // Check if card is in blacklist
+            const blacklist = await this.getBlacklist(deviceId);
+            const isBlacklisted = blacklist.some(card => 
+                card.cardid === cardData || card.csn === cardData
+            );
+            
+            if (isBlacklisted) {
+                return false;
+            }
+            
+            // Card is valid if not blacklisted
+            return true;
+        } catch (error) {
+            this.logger.error('Error verifying card:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get card statistics for a device
+     * @param {string|number} deviceId - Device ID
+     * @returns {Promise<Object>} Card statistics
+     */
+    async getCardStatistics(deviceId) {
+        try {
+            // Get blacklist count
+            let blacklistCount = 0;
+            try {
+                const blacklist = await this.getBlacklist(deviceId);
+                blacklistCount = blacklist ? blacklist.length : 0;
+            } catch (e) {
+                this.logger.warn('Could not get blacklist for statistics:', e.message);
+            }
+
+            // Get card config for supported types
+            let config = {};
+            try {
+                config = await this.getConfig(deviceId);
+            } catch (e) {
+                this.logger.warn('Could not get card config for statistics:', e.message);
+            }
+
+            return {
+                deviceId,
+                blacklistedCards: blacklistCount,
+                cardConfig: config,
+                timestamp: new Date().toISOString()
+            };
+        } catch (error) {
+            this.logger.error('Error getting card statistics:', error);
             throw error;
         }
     }

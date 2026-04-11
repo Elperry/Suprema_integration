@@ -701,7 +701,7 @@ class SupremaEventService extends EventEmitter {
         enhanced.description = this.getEventDescription(event.eventcode, event.subcode);
         
         // Add readable timestamp - the protobuf field is 'timestamp' not 'datetime'
-        // It's a Unix timestamp in seconds
+        // It's a Unix timestamp in seconds (UTC)
         try {
             // Check for timestamp field (protobuf uses 'timestamp')
             const rawTimestamp = event.timestamp || event.datetime;

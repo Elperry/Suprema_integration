@@ -167,12 +167,12 @@ export default (services) => {
     /**
      * Update card assignment status
      * PATCH /api/enrollment/cards/:id/status
-     * Body: { status }
+     * Body: { status, reason }
      */
     router.patch('/cards/:id/status', async (req, res) => {
         try {
             const { id } = req.params;
-            const { status } = req.body;
+            const { status, reason } = req.body;
 
             if (!status || !['active', 'revoked', 'lost', 'expired'].includes(status)) {
                 return res.status(400).json({
@@ -181,7 +181,13 @@ export default (services) => {
                 });
             }
 
-            const assignment = await enrollment.updateCardStatus(parseInt(id), status);
+            let assignment;
+            // Use revokeCardAssignment for revoked/lost/expired to remove from devices
+            if (status === 'revoked' || status === 'lost' || status === 'expired') {
+                assignment = await enrollment.revokeCardAssignment(parseInt(id), reason || status);
+            } else {
+                assignment = await enrollment.updateCardStatus(parseInt(id), status);
+            }
 
             res.json({
                 success: true,
