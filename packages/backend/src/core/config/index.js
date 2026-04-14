@@ -33,6 +33,7 @@ export function getEnvironment() {
  * @returns {boolean}
  */
 export function isProduction() {
+    return true;
     return getEnvironment() === ENVIRONMENTS.PRODUCTION;
 }
 
@@ -41,6 +42,7 @@ export function isProduction() {
  * @returns {boolean}
  */
 export function isDevelopment() {
+    return false;
     return getEnvironment() === ENVIRONMENTS.DEVELOPMENT;
 }
 
@@ -102,6 +104,8 @@ const configSchema = {
         ip: process.env.GATEWAY_IP || process.env.GATEWAY_HOST || 'localhost',
         useSSL: parseBoolean(process.env.GATEWAY_SSL, false),
         caFile: process.env.GATEWAY_CA_FILE || null,
+        tlsServerName: process.env.GATEWAY_TLS_SERVER_NAME || null,
+        readyTimeoutMs: parseInteger(process.env.GATEWAY_READY_TIMEOUT_MS, 5000),
         reconnectInterval: parseInteger(process.env.GATEWAY_RECONNECT_INTERVAL, 5000),
         maxReconnectAttempts: parseInteger(process.env.GATEWAY_MAX_RECONNECT, 5)
     },
@@ -122,7 +126,7 @@ const configSchema = {
     
     // Logging
     logging: {
-        level: process.env.LOG_LEVEL || (isProduction() ? 'info' : 'debug'),
+        level: process.env.LOG_LEVEL || (isProduction() ? 'error' : 'debug'),
         format: process.env.LOG_FORMAT || 'json',
         file: process.env.LOG_FILE || './logs/application.log',
         maxSize: process.env.LOG_MAX_SIZE || '10m',
@@ -132,9 +136,6 @@ const configSchema = {
     
     // Security
     security: {
-        jwtSecret: process.env.JWT_SECRET || 'change-this-secret-in-production',
-        jwtExpiresIn: process.env.JWT_EXPIRES_IN || '24h',
-        bcryptRounds: parseInteger(process.env.BCRYPT_ROUNDS, 10),
         rateLimitWindow: parseInteger(process.env.RATE_LIMIT_WINDOW, 15 * 60 * 1000), // 15 min
         rateLimitMax: parseInteger(process.env.RATE_LIMIT_MAX, 100)
     },
@@ -178,9 +179,6 @@ function validateConfig() {
             errors.push('Database configuration is required in production');
         }
         
-        if (configSchema.security.jwtSecret === 'change-this-secret-in-production') {
-            errors.push('JWT_SECRET must be set in production');
-        }
     }
     
     // Port validation

@@ -3,12 +3,25 @@
  * Handles synchronization between devices and database for events, users, and cards
  */
 
-import database from '../models/database.js';
+// DatabaseManager instance is now injected via constructor instead of imported
+// as a class (which was a bug — the import resolved to the class, not an instance).
 
 class SyncService {
-    constructor(services) {
+    /**
+     * @param {Object} services - Domain services map
+     * @param {Object} [options]
+     * @param {Object} [options.database] - DatabaseManager instance
+     * @param {Object} [options.logger] - Logger instance
+     */
+    constructor(services, options = {}) {
         this.services = services;
+        this.database = options.database || services.database;
+        this.logger = options.logger || console;
         this.syncIntervals = new Map();
+
+        if (!this.database) {
+            throw new Error('SyncService requires a database instance');
+        }
     }
 
     /**
@@ -20,7 +33,7 @@ class SyncService {
     async syncEventsToDatabase(deviceId, fromEventId = null, batchSize = 1000) {
         try {
             // Get device from database to get last synced event ID
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             const device = devices.find(d => d.id.toString() === deviceId.toString());
             
             if (!device) {
@@ -53,17 +66,17 @@ class SyncService {
                         etime: new Date(event.timestamp)
                     };
 
-                    await database.addGateEvent(gateEvent);
+                    await this.database.addGateEvent(gateEvent);
                     syncedCount++;
                     lastEventId = event.eventID || lastEventId;
                 } catch (err) {
-                    console.error(`Error syncing event ${event.eventID}:`, err.message);
+                    this.logger.error(`Error syncing event ${event.eventID}:`, err.message);
                 }
             }
 
             // Update last_event_sync in device table
             if (syncedCount > 0) {
-                await database.updateDevice(device.id, {
+                await this.database.updateDevice(device.id, {
                     last_event_sync: lastEventId
                 });
             }
@@ -74,7 +87,7 @@ class SyncService {
                 deviceId: deviceId
             };
         } catch (error) {
-            console.error(`Error syncing events from device ${deviceId}:`, error.message);
+            this.logger.error(`Error syncing events from device ${deviceId}:`, error.message);
             throw error;
         }
     }
@@ -85,7 +98,7 @@ class SyncService {
      */
     async syncAllDevicesEvents(batchSize = 1000) {
         try {
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             const results = [];
 
             for (const device of devices) {
@@ -113,7 +126,7 @@ class SyncService {
 
             return results;
         } catch (error) {
-            console.error('Error syncing all devices events:', error.message);
+            this.logger.error('Error syncing all devices events:', error.message);
             throw error;
         }
     }
@@ -124,7 +137,7 @@ class SyncService {
      */
     async getSyncStatus(deviceId) {
         try {
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             const device = devices.find(d => d.id.toString() === deviceId.toString());
             
             if (!device) {
@@ -143,7 +156,7 @@ class SyncService {
                 pendingEvents: Math.max(0, latestEventId - (device.last_event_sync || 0))
             };
         } catch (error) {
-            console.error(`Error getting sync status for device ${deviceId}:`, error.message);
+            this.logger.error(`Error getting sync status for device ${deviceId}:`, error.message);
             throw error;
         }
     }
@@ -171,14 +184,14 @@ class SyncService {
             for (const user of users) {
                 try {
                     // Check if user exists in database
-                    const existingUsers = await database.getAllUsers();
+                    const existingUsers = await this.database.getAllUsers();
                     const existingUser = existingUsers.find(
                         u => u.username === user.userID
                     );
 
                     if (!existingUser) {
                         // Add new user
-                        await database.addUser({
+                        await this.database.addUser({
                             username: user.userID,
                             displayname: user.name || user.userID,
                             userpassword: '' // Password not synced for security
@@ -186,16 +199,16 @@ class SyncService {
                         syncedCount++;
                     }
                 } catch (err) {
-                    console.error(`Error syncing user ${user.userID}:`, err.message);
+                    this.logger.error(`Error syncing user ${user.userID}:`, err.message);
                 }
             }
 
             // Update last_user_sync timestamp
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             const device = devices.find(d => d.id.toString() === deviceId.toString());
             
             if (device) {
-                await database.updateDevice(device.id, {
+                await this.database.updateDevice(device.id, {
                     last_user_sync: new Date()
                 });
             }
@@ -206,7 +219,7 @@ class SyncService {
                 deviceId: deviceId
             };
         } catch (error) {
-            console.error(`Error syncing users from device ${deviceId}:`, error.message);
+            this.logger.error(`Error syncing users from device ${deviceId}:`, error.message);
             throw error;
         }
     }
@@ -216,7 +229,7 @@ class SyncService {
      */
     async syncAllDevicesUsers() {
         try {
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             const results = [];
 
             for (const device of devices) {
@@ -240,7 +253,7 @@ class SyncService {
 
             return results;
         } catch (error) {
-            console.error('Error syncing all devices users:', error.message);
+            this.logger.error('Error syncing all devices users:', error.message);
             throw error;
         }
     }
@@ -258,14 +271,14 @@ class SyncService {
         const syncInterval = setInterval(async () => {
             try {
                 await this.syncEventsToDatabase(deviceId);
-                console.log(`Auto-synced events from device ${deviceId}`);
+                this.logger.info(`Auto-synced events from device ${deviceId}`);
             } catch (error) {
-                console.error(`Auto-sync failed for device ${deviceId}:`, error.message);
+                this.logger.error(`Auto-sync failed for device ${deviceId}:`, error.message);
             }
         }, interval);
 
         this.syncIntervals.set(deviceId, syncInterval);
-        console.log(`Auto-sync started for device ${deviceId} with interval ${interval}ms`);
+        this.logger.info(`Auto-sync started for device ${deviceId} with interval ${interval}ms`);
     }
 
     /**
@@ -277,7 +290,7 @@ class SyncService {
         if (syncInterval) {
             clearInterval(syncInterval);
             this.syncIntervals.delete(deviceId);
-            console.log(`Auto-sync stopped for device ${deviceId}`);
+            this.logger.info(`Auto-sync stopped for device ${deviceId}`);
         }
     }
 
@@ -287,7 +300,7 @@ class SyncService {
      */
     async startAutoSyncAll(interval = 60000) {
         try {
-            const devices = await database.getAllDevices();
+            const devices = await this.database.getAllDevices();
             
             for (const device of devices) {
                 this.startAutoSync(device.id.toString(), interval);
@@ -298,7 +311,7 @@ class SyncService {
                 interval: interval
             };
         } catch (error) {
-            console.error('Error starting auto-sync for all devices:', error.message);
+            this.logger.error('Error starting auto-sync for all devices:', error.message);
             throw error;
         }
     }

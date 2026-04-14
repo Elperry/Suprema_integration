@@ -3,7 +3,7 @@
  * Data access layer for Event entity
  */
 
-import { BaseRepository } from '../../core/base/BaseRepository.js';
+import { BaseRepository } from '../core/base/BaseRepository.js';
 
 /**
  * @class EventRepository

@@ -135,14 +135,6 @@ export const rateLimitConfigs = {
         message: 'Too many requests. Please wait before trying again.'
     },
     
-    // Auth routes - more restrictive (10 per minute)
-    auth: {
-        windowMs: 60000,
-        maxRequests: 10,
-        message: 'Too many authentication attempts. Please wait before trying again.',
-        skipSuccessfulRequests: true
-    },
-    
     // Device operations - moderate limit (30 per minute)
     device: {
         windowMs: 60000,

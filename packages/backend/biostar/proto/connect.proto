@@ -70,7 +70,7 @@ message AddAsyncConnectionResponse {
 }
 
 message DeleteAsyncConnectionRequest {
-  repeated uint32 deviceIDs = 1;;
+  repeated uint32 deviceIDs = 1;
 }
 
 message DeleteAsyncConnectionResponse {

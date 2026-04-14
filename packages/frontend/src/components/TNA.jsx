@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback } from 'react'
 import { tnaAPI, deviceAPI, employeeAPI } from '../services/api'
+import ErrorBanner from './ErrorBanner'
 import './TNA.css'
 
 export default function TNA() {
   const [devices, setDevices] = useState([])
   const [logs, setLogs] = useState([])
   const [summary, setSummary] = useState(null)
+  const [reportData, setReportData] = useState(null)
+  const [reportType, setReportType] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [activeTab, setActiveTab] = useState('logs') // logs, summary, reports
@@ -62,14 +65,36 @@ export default function TNA() {
     try {
       setLoading(true)
       setError(null)
-      const res = await tnaAPI.getLogs({
-        deviceId: filters.deviceId || undefined,
-        employeeId: filters.employeeId || undefined,
-        startDate: filters.startDate,
-        endDate: filters.endDate,
-        page: filters.page,
-        pageSize: filters.pageSize
-      })
+      let res
+      try {
+        // Try gRPC-based device logs first
+        res = await tnaAPI.getLogs({
+          deviceId: filters.deviceId || undefined,
+          employeeId: filters.employeeId || undefined,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
+          page: filters.page,
+          pageSize: filters.pageSize
+        })
+      } catch (grpcErr) {
+        // Fallback to DB-based daily attendance report
+        res = await tnaAPI.getDailyReport({
+          date: filters.startDate,
+          deviceId: filters.deviceId || undefined,
+          userId: filters.employeeId || undefined,
+        })
+        // Normalize DB response shape to match logs format
+        const rows = (res.data.data || []).map(r => ({
+          employeeId: r.userId,
+          employeeName: r.userId,
+          timestamp: r.firstEvent,
+          eventType: 'checkin',
+          deviceId: r.devices?.[0] || '',
+          totalHours: r.totalHours,
+          eventCount: r.eventCount,
+        }))
+        res = { data: { data: rows, pagination: { total: rows.length, totalPages: 1, page: 1 } } }
+      }
       
       setLogs(res.data.data || [])
       if (res.data.pagination) {
@@ -90,12 +115,41 @@ export default function TNA() {
     try {
       setLoading(true)
       setError(null)
-      const res = await tnaAPI.getSummary({
-        deviceId: filters.deviceId || undefined,
-        employeeId: filters.employeeId || undefined,
-        startDate: filters.startDate,
-        endDate: filters.endDate
-      })
+      let res
+      try {
+        res = await tnaAPI.getSummary({
+          deviceId: filters.deviceId || undefined,
+          employeeId: filters.employeeId || undefined,
+          startDate: filters.startDate,
+          endDate: filters.endDate
+        })
+      } catch (grpcErr) {
+        // Fallback: build summary from monthly report data
+        try {
+          const month = filters.startDate?.substring(0, 7) || new Date().toISOString().substring(0, 7)
+          const fallbackRes = await tnaAPI.getMonthlyReport({ month, deviceId: filters.deviceId || undefined, userId: filters.employeeId || undefined })
+          const rows = fallbackRes.data.data || []
+          const totalHours = rows.reduce((sum, r) => sum + (r.totalHours || 0), 0)
+          const totalDays = rows.reduce((sum, r) => sum + (r.daysPresent || 0), 0)
+          res = { data: { data: {
+            totalEmployees: rows.length,
+            totalDays,
+            totalHours: totalHours * 60,
+            avgHoursPerDay: rows.length > 0 ? Math.round((totalHours / Math.max(totalDays, 1)) * 60) : 0,
+            employees: rows.map(r => ({
+              employeeId: r.userId,
+              employeeName: r.userId,
+              daysPresent: r.daysPresent || 0,
+              totalMinutes: (r.totalHours || 0) * 60,
+              avgMinutesPerDay: r.avgHoursPerDay ? r.avgHoursPerDay * 60 : 0,
+              lateArrivals: 0,
+              earlyLeaves: 0,
+            }))
+          }}}
+        } catch {
+          throw grpcErr // re-throw original if fallback also fails
+        }
+      }
       
       setSummary(res.data.data || null)
     } catch (e) {
@@ -123,6 +177,33 @@ export default function TNA() {
       page: 1,
       pageSize: 50
     })
+  }
+
+  const handleExport = async (type, format) => {
+    try {
+      setLoading(true)
+      setError(null)
+      const params = { format, deviceId: filters.deviceId || undefined, userId: filters.employeeId || undefined }
+      let res
+      if (type === 'daily') {
+        params.date = filters.startDate
+        res = await tnaAPI.exportDaily(params)
+      } else {
+        params.month = filters.startDate?.substring(0, 7) || new Date().toISOString().substring(0, 7)
+        res = await tnaAPI.exportMonthly(params)
+      }
+      const blob = new Blob([res.data])
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `attendance_${type}_${filters.startDate || 'report'}.${format === 'xls' ? 'xls' : 'csv'}`
+      a.click()
+      window.URL.revokeObjectURL(url)
+    } catch (e) {
+      setError('Export failed: ' + (e.response?.data?.message || e.message))
+    } finally {
+      setLoading(false)
+    }
   }
 
   const formatTime = (timestamp) => {
@@ -211,12 +292,7 @@ export default function TNA() {
       </div>
 
       {/* Alerts */}
-      {error && (
-        <div className="alert alert-danger">
-          <span>⚠️ {error}</span>
-          <button onClick={() => setError(null)} className="btn-close">×</button>
-        </div>
-      )}
+      <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
       {/* Filters */}
       <div className="card filter-card">
@@ -444,45 +520,118 @@ export default function TNA() {
       {/* Reports Tab */}
       {activeTab === 'reports' && (
         <div className="card">
-          <h3>📈 Reports</h3>
+          <h3>📈 Attendance Reports</h3>
           <div className="reports-grid">
-            <div className="report-card">
+            <div className={`report-card ${reportType === 'daily' ? 'active' : ''}`}>
               <div className="report-icon">📅</div>
               <h4>Daily Report</h4>
-              <p>Generate daily attendance report</p>
-              <button className="btn btn-primary btn-sm">Generate</button>
+              <p>Attendance for a specific date — first in, last out, total hours per employee</p>
+              <button className="btn btn-primary btn-sm" disabled={loading} onClick={async () => {
+                setReportType('daily')
+                setLoading(true)
+                setError(null)
+                try {
+                  const res = await tnaAPI.getDailyReport({ date: filters.startDate, deviceId: filters.deviceId || undefined, userId: filters.employeeId || undefined })
+                  setReportData({ type: 'daily', rows: res.data.data || [], date: res.data.date })
+                } catch (e) { setError('Failed to generate report: ' + (e.response?.data?.message || e.message)) }
+                finally { setLoading(false) }
+              }}>
+                {loading && reportType === 'daily' ? '⏳ Loading…' : '▶️ Generate'}
+              </button>
             </div>
-            <div className="report-card">
-              <div className="report-icon">📆</div>
-              <h4>Weekly Report</h4>
-              <p>Generate weekly attendance summary</p>
-              <button className="btn btn-primary btn-sm">Generate</button>
-            </div>
-            <div className="report-card">
+            <div className={`report-card ${reportType === 'monthly' ? 'active' : ''}`}>
               <div className="report-icon">🗓️</div>
               <h4>Monthly Report</h4>
-              <p>Generate monthly attendance report</p>
-              <button className="btn btn-primary btn-sm">Generate</button>
-            </div>
-            <div className="report-card">
-              <div className="report-icon">📊</div>
-              <h4>Custom Report</h4>
-              <p>Create custom date range report</p>
-              <button className="btn btn-primary btn-sm">Generate</button>
+              <p>Monthly summary — days present, total hours, average hours per day</p>
+              <button className="btn btn-primary btn-sm" disabled={loading} onClick={async () => {
+                setReportType('monthly')
+                setLoading(true)
+                setError(null)
+                try {
+                  const month = filters.startDate?.substring(0, 7) || new Date().toISOString().substring(0, 7)
+                  const res = await tnaAPI.getMonthlyReport({ month, deviceId: filters.deviceId || undefined, userId: filters.employeeId || undefined })
+                  setReportData({ type: 'monthly', rows: res.data.data || [], month: res.data.month })
+                } catch (e) { setError('Failed to generate report: ' + (e.response?.data?.message || e.message)) }
+                finally { setLoading(false) }
+              }}>
+                {loading && reportType === 'monthly' ? '⏳ Loading…' : '▶️ Generate'}
+              </button>
             </div>
           </div>
           
+          {/* Report Results */}
+          {reportData && (
+            <div className="report-results">
+              <div className="card-header-flex" style={{ marginTop: '1rem' }}>
+                <h4>
+                  {reportData.type === 'daily' ? `📅 Daily Report — ${reportData.date}` : `🗓️ Monthly Report — ${reportData.month}`}
+                  <span className="badge badge-info" style={{ marginLeft: '0.5rem' }}>{reportData.rows.length} employees</span>
+                </h4>
+              </div>
+              {reportData.rows.length === 0 ? (
+                <div className="empty-state"><p>No attendance data found for this period.</p></div>
+              ) : reportData.type === 'daily' ? (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>User ID</th>
+                      <th>First In</th>
+                      <th>Last Out</th>
+                      <th>Total Hours</th>
+                      <th>Events</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td><strong>{r.userId}</strong></td>
+                        <td>{r.firstEvent ? new Date(r.firstEvent).toLocaleTimeString() : '—'}</td>
+                        <td>{r.lastEvent ? new Date(r.lastEvent).toLocaleTimeString() : '—'}</td>
+                        <td>{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
+                        <td>{r.eventCount || 0}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>User ID</th>
+                      <th>Days Present</th>
+                      <th>Total Hours</th>
+                      <th>Avg Hours/Day</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportData.rows.map((r, i) => (
+                      <tr key={i}>
+                        <td><strong>{r.userId}</strong></td>
+                        <td>{r.daysPresent || 0}</td>
+                        <td>{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
+                        <td>{r.avgHoursPerDay != null ? `${r.avgHoursPerDay}h` : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
           <div className="export-options">
-            <h4>Export Options</h4>
+            <h4>Export</h4>
             <div className="export-buttons">
-              <button className="btn btn-secondary">
-                📄 Export CSV
+              <button className="btn btn-secondary" onClick={() => handleExport('daily', 'csv')} disabled={loading}>
+                📄 Daily CSV
               </button>
-              <button className="btn btn-secondary">
-                📑 Export Excel
+              <button className="btn btn-secondary" onClick={() => handleExport('daily', 'xls')} disabled={loading}>
+                📑 Daily Excel
               </button>
-              <button className="btn btn-secondary">
-                📋 Export PDF
+              <button className="btn btn-secondary" onClick={() => handleExport('monthly', 'csv')} disabled={loading}>
+                📄 Monthly CSV
+              </button>
+              <button className="btn btn-secondary" onClick={() => handleExport('monthly', 'xls')} disabled={loading}>
+                📑 Monthly Excel
               </button>
             </div>
           </div>

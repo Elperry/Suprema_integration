@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import { asyncHandler } from '../core/errors/index.js';
 
 export default function timeRoutes(services) {
     const router = Router();
@@ -13,7 +14,7 @@ export default function timeRoutes(services) {
      * GET /api/time/status
      * Get time sync status for all connected devices
      */
-    router.get('/status', async (req, res) => {
+    router.get('/status', asyncHandler(async (req, res) => {
         try {
             const connectedDevices = await connectionService.getConnectedDevices();
             
@@ -50,13 +51,13 @@ export default function timeRoutes(services) {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * POST /api/time/sync
      * Manually sync time and timezone to all devices
      */
-    router.post('/sync', async (req, res) => {
+    router.post('/sync', asyncHandler(async (req, res) => {
         try {
             const { timezoneOffset, useSystemTimezone } = req.body;
 
@@ -77,13 +78,13 @@ export default function timeRoutes(services) {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * GET /api/time/device/:deviceId
      * Get time and config for a specific device
      */
-    router.get('/device/:deviceId', async (req, res) => {
+    router.get('/device/:deviceId', asyncHandler(async (req, res) => {
         try {
             const deviceId = parseInt(req.params.deviceId);
             
@@ -103,13 +104,13 @@ export default function timeRoutes(services) {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * POST /api/time/device/:deviceId
      * Set time for a specific device
      */
-    router.post('/device/:deviceId', async (req, res) => {
+    router.post('/device/:deviceId', asyncHandler(async (req, res) => {
         try {
             const deviceId = parseInt(req.params.deviceId);
             const { gmtTime } = req.body;
@@ -126,13 +127,13 @@ export default function timeRoutes(services) {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * POST /api/time/device/:deviceId/config
      * Set timezone config for a specific device
      */
-    router.post('/device/:deviceId/config', async (req, res) => {
+    router.post('/device/:deviceId/config', asyncHandler(async (req, res) => {
         try {
             const deviceId = parseInt(req.params.deviceId);
             const { timezoneOffset, syncWithServer = true } = req.body;
@@ -156,7 +157,7 @@ export default function timeRoutes(services) {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * GET /api/time/info

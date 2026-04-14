@@ -3,7 +3,7 @@
  * Data access layer for Device entity
  */
 
-import { BaseRepository } from '../../core/base/BaseRepository.js';
+import { BaseRepository } from '../core/base/BaseRepository.js';
 
 /**
  * @class DeviceRepository

@@ -7,21 +7,21 @@
 }
 
 .debugger-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 2rem;
-  border-radius: 8px;
+  padding: 0;
   margin-bottom: 1.5rem;
 }
 
 .debugger-header h2 {
   margin: 0 0 0.5rem 0;
-  font-size: 2rem;
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--text-primary, #1e293b);
 }
 
 .debugger-header p {
   margin: 0;
-  opacity: 0.9;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.95rem;
 }
 
 /* Tab Navigation */

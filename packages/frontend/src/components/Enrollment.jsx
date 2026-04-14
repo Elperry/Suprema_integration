@@ -48,6 +48,7 @@ export default function Enrollment() {
   
   // Scanned card state
   const [scannedCard, setScannedCard] = useState(null)
+  const [scanCountdown, setScanCountdown] = useState(0)
   
   // Modal states
   const [showEnrollModal, setShowEnrollModal] = useState(false)
@@ -139,7 +140,20 @@ export default function Enrollment() {
     return () => clearTimeout(timer)
   }, [searchQuery, searchEmployees])
 
+  // Countdown timer for scan
+  useEffect(() => {
+    if (!scanning || scanCountdown <= 0) return
+    const timer = setInterval(() => {
+      setScanCountdown(prev => {
+        if (prev <= 1) { clearInterval(timer); return 0 }
+        return prev - 1
+      })
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [scanning, scanCountdown])
+
   // Scan card from device
+  const SCAN_TIMEOUT = 15
   const handleScanCard = async () => {
     if (!selectedDevice) {
       setError('Please select a device first')
@@ -148,10 +162,11 @@ export default function Enrollment() {
 
     try {
       setScanning(true)
+      setScanCountdown(SCAN_TIMEOUT)
       setError(null)
       setScannedCard(null)
       
-      const res = await enrollmentAPI.scanCard(selectedDevice, 15)
+      const res = await enrollmentAPI.scanCard(selectedDevice, SCAN_TIMEOUT)
       setScannedCard(res.data.data)
       
       if (res.data.data.isAssigned) {
@@ -163,6 +178,7 @@ export default function Enrollment() {
       setError(e.response?.data?.message || e.message || 'Failed to scan card')
     } finally {
       setScanning(false)
+      setScanCountdown(0)
     }
   }
 
@@ -429,18 +445,23 @@ export default function Enrollment() {
             <div className="form-row">
               <div className="form-group" style={{ flex: 1 }}>
                 <label>Select Connected Device</label>
-                <select 
-                  value={selectedDevice} 
-                  onChange={e => setSelectedDevice(e.target.value)}
-                  className="form-control"
-                >
-                  <option value="">-- Select Device --</option>
-                  {connectedDevices.map(d => (
-                    <option key={d.id} value={d.id}>
-                      {d.name} ({d.ip})
-                    </option>
-                  ))}
-                </select>
+                <div className="device-select-wrapper">
+                  <select 
+                    value={selectedDevice} 
+                    onChange={e => setSelectedDevice(e.target.value)}
+                    className="form-control"
+                  >
+                    <option value="">-- Select Device --</option>
+                    {devices.map(d => (
+                      <option key={d.id} value={d.id} disabled={d.status !== 'connected'}>
+                        {d.status === 'connected' ? '🟢' : '🔴'} {d.name} ({d.ip}) {d.status !== 'connected' ? '— Offline' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedDevice && (
+                    <span className={`device-connection-dot ${devices.find(d => String(d.id) === String(selectedDevice))?.status === 'connected' ? 'online' : 'offline'}`} />
+                  )}
+                </div>
                 {connectedDevices.length === 0 && (
                   <small className="text-warning">No connected devices. Please connect a device first.</small>
                 )}
@@ -456,6 +477,29 @@ export default function Enrollment() {
                 </button>
               </div>
             </div>
+
+            {/* Scan Animation */}
+            {scanning && (
+              <div className="scan-animation">
+                <div className="scan-radar">
+                  <div className="scan-radar-ring ring-1"></div>
+                  <div className="scan-radar-ring ring-2"></div>
+                  <div className="scan-radar-ring ring-3"></div>
+                  <div className="scan-radar-icon">📡</div>
+                </div>
+                <div className="scan-status">
+                  <p className="scan-status-text">Waiting for card scan...</p>
+                  <p className="scan-countdown">Time remaining: <strong>{scanCountdown}s</strong></p>
+                  <div className="scan-progress-bar">
+                    <div 
+                      className="scan-progress-fill" 
+                      style={{ width: `${(scanCountdown / SCAN_TIMEOUT) * 100}%` }}
+                    />
+                  </div>
+                  <p className="scan-hint">Place card on the reader of the selected device</p>
+                </div>
+              </div>
+            )}
 
             {/* Scanned Card Display */}
             {scannedCard && (
@@ -661,28 +705,73 @@ export default function Enrollment() {
 
       {activeTab === 'devices' && (
         <div className="card">
-          <h3>Device Enrollment Status</h3>
-          <div className="device-grid">
-            {devices.map(d => (
-              <div key={d.id} className={`device-card ${d.status}`}>
-                <div className="device-header">
-                  <h4>{d.name}</h4>
-                  <span className={`status-dot ${d.status}`}></span>
-                </div>
-                <p className="device-ip">{d.ip}:{d.port}</p>
-                <p className="device-status">{d.status}</p>
-                {d.status === 'connected' && (
-                  <button
-                    onClick={() => handleSyncDevice(d.id)}
-                    className="btn btn-sm btn-primary"
-                    disabled={loading}
-                  >
-                    🔄 Sync Enrollments
-                  </button>
-                )}
-              </div>
-            ))}
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <h3>Device Enrollment Status</h3>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', fontSize: '0.85rem', color: '#666' }}>
+              <span>🟢 {devices.filter(d => d.status === 'connected').length} Connected</span>
+              <span>🔴 {devices.filter(d => d.status !== 'connected').length} Offline</span>
+            </div>
           </div>
+          {devices.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: '#666' }}>
+              <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📱</div>
+              <p>No devices configured. Add devices from the Devices page to get started.</p>
+            </div>
+          ) : (
+            <div className="table-responsive">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Device Name</th>
+                    <th>IP Address</th>
+                    <th>Port</th>
+                    <th>Connection</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {devices.map(d => (
+                    <tr key={d.id}>
+                      <td>
+                        <span style={{
+                          display: 'inline-block',
+                          width: 10,
+                          height: 10,
+                          borderRadius: '50%',
+                          background: d.status === 'connected' ? '#22c55e' : '#ef4444',
+                          marginRight: 8,
+                          verticalAlign: 'middle',
+                          boxShadow: d.status === 'connected' ? '0 0 6px rgba(34,197,94,0.5)' : '0 0 6px rgba(239,68,68,0.3)',
+                        }} />
+                      </td>
+                      <td style={{ fontWeight: 600 }}>{d.name}</td>
+                      <td style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{d.ip}</td>
+                      <td style={{ fontFamily: 'monospace', fontSize: '0.85rem' }}>{d.port}</td>
+                      <td>
+                        <span className={`badge ${d.status === 'connected' ? 'badge-success' : 'badge-danger'}`}>
+                          {d.status === 'connected' ? '✅ Online' : '❌ Offline'}
+                        </span>
+                      </td>
+                      <td>
+                        {d.status === 'connected' ? (
+                          <button
+                            onClick={() => handleSyncDevice(d.id)}
+                            className="btn btn-sm btn-primary"
+                            disabled={loading}
+                          >
+                            🔄 Sync Enrollments
+                          </button>
+                        ) : (
+                          <span style={{ color: '#999', fontSize: '0.85rem' }}>Device offline</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -739,230 +828,6 @@ export default function Enrollment() {
         </div>
       )}
 
-      <style>{`
-        .stats-row {
-          display: flex;
-          gap: 20px;
-          margin-bottom: 20px;
-        }
-        .stat-card {
-          background: #f8f9fa;
-          border-radius: 8px;
-          padding: 20px;
-          text-align: center;
-          flex: 1;
-        }
-        .stat-value {
-          font-size: 32px;
-          font-weight: bold;
-          color: #007bff;
-        }
-        .stat-label {
-          color: #666;
-          font-size: 14px;
-        }
-        .tabs {
-          display: flex;
-          gap: 4px;
-          border-bottom: 2px solid #e0e0e0;
-          margin-bottom: 20px;
-        }
-        .tab {
-          padding: 12px 24px;
-          border: none;
-          background: none;
-          cursor: pointer;
-          border-bottom: 3px solid transparent;
-          margin-bottom: -2px;
-        }
-        .tab:hover { background: #f0f0f0; }
-        .tab.active {
-          border-bottom-color: #007bff;
-          font-weight: bold;
-          color: #007bff;
-        }
-        .form-row {
-          display: flex;
-          gap: 15px;
-          align-items: flex-end;
-        }
-        .form-group {
-          margin-bottom: 15px;
-        }
-        .form-group label {
-          display: block;
-          font-weight: 600;
-          margin-bottom: 5px;
-        }
-        .scanned-card {
-          padding: 15px;
-          border-radius: 8px;
-          margin-top: 15px;
-        }
-        .scanned-card.available {
-          background: #d4edda;
-          border: 1px solid #28a745;
-        }
-        .scanned-card.assigned {
-          background: #f8d7da;
-          border: 1px solid #dc3545;
-        }
-        .card-details p {
-          margin: 5px 0;
-        }
-        .employee-list {
-          max-height: 300px;
-          overflow-y: auto;
-          border: 1px solid #ddd;
-          border-radius: 4px;
-        }
-        .employee-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 12px 15px;
-          border-bottom: 1px solid #eee;
-          cursor: pointer;
-        }
-        .employee-item:hover { background: #f8f9fa; }
-        .employee-item.selected {
-          background: #e3f2fd;
-          border-left: 4px solid #007bff;
-        }
-        .employee-item.has-card {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-        .employee-info {
-          display: flex;
-          flex-direction: column;
-        }
-        .employee-name { font-weight: 600; }
-        .employee-id { font-size: 12px; color: #666; }
-        .employee-dept { font-size: 12px; color: #999; }
-        .selected-employee {
-          padding: 15px;
-          background: #e3f2fd;
-          border-radius: 8px;
-          margin-top: 15px;
-        }
-        .device-checkboxes {
-          display: flex;
-          flex-direction: column;
-          gap: 10px;
-        }
-        .checkbox-item {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          padding: 10px;
-          background: #f8f9fa;
-          border-radius: 4px;
-        }
-        .checkbox-item.enrolled {
-          background: #d4edda;
-        }
-        .enrolled-badge {
-          color: #28a745;
-          margin-left: auto;
-        }
-        .btn-group {
-          display: flex;
-          gap: 10px;
-          margin-top: 15px;
-        }
-        .btn-group-sm {
-          display: flex;
-          gap: 5px;
-        }
-        .badge {
-          padding: 4px 8px;
-          border-radius: 4px;
-          font-size: 12px;
-        }
-        .badge-success { background: #28a745; color: white; }
-        .badge-danger { background: #dc3545; color: white; }
-        .badge-warning { background: #ffc107; color: #333; }
-        .badge-secondary { background: #6c757d; color: white; }
-        .badge-info { background: #17a2b8; color: white; }
-        .alert {
-          padding: 12px 15px;
-          border-radius: 4px;
-          margin-bottom: 15px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-        .alert-danger { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .btn-close { background: none; border: none; font-size: 20px; cursor: pointer; }
-        .device-grid {
-          display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-          gap: 15px;
-        }
-        .device-card {
-          background: #f8f9fa;
-          border-radius: 8px;
-          padding: 15px;
-          border-left: 4px solid #6c757d;
-        }
-        .device-card.connected { border-left-color: #28a745; }
-        .device-card.disconnected { border-left-color: #dc3545; }
-        .device-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
-        .device-header h4 { margin: 0; }
-        .status-dot {
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: #6c757d;
-        }
-        .status-dot.connected { background: #28a745; }
-        .status-dot.disconnected { background: #dc3545; }
-        .device-ip { color: #666; font-size: 14px; margin: 5px 0; }
-        .device-status { text-transform: capitalize; }
-        .modal-overlay {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: rgba(0,0,0,0.5);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          z-index: 1000;
-        }
-        .modal {
-          background: white;
-          border-radius: 8px;
-          width: 500px;
-          max-width: 90%;
-          max-height: 80vh;
-          overflow-y: auto;
-        }
-        .modal-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          padding: 15px 20px;
-          border-bottom: 1px solid #ddd;
-        }
-        .modal-header h3 { margin: 0; }
-        .modal-body { padding: 20px; }
-        .modal-footer {
-          padding: 15px 20px;
-          border-top: 1px solid #ddd;
-          display: flex;
-          justify-content: flex-end;
-          gap: 10px;
-        }
-        .text-warning { color: #856404; }
-      `}</style>
     </div>
   )
 }

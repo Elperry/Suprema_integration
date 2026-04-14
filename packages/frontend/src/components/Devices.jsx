@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import { deviceAPI, locationAPI } from '../services/api'
+import { Link } from 'react-router-dom'
+import { deviceAPI, locationAPI, eventAPI, userAPI } from '../services/api'
 import './Devices.css'
 import './DeviceTree.css'
 
@@ -26,6 +27,11 @@ export default function Devices() {
   const [showLocationModal, setShowLocationModal] = useState(false)
   const [editingDevice, setEditingDevice] = useState(null)
   const [editingLocation, setEditingLocation] = useState(null)
+
+  // Device health detail panel
+  const [selectedDevice, setSelectedDevice] = useState(null)
+  const [healthData, setHealthData] = useState(null)
+  const [healthLoading, setHealthLoading] = useState(false)
   
   // Forms
   const [deviceForm, setDeviceForm] = useState({ 
@@ -226,6 +232,35 @@ export default function Devices() {
     }
   }
 
+  const handleSelectDevice = async (device) => {
+    if (selectedDevice?.id === device.id) {
+      setSelectedDevice(null)
+      setHealthData(null)
+      return
+    }
+    setSelectedDevice(device)
+    setHealthLoading(true)
+    setHealthData(null)
+    try {
+      const [healthRes, reconciliationRes] = await Promise.allSettled([
+        eventAPI.getReplicationHealth({ deviceId: device.id }),
+        userAPI.getDeviceReconciliation(device.id)
+      ])
+      const health = healthRes.status === 'fulfilled' ? healthRes.value.data : null
+      const recon = reconciliationRes.status === 'fulfilled' ? reconciliationRes.value.data : null
+      const deviceHealth = health?.devices?.find(d => d.deviceId === device.id) || null
+      setHealthData({
+        service: health?.service || null,
+        device: deviceHealth,
+        reconciliation: recon?.data || null
+      })
+    } catch (err) {
+      console.error('Failed to load device health:', err)
+    } finally {
+      setHealthLoading(false)
+    }
+  }
+
   // Location CRUD
   const handleAddLocation = (parentId = null) => {
     setEditingLocation(null)
@@ -304,7 +339,7 @@ export default function Devices() {
     return (
       <div 
         key={device.id} 
-        className={`tree-device ${isDragging ? 'dragging' : ''} ${isLoading ? 'loading' : ''}`}
+        className={`tree-device ${isDragging ? 'dragging' : ''} ${isLoading ? 'loading' : ''} ${selectedDevice?.id === device.id ? 'selected' : ''}`}
         draggable={!isLoading}
         onDragStart={(e) => handleDragStart(e, device)}
         onDragEnd={handleDragEnd}
@@ -312,7 +347,7 @@ export default function Devices() {
         <div className="device-drag-handle" title="Drag to move">
           ⠿
         </div>
-        <div className="device-info">
+        <div className="device-info" onClick={() => handleSelectDevice(device)} style={{ cursor: 'pointer' }}>
           {inLocation && (
             <span className={`device-direction ${device.direction || 'in'}`}>
               {device.direction === 'out' ? '⬅️ OUT' : '➡️ IN'}
@@ -352,6 +387,9 @@ export default function Devices() {
               {actionLoading[device.id] === 'connect' ? '⏳' : '🔗'}
             </button>
           )}
+          <Link to={`/device/${device.id}`} className="btn-icon" title="Device Detail" style={{ textDecoration: 'none' }}>
+            🔍
+          </Link>
           <button 
             className="btn-icon" 
             title="Edit"
@@ -519,6 +557,65 @@ export default function Devices() {
         </div>
       )}
 
+      {/* Device Health Detail Panel */}
+      {selectedDevice && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ margin: 0 }}>📡 {selectedDevice.name} — Health Details</h3>
+            <button className="btn btn-secondary" onClick={() => { setSelectedDevice(null); setHealthData(null) }} style={{ padding: '4px 12px', fontSize: 13 }}>✕ Close</button>
+          </div>
+
+          {healthLoading ? (
+            <p style={{ color: '#94a3b8' }}>Loading health data...</p>
+          ) : healthData ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+              <HealthStat label="Status" value={selectedDevice.status === 'connected' ? '🟢 Connected' : '🔴 Disconnected'} />
+              <HealthStat label="IP Address" value={`${selectedDevice.ip}:${selectedDevice.port}`} />
+              <HealthStat label="Direction" value={(selectedDevice.direction || 'in').toUpperCase()} />
+              {healthData.device && (
+                <>
+                  <HealthStat
+                    label="Replication Lag"
+                    value={healthData.device.replicationLagSeconds != null ? `${healthData.device.replicationLagSeconds}s` : 'N/A'}
+                    warn={healthData.device.replicationLagSeconds > 60}
+                  />
+                  <HealthStat label="Monitoring" value={healthData.device.monitoringEnabled ? '✅ Enabled' : '❌ Disabled'} />
+                  <HealthStat label="Total Events Persisted" value={healthData.device.totalPersisted ?? 'N/A'} />
+                  <HealthStat label="Sync Failures" value={healthData.device.failureCount ?? 0} warn={healthData.device.failureCount > 0} />
+                  <HealthStat label="Last Event Sync" value={healthData.device.lastEventSync ? new Date(healthData.device.lastEventSync).toLocaleString() : 'Never'} />
+                  <HealthStat label="Last Success" value={healthData.device.lastSuccessAt ? new Date(healthData.device.lastSuccessAt).toLocaleString() : 'Never'} />
+                  {healthData.device.lastError && (
+                    <HealthStat label="Last Error" value={healthData.device.lastError} warn />
+                  )}
+                </>
+              )}
+              {healthData.reconciliation && (
+                <>
+                  <HealthStat label="DB Users" value={healthData.reconciliation.summary?.databaseUsers ?? 'N/A'} />
+                  <HealthStat label="Device Users" value={healthData.reconciliation.summary?.deviceUsers ?? 'N/A'} />
+                  <HealthStat label="Matched" value={healthData.reconciliation.summary?.matched ?? 'N/A'} />
+                  <HealthStat
+                    label="Missing on Device"
+                    value={healthData.reconciliation.summary?.missingOnDevice ?? 0}
+                    warn={healthData.reconciliation.summary?.missingOnDevice > 0}
+                  />
+                  <HealthStat
+                    label="Card Mismatches"
+                    value={healthData.reconciliation.summary?.cardMismatches ?? 0}
+                    warn={healthData.reconciliation.summary?.cardMismatches > 0}
+                  />
+                </>
+              )}
+              {!healthData.device && !healthData.reconciliation && (
+                <p style={{ color: '#94a3b8', gridColumn: '1 / -1' }}>No health data available. Device may not be connected or monitored.</p>
+              )}
+            </div>
+          ) : (
+            <p style={{ color: '#94a3b8' }}>Unable to load health data.</p>
+          )}
+        </div>
+      )}
+
       {/* Legend */}
       <div className="tree-legend card">
         <h4>Legend:</h4>
@@ -668,6 +765,21 @@ export default function Devices() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function HealthStat({ label, value, warn }) {
+  return (
+    <div style={{
+      padding: '10px 14px',
+      backgroundColor: '#f8fafc',
+      borderRadius: 6,
+      border: '1px solid #e2e8f0',
+      borderLeft: `3px solid ${warn ? '#ef4444' : '#cbd5e1'}`,
+    }}>
+      <div style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, color: warn ? '#dc2626' : '#1e293b', wordBreak: 'break-word' }}>{value}</div>
     </div>
   )
 }

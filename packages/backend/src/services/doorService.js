@@ -50,12 +50,13 @@ class SupremaDoorService extends EventEmitter {
      * Initialize all service clients
      */
     initializeClients() {
-        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const gatewayAddress = this.connectionService.getGatewayAddress();
         const credentials = this.connectionService.sslCreds;
+        const clientOptions = this.connectionService.getGatewayClientOptions();
 
-        this.doorClient = new doorService.DoorClient(gatewayAddress, credentials);
-        this.accessClient = new accessService.AccessClient(gatewayAddress, credentials);
-        this.scheduleClient = new scheduleService.ScheduleClient(gatewayAddress, credentials);
+        this.doorClient = new doorService.DoorClient(gatewayAddress, credentials, clientOptions);
+        this.accessClient = new accessService.AccessClient(gatewayAddress, credentials, clientOptions);
+        this.scheduleClient = new scheduleService.ScheduleClient(gatewayAddress, credentials, clientOptions);
         
         // Note: zone.proto doesn't define any gRPC services, only messages
         // Zone functionality is provided through specific zone type services like:
@@ -168,33 +169,69 @@ class SupremaDoorService extends EventEmitter {
     }
 
     /**
-     * Get detailed door information
+     * Get all doors from device (optionally filter by doorIds)
+     * NOTE: door_pb has no GetRequest — only GetListRequest is available.
      * @param {string} deviceId - Device ID
-     * @param {Array} doorIds - Array of door IDs
+     * @param {Array} [doorIds] - Optional array of door IDs to filter by
      * @returns {Promise<Array>} Door information array
      */
     async getDoors(deviceId, doorIds) {
         try {
-            const req = new doorMessage.GetRequest();
-            req.setDeviceid(deviceId);
-            req.setDooridsList(doorIds);
-
-            return new Promise((resolve, reject) => {
-                this.doorClient.get(req, (err, response) => {
-                    if (err) {
-                        this.logger.error(`Failed to get doors for device ${deviceId}:`, err);
-                        reject(err);
-                        return;
-                    }
-
-                    const doors = response.toObject().doorsList;
-                    resolve(doors);
-                });
-            });
+            const doors = await this.getDoorList(deviceId);
+            if (doorIds && doorIds.length > 0) {
+                const idSet = new Set(doorIds.map(String));
+                return doors.filter(d => idSet.has(String(d.doorid)));
+            }
+            return doors;
         } catch (error) {
             this.logger.error('Error getting doors:', error);
             throw error;
         }
+    }
+
+    /**
+     * Get a single door by ID
+     * @param {string} deviceId - Device ID
+     * @param {string|number} doorId - Door ID
+     * @returns {Promise<Object|null>} Door object or null
+     */
+    async getDoorById(deviceId, doorId) {
+        try {
+            const doors = await this.getDoorList(deviceId);
+            return doors.find(d => String(d.doorid) === String(doorId)) || null;
+        } catch (error) {
+            this.logger.error('Error getting door by ID:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update door configuration (delete + re-add, no gRPC update exists)
+     * @param {string} deviceId - Device ID
+     * @param {string|number} doorId - Door ID to update
+     * @param {Object} doorConfig - New door configuration
+     * @returns {Promise<boolean>} Success status
+     */
+    async updateDoor(deviceId, doorId, doorConfig) {
+        try {
+            await this.deleteDoors(deviceId, [String(doorId)]);
+            await this.createDoor(deviceId, { ...doorConfig, doorId: String(doorId) });
+            this.emit('door:updated', { deviceId, doorId });
+            return true;
+        } catch (error) {
+            this.logger.error('Error updating door:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Delete a single door
+     * @param {string} deviceId - Device ID
+     * @param {string|number} doorId - Door ID to delete
+     * @returns {Promise<boolean>} Success status
+     */
+    async deleteDoor(deviceId, doorId) {
+        return this.deleteDoors(deviceId, [String(doorId)]);
     }
 
     /**
@@ -337,9 +374,11 @@ class SupremaDoorService extends EventEmitter {
      */
     async getDoorStatus(deviceId, doorIds) {
         try {
+            // Accept either a single doorId string/number or an array
+            const idList = Array.isArray(doorIds) ? doorIds.map(String) : [String(doorIds)];
             const req = new doorMessage.GetStatusRequest();
             req.setDeviceid(deviceId);
-            req.setDooridsList(doorIds);
+            req.setDooridsList(idList);
 
             return new Promise((resolve, reject) => {
                 this.doorClient.getStatus(req, (err, response) => {
@@ -889,6 +928,12 @@ class SupremaDoorService extends EventEmitter {
             throw error;
         }
     }
+
+    // Aliases for route compatibility
+    getAccessLevels(deviceId) { return this.getAccessLevelList(deviceId); }
+    getAccessSchedules(deviceId) { return this.getScheduleList(deviceId); }
+    getAccessGroups(deviceId) { return this.getAccessGroupList(deviceId); }
+    createAccessSchedule(deviceId, config) { return this.createWeeklySchedule(deviceId, config); }
 }
 
 export default SupremaDoorService;

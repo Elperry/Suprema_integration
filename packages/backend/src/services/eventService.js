@@ -46,10 +46,11 @@ class SupremaEventService extends EventEmitter {
      * Initialize event service client
      */
     initializeClient() {
-        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const gatewayAddress = this.connectionService.getGatewayAddress();
         const credentials = this.connectionService.sslCreds;
+        const clientOptions = this.connectionService.getGatewayClientOptions();
 
-        this.eventClient = new eventService.EventClient(gatewayAddress, credentials);
+        this.eventClient = new eventService.EventClient(gatewayAddress, credentials, clientOptions);
         this.logger.info('Event service client initialized');
     }
 
@@ -57,10 +58,13 @@ class SupremaEventService extends EventEmitter {
      * Load event code map for event description lookup
      * @param {string} codeMapFile - Path to event code map JSON file
      */
-    loadEventCodeMap(codeMapFile = './data/event_code.json') {
+    loadEventCodeMap(codeMapFile) {
+        // Resolve relative to the package root (two levels up from this file)
+        const defaultPath = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/i, '$1'), '..', '..', 'data', 'event_code.json');
+        const filePath = codeMapFile || defaultPath;
         try {
-            if (fs.existsSync(codeMapFile)) {
-                const jsonData = fs.readFileSync(codeMapFile, 'utf8');
+            if (fs.existsSync(filePath)) {
+                const jsonData = fs.readFileSync(filePath, 'utf8');
                 const codeMapData = JSON.parse(jsonData);
                 
                 codeMapData.entries.forEach(entry => {
@@ -70,7 +74,7 @@ class SupremaEventService extends EventEmitter {
 
                 this.logger.info(`Loaded ${this.eventCodeMap.size} event code mappings`);
             } else {
-                this.logger.warn(`Event code map file not found: ${codeMapFile}`);
+                this.logger.warn(`Event code map file not found: ${filePath}`);
                 this.createDefaultEventCodeMap();
             }
         } catch (error) {

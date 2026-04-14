@@ -4,14 +4,19 @@
  */
 
 import express from 'express';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
-export default (database, logger) => {
+export default (services) => {
+    const database = services.database;
+    const logger = services.logger || console;
+
     /**
      * GET /api/employees
-     * Get all employees with optional filters
+     * Get all employees with optional filters and pagination
+     * Query: company_id, suspend, page, limit, search, department
      */
-    router.get('/', async (req, res) => {
+    router.get('/', asyncHandler(async (req, res) => {
         try {
             const filters = {};
             
@@ -20,14 +25,41 @@ export default (database, logger) => {
             }
             
             if (req.query.suspend !== undefined) {
-                filters.suspend = req.query.suspend === 'true';
+                filters.suspend = req.query.suspend === 'true' || req.query.suspend === '1';
             }
 
-            const employees = await database.getAllEmployees(filters);
+            if (req.query.department) {
+                filters.department = req.query.department;
+            }
+
+            let employees = await database.getAllEmployees(filters);
+
+            // Server-side search filtering
+            if (req.query.search) {
+                const term = req.query.search.toLowerCase();
+                employees = employees.filter(e =>
+                    (e.name || e.full_name || e.employee_name || '').toLowerCase().includes(term) ||
+                    (e.email || '').toLowerCase().includes(term) ||
+                    String(e.id || e.employee_id || '').toLowerCase().includes(term)
+                );
+            }
+
+            // Pagination
+            const total = employees.length;
+            const page = parseInt(req.query.page) || 0;
+            const limit = parseInt(req.query.limit) || 0;
+
+            if (page > 0 && limit > 0) {
+                const start = (page - 1) * limit;
+                employees = employees.slice(start, start + limit);
+            }
 
             res.json({
                 success: true,
                 count: employees.length,
+                total,
+                page: page || 1,
+                totalPages: limit > 0 ? Math.ceil(total / limit) : 1,
                 data: employees
             });
         } catch (error) {
@@ -37,13 +69,13 @@ export default (database, logger) => {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * GET /api/employees/:id
      * Get employee by ID
      */
-    router.get('/:id', async (req, res) => {
+    router.get('/:id', asyncHandler(async (req, res) => {
         try {
             const employee = await database.getEmployeeById(parseInt(req.params.id));
 
@@ -65,13 +97,13 @@ export default (database, logger) => {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * GET /api/employees/search/:term
      * Search employees by name or email
      */
-    router.get('/search/:term', async (req, res) => {
+    router.get('/search/:term', asyncHandler(async (req, res) => {
         try {
             const employees = await database.searchEmployees(req.params.term);
 
@@ -87,13 +119,13 @@ export default (database, logger) => {
                 error: error.message
             });
         }
-    });
+    }));
 
     /**
      * GET /api/employees/:id/card
      * Get employee card information
      */
-    router.get('/:id/card', async (req, res) => {
+    router.get('/:id/card', asyncHandler(async (req, res) => {
         try {
             const employee = await database.getEmployeeById(parseInt(req.params.id));
 
@@ -120,7 +152,7 @@ export default (database, logger) => {
                 error: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

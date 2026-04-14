@@ -1,0 +1,189 @@
+.scanning-page .page-subtitle {
+  color: #6b7280;
+  margin: 0.25rem 0 1rem;
+}
+
+.scanning-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .scanning-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Scanner panel */
+.scanner-panel {
+  position: sticky;
+  top: 1rem;
+}
+
+.scanner-panel .form-field {
+  margin-bottom: 1rem;
+}
+
+.scanner-panel .form-field label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+  color: #374151;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: #6b7280;
+}
+
+.empty-state.small {
+  padding: 1.25rem 1rem;
+}
+
+.empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.empty-state .hint {
+  font-size: 0.8rem;
+  color: #9ca3af;
+  margin-top: 0.35rem;
+}
+
+/* Scan button */
+.scan-action {
+  text-align: center;
+  padding: 1.5rem 0;
+}
+
+.btn-scan {
+  font-size: 1.1rem;
+  padding: 0.75rem 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.btn-scan:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+}
+
+.btn-scan.scanning {
+  pointer-events: none;
+  opacity: 0.85;
+}
+
+.scan-pulse {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  animation: pulse-ring 1s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.8); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.5; }
+  100% { transform: scale(0.8); opacity: 1; }
+}
+
+.scan-device-label {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+
+/* Scan history */
+.scan-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.scan-result-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 0.75rem;
+  background: #fafafa;
+}
+
+.scan-result-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.card-icon {
+  font-size: 1.5rem;
+}
+
+.scan-result-info {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-id {
+  font-size: 0.85rem;
+  background: #f3f4f6;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+}
+
+.scan-time {
+  font-size: 0.78rem;
+  color: #9ca3af;
+}
+
+.scan-result-details {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.5rem 2.25rem;
+  flex-wrap: wrap;
+}
+
+.detail-tag {
+  font-size: 0.75rem;
+  background: #e5e7eb;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  color: #4b5563;
+}
+
+.detail-tag.mono {
+  font-family: monospace;
+}
+
+.scan-result-actions {
+  margin-left: 2.25rem;
+}
+
+/* Blacklist */
+.blacklist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.blacklist-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  background: #fef2f2;
+}
+
+.blacklist-item code {
+  font-size: 0.82rem;
+}

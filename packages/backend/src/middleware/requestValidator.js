@@ -336,6 +336,60 @@ export const schemas = {
             type: 'string',
             maxLength: 255
         }
+    },
+
+    // Device CRUD schemas
+    deviceCreate: {
+        name: {
+            type: 'string',
+            required: true,
+            minLength: 1,
+            maxLength: 100
+        },
+        ip: {
+            type: 'string',
+            required: true,
+            pattern: '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
+        },
+        port: {
+            type: 'integer',
+            required: true,
+            min: 1,
+            max: 65535
+        }
+    },
+
+    // Preset schemas
+    presetCreate: {
+        name: {
+            type: 'string',
+            required: true,
+            minLength: 1,
+            maxLength: 100
+        },
+        scope: {
+            type: 'string',
+            required: true,
+            enum: ['events', 'gate-events', 'audit', 'attendance', 'reconciliation']
+        }
+    },
+
+    // Card scan schema
+    cardScan: {
+        deviceId: {
+            type: 'string',
+            required: true,
+            pattern: '^[0-9]+$'
+        }
+    },
+
+    // Bulk import schema
+    bulkImport: {
+        csvData: {
+            type: 'string',
+            required: true,
+            minLength: 1
+        }
     }
 };
 

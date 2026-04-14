@@ -90,8 +90,6 @@ export {
     ValidationError,
     NotFoundError,
     AlreadyExistsError,
-    AuthenticationError,
-    AuthorizationError,
     DeviceError,
     DeviceNotConnectedError,
     ConnectionError,

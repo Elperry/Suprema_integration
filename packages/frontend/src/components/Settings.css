@@ -214,6 +214,8 @@
   padding: 0.75rem;
   background: var(--bg-color);
   border-radius: 6px;
+  gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .info-item .label {
@@ -224,6 +226,9 @@
 .info-item .value {
   color: var(--text-primary);
   font-family: monospace;
+  word-break: break-all;
+  text-align: right;
+  min-width: 0;
 }
 
 /* Endpoints List */

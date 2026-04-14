@@ -9,6 +9,7 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import winston from 'winston';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 
 // Create require function for CommonJS modules
 const require = createRequire(import.meta.url);
@@ -21,6 +22,11 @@ const deviceService = require('../../biostar/service/device_grpc_pb');
 const connectMessage = require('../../biostar/service/connect_pb');
 const deviceMessage = require('../../biostar/service/device_pb');
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const backendRoot = path.resolve(__dirname, '..', '..');
+const repoRoot = path.resolve(backendRoot, '..', '..');
+
 class SupremaConnectionService extends EventEmitter {
     constructor(config, database) {
         super();
@@ -31,6 +37,9 @@ class SupremaConnectionService extends EventEmitter {
         this.connectedDevices = new Map();
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+        this.gatewayReady = false;
+        this.gatewayAddress = null;
+        this.gatewayClientOptions = {};
         
         // Initialize with insecure credentials by default
         // This will be updated when initializeGateway is called
@@ -58,24 +67,25 @@ class SupremaConnectionService extends EventEmitter {
         try {
             const config = gatewayConfig || this.config.gateway;
             const gatewayAddress = `${config.ip}:${config.port}`;
+            const readyTimeoutMs = config.readyTimeoutMs || 5000;
+            const usingTLS = config.useSSL || !!config.caFile;
             
             // Determine credentials (TLS or insecure)
             let credentials;
+            let resolvedCaPath = null;
             
-            if (config.caFile) {
+            if (usingTLS) {
                 // Load SSL certificate if provided
-                const certPath = path.resolve(config.caFile);
-                if (!fs.existsSync(certPath)) {
-                    this.logger.warn(`Certificate file not found: ${certPath}. Using insecure connection.`);
-                    credentials = grpc.credentials.createInsecure();
+                resolvedCaPath = this.resolveConfigPath(config.caFile);
+                if (!resolvedCaPath || !fs.existsSync(resolvedCaPath)) {
+                    throw new Error(`Gateway CA file not found: ${config.caFile}`);
                 } else {
                     try {
-                        const rootCa = fs.readFileSync(certPath);
+                        const rootCa = fs.readFileSync(resolvedCaPath);
                         credentials = grpc.credentials.createSsl(rootCa);
-                        this.logger.info('Using TLS connection with certificate');
+                        this.logger.info(`Using TLS connection with certificate ${resolvedCaPath}`);
                     } catch (error) {
-                        this.logger.warn(`Failed to load certificate: ${error.message}. Using insecure connection.`);
-                        credentials = grpc.credentials.createInsecure();
+                        throw new Error(`Failed to load gateway CA certificate: ${error.message}`);
                     }
                 }
             } else {
@@ -86,20 +96,80 @@ class SupremaConnectionService extends EventEmitter {
 
             // Store credentials for other services to use
             this.sslCreds = credentials;
+            this.gatewayAddress = gatewayAddress;
+            this.gatewayClientOptions = this.buildGatewayClientOptions(config);
+            this.gatewayReady = false;
 
             // Initialize clients with the credentials
-            this.connClient = new connectService.ConnectClient(gatewayAddress, credentials);
-            this.deviceClient = new deviceService.DeviceClient(gatewayAddress, credentials);
+            this.connClient = new connectService.ConnectClient(gatewayAddress, credentials, this.gatewayClientOptions);
+            this.deviceClient = new deviceService.DeviceClient(gatewayAddress, credentials, this.gatewayClientOptions);
 
-            this.logger.info(`Gateway client initialized for ${gatewayAddress}`);
+            await this.waitForGatewayReady(readyTimeoutMs);
+            this.gatewayReady = true;
+
+            this.logger.info(`Gateway client initialized for ${gatewayAddress}`, {
+                usingTLS,
+                tlsServerName: config.tlsServerName || null,
+                readyTimeoutMs,
+            });
             this.emit('gateway:connected', { address: gatewayAddress });
             
             return true;
         } catch (error) {
+            this.gatewayReady = false;
+            this.connClient = null;
+            this.deviceClient = null;
             this.logger.error('Failed to initialize gateway connection:', error);
             this.emit('gateway:error', error);
             throw error;
         }
+    }
+
+    resolveConfigPath(filePath) {
+        if (!filePath) return null;
+        if (path.isAbsolute(filePath)) return filePath;
+
+        const candidates = [
+            path.resolve(process.cwd(), filePath),
+            path.resolve(backendRoot, filePath),
+            path.resolve(repoRoot, filePath),
+        ];
+
+        return candidates.find(candidate => fs.existsSync(candidate)) || candidates[0];
+    }
+
+    buildGatewayClientOptions(config = {}) {
+        const options = {};
+        if (config.tlsServerName) {
+            options['grpc.ssl_target_name_override'] = config.tlsServerName;
+            options['grpc.default_authority'] = config.tlsServerName;
+        }
+        return options;
+    }
+
+    waitForGatewayReady(timeoutMs = 5000) {
+        if (!this.connClient) {
+            return Promise.reject(new Error('Gateway client not initialized'));
+        }
+
+        const deadline = Date.now() + timeoutMs;
+        return new Promise((resolve, reject) => {
+            this.connClient.waitForReady(deadline, (error) => {
+                if (error) {
+                    reject(error);
+                    return;
+                }
+                resolve(true);
+            });
+        });
+    }
+
+    getGatewayAddress() {
+        return this.gatewayAddress || `${this.config.gateway.ip}:${this.config.gateway.port}`;
+    }
+
+    getGatewayClientOptions() {
+        return this.gatewayClientOptions || {};
     }
 
     /**
@@ -163,7 +233,7 @@ class SupremaConnectionService extends EventEmitter {
             return new Promise((resolve, reject) => {
                 this.connClient.connect(req, { deadline }, (err, response) => {
                     if (err) {
-                        this.logger.error(`Failed to connect to device ${deviceConfig.ip}:${deviceConfig.port}`, {
+                        this.logger.warn(`Failed to connect to device ${deviceConfig.ip}:${deviceConfig.port}`, {
                             error: err.message,
                             code: err.code,
                             details: err.details
@@ -799,7 +869,8 @@ class SupremaConnectionService extends EventEmitter {
      */
     getConnectionStats() {
         return {
-            gatewayConnected: !!this.connClient,
+            gatewayConnected: this.gatewayReady,
+            gatewayAddress: this.getGatewayAddress(),
             connectedDeviceCount: this.connectedDevices.size,
             connectedDevices: Array.from(this.connectedDevices.values()),
             reconnectAttempts: this.reconnectAttempts
@@ -831,7 +902,7 @@ class SupremaConnectionService extends EventEmitter {
                         success: true
                     });
                 } catch (error) {
-                    this.logger.error(`Failed to connect to device ${device.name} (${device.ip}:${device.port}):`, error);
+                    this.logger.warn(`Failed to connect to device ${device.name} (${device.ip}:${device.port}):`, error);
                     // Increment retry counter for failed connection
                     await this.database.incrementDeviceRetries(device.id);
                     connectionResults.push({
@@ -908,7 +979,7 @@ class SupremaConnectionService extends EventEmitter {
             this.logger.warn(`Could not check gateway for existing connections: ${err.message}`);
         }
         
-        const maxRetries = 3;
+        const maxRetries = 1;
         const retryDelay = 2000; // 2 seconds between retries
         
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -1029,8 +1100,16 @@ class SupremaConnectionService extends EventEmitter {
             if (!this.database) {
                 throw new Error('Database not available');
             }
+
+            const normalizedDeviceId = typeof deviceId === 'string'
+                ? parseInt(deviceId, 10)
+                : deviceId;
+
+            if (!Number.isInteger(normalizedDeviceId)) {
+                throw new Error(`Invalid device ID: ${deviceId}`);
+            }
             
-            const device = await this.database.updateDevice(deviceId, updates);
+            const device = await this.database.updateDevice(normalizedDeviceId, updates);
             this.logger.info(`Updated device in database: ${device.name}`);
             
             return device;
@@ -1049,12 +1128,20 @@ class SupremaConnectionService extends EventEmitter {
                 throw new Error('Database not available');
             }
 
+            const normalizedDeviceId = typeof deviceId === 'string'
+                ? parseInt(deviceId, 10)
+                : deviceId;
+
+            if (!Number.isInteger(normalizedDeviceId)) {
+                throw new Error(`Invalid device ID: ${deviceId}`);
+            }
+
             const device = await this.database.getPrisma().device.findUnique({
-                where: { id: deviceId }
+                where: { id: normalizedDeviceId }
             });
             
             if (!device) {
-                throw new Error(`Device not found: ${deviceId}`);
+                throw new Error(`Device not found: ${normalizedDeviceId}`);
             }
             
             // Disconnect device first if connected (check if it's in connectedDevices map)
@@ -1066,7 +1153,7 @@ class SupremaConnectionService extends EventEmitter {
                 }
             }
             
-            await this.database.deleteDevice(deviceId);
+            await this.database.deleteDevice(normalizedDeviceId);
             this.logger.info(`Removed device from database: ${device.name}`);
             
             return true;

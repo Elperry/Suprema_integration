@@ -1,0 +1,50 @@
+/* Skeleton Loader Animations */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.skeleton-line {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-row td {
+  padding: 12px 15px;
+}
+
+.skeleton-row td .skeleton-line {
+  height: 16px;
+  width: 80%;
+}
+
+.skeleton-row:nth-child(even) td .skeleton-line {
+  width: 65%;
+}
+
+.skeleton-row:nth-child(3n) td .skeleton-line {
+  width: 90%;
+}
+
+.skeleton-card {
+  border-radius: 10px;
+  background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.skeleton-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.skeleton-text-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 0;
+}

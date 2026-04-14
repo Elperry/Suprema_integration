@@ -46,10 +46,11 @@ class SupremaTimeService extends EventEmitter {
      */
     initializeClient() {
         try {
-            const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+            const gatewayAddress = this.connectionService.getGatewayAddress();
             const credentials = this.connectionService.sslCreds;
+            const clientOptions = this.connectionService.getGatewayClientOptions();
             
-            this.timeClient = new timeService.TimeClient(gatewayAddress, credentials);
+            this.timeClient = new timeService.TimeClient(gatewayAddress, credentials, clientOptions);
             this.logger.info('Time service client initialized');
         } catch (error) {
             this.logger.error('Failed to initialize time service client:', error);

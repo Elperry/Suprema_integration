@@ -4,66 +4,57 @@
  */
 
 import express from 'express';
+import { extractUserIdFromEvent, resolveSupremaDeviceId } from '../utils/deviceResolver.js';
+import { toCsv, toExcelTable } from '../utils/csv.js';
+import { asyncHandler } from '../core/errors/index.js';
+
 const router = express.Router();
 
-/**
- * Helper function to extract user ID from event
- * For user-related events (0x5000-0x5FFF), the user ID may be in entityid instead of userid
- * @param {Object} event - Event object from device
- * @returns {string|null} User ID or null
- */
-function extractUserIdFromEvent(event) {
-    // First check userid
-    if (event.userid && event.userid !== '' && event.userid !== '0') {
-        return event.userid;
-    }
-    
-    // For user events (event codes 0x5000-0x5FFF = 20480-24575), use entityid as fallback
-    const eventCode = event.eventcode || 0;
-    if (eventCode >= 0x5000 && eventCode <= 0x5FFF) {
-        if (event.entityid && event.entityid !== 0) {
-            return String(event.entityid);
-        }
-    }
-    
-    return null;
-}
-
 export default (services) => {
+    const audit = services.audit;
     /**
      * Helper function to get Suprema device ID from database ID
      */
-    const getSupremaDeviceId = async (dbDeviceId) => {
-        // Check if it's already a Suprema device ID (large number)
-        if (parseInt(dbDeviceId) > 100000) {
-            return parseInt(dbDeviceId);
+    const getSupremaDeviceId = (dbDeviceId) => resolveSupremaDeviceId(dbDeviceId, services.connection);
+
+    const buildDbEventWhere = (query) => {
+        const where = {};
+
+        if (query.deviceId) {
+            where.deviceId = parseInt(query.deviceId);
         }
-        
-        // Look up the connected device by database ID
-        const connectedDevices = await services.connection.getConnectedDevices();
-        const devices = await services.connection.getAllDevicesFromDB();
-        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
-        
-        if (!dbDevice) {
-            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
+        if (query.eventType) {
+            where.eventType = query.eventType;
         }
-        
-        // Find matching connected device by IP
-        for (const device of connectedDevices) {
-            const info = device.toObject ? device.toObject() : device;
-            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
-                return info.deviceid;
-            }
+        if (query.userId) {
+            where.userId = { contains: query.userId };
         }
-        
-        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected. Please connect the device first.`);
+        if (query.authResult) {
+            where.authResult = query.authResult;
+        }
+        if (query.doorId) {
+            where.doorId = parseInt(query.doorId);
+        }
+        if (query.startDate) {
+            where.timestamp = { ...where.timestamp, gte: new Date(query.startDate) };
+        }
+        if (query.endDate) {
+            where.timestamp = { ...where.timestamp, lte: new Date(query.endDate) };
+        }
+
+        return where;
     };
+
+    const serializeDbEvent = (event) => ({
+        ...event,
+        supremaEventId: event.supremaEventId.toString()
+    });
 
     /**
      * Subscribe to real-time events
      * POST /api/events/subscribe
      */
-    router.post('/subscribe', async (req, res) => {
+    router.post('/subscribe', asyncHandler(async (req, res) => {
         try {
             const { deviceId, queueSize = 100 } = req.body;
 
@@ -92,13 +83,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Unsubscribe from events
      * POST /api/events/unsubscribe
      */
-    router.post('/unsubscribe', async (req, res) => {
+    router.post('/unsubscribe', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.body;
 
@@ -124,14 +115,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get synced events from database (all devices)
      * GET /api/events/db
      * Query: page, pageSize, deviceId, eventType, userId, authResult, startDate, endDate
      */
-    router.get('/db', async (req, res) => {
+    router.get('/db', asyncHandler(async (req, res) => {
         try {
             const { 
                 page = 1, 
@@ -146,31 +137,7 @@ export default (services) => {
             } = req.query;
 
             const prisma = services.database.getPrisma();
-            
-            // Build where clause
-            const where = {};
-            
-            if (deviceId) {
-                where.deviceId = parseInt(deviceId);
-            }
-            if (eventType) {
-                where.eventType = eventType;
-            }
-            if (userId) {
-                where.userId = { contains: userId };
-            }
-            if (authResult) {
-                where.authResult = authResult;
-            }
-            if (doorId) {
-                where.doorId = parseInt(doorId);
-            }
-            if (startDate) {
-                where.timestamp = { ...where.timestamp, gte: new Date(startDate) };
-            }
-            if (endDate) {
-                where.timestamp = { ...where.timestamp, lte: new Date(endDate) };
-            }
+            const where = buildDbEventWhere({ deviceId, eventType, userId, authResult, doorId, startDate, endDate });
 
             // Get total count
             const totalEvents = await prisma.event.count({ where });
@@ -184,11 +151,7 @@ export default (services) => {
             });
 
             // Convert BigInt to string for JSON serialization
-            const serializedEvents = events.map(e => ({
-                ...e,
-                supremaEventId: e.supremaEventId.toString(),
-                id: e.id
-            }));
+            const serializedEvents = events.map((event) => serializeDbEvent(event));
 
             res.json({
                 success: true,
@@ -201,19 +164,95 @@ export default (services) => {
                 }
             });
         } catch (error) {
-            console.error('Error getting events from DB:', error);
+            services.logger.error('Error getting events from DB:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
+
+    /**
+     * Export synced events from the database.
+     * GET /api/events/db/export
+     */
+    router.get('/db/export', asyncHandler(async (req, res) => {
+        try {
+            const {
+                format = 'csv',
+                limit = 10000,
+                deviceId,
+                eventType,
+                userId,
+                authResult,
+                doorId,
+                startDate,
+                endDate
+            } = req.query;
+
+            const prisma = services.database.getPrisma();
+            const where = buildDbEventWhere({ deviceId, eventType, userId, authResult, doorId, startDate, endDate });
+            const events = await prisma.event.findMany({
+                where,
+                orderBy: { timestamp: 'desc' },
+                take: parseInt(limit)
+            });
+            const serializedEvents = events.map((event) => serializeDbEvent(event));
+
+            if (format === 'json') {
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Disposition', `attachment; filename="synced_events_${Date.now()}.json"`);
+                return res.json({
+                    success: true,
+                    exportedAt: new Date().toISOString(),
+                    count: serializedEvents.length,
+                    filters: { deviceId, eventType, userId, authResult, doorId, startDate, endDate },
+                    data: serializedEvents
+                });
+            }
+
+            const columns = [
+                { header: 'ID', value: (row) => row.id },
+                { header: 'Database Device ID', value: (row) => row.deviceId },
+                { header: 'Suprema Event ID', value: (row) => row.supremaEventId },
+                { header: 'Event Code', value: (row) => row.eventCode },
+                { header: 'Event Type', value: (row) => row.eventType },
+                { header: 'Sub Type', value: (row) => row.subType },
+                { header: 'User ID', value: (row) => row.userId },
+                { header: 'Door ID', value: (row) => row.doorId },
+                { header: 'Description', value: (row) => row.description },
+                { header: 'Auth Result', value: (row) => row.authResult },
+                { header: 'Timestamp', value: (row) => row.timestamp },
+                { header: 'Synced At', value: (row) => row.syncedAt }
+            ];
+
+            if (format === 'xls') {
+                const workbook = toExcelTable(serializedEvents, columns, 'Synced Events');
+                res.setHeader('Content-Type', 'application/vnd.ms-excel');
+                res.setHeader('Content-Disposition', `attachment; filename="synced_events_${Date.now()}.xls"`);
+                return res.send(workbook);
+            }
+
+            const csvData = toCsv(serializedEvents, columns);
+
+            res.setHeader('Content-Type', 'text/csv');
+            res.setHeader('Content-Disposition', `attachment; filename="synced_events_${Date.now()}.csv"`);
+
+            audit?.log({ action: 'export-synced-events', category: 'export', details: { format, count: serializedEvents.length }, ipAddress: req.ip, requestId: req.requestId });
+            res.send(csvData);
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
 
     /**
      * Sync events from all connected devices
      * POST /api/events/sync-all-to-db
      */
-    router.post('/sync-all-to-db', async (req, res) => {
+    router.post('/sync-all-to-db', asyncHandler(async (req, res) => {
         try {
             const { batchSize = 500 } = req.body;
             const prisma = services.database.getPrisma();
@@ -290,7 +329,7 @@ export default (services) => {
                             });
                             syncedCount += result.count;
                         } catch (batchError) {
-                            console.error('Batch insert error:', batchError.message);
+                            services.logger.error('Batch insert error:', batchError.message);
                             // Fall back to individual inserts for this batch
                             for (const eventData of eventsToInsert) {
                                 try {
@@ -349,13 +388,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get event logs
      * GET /api/events/logs
      */
-    router.get('/logs', async (req, res) => {
+    router.get('/logs', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -388,13 +427,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get event statistics
      * GET /api/events/statistics
      */
-    router.get('/statistics', async (req, res) => {
+    router.get('/statistics', asyncHandler(async (req, res) => {
         try {
             const { deviceId, startTime, endTime } = req.query;
 
@@ -421,13 +460,35 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
+
+    /**
+     * Get replication health and lag status
+     * GET /api/events/replication/health
+     * Query: deviceId
+     */
+    router.get('/replication/health', asyncHandler(async (req, res) => {
+        try {
+            const { deviceId } = req.query;
+            const health = await services.eventReplication.getHealthStatus({ deviceId });
+
+            res.json({
+                success: true,
+                data: health
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
 
     /**
      * Get supported event codes
      * GET /api/events/codes
      */
-    router.get('/codes', async (req, res) => {
+    router.get('/codes', asyncHandler(async (req, res) => {
         try {
             // Return monitoring status which includes event code info
             const status = services.event.getMonitoringStatus();
@@ -454,53 +515,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
-
-    /**
-     * Get event details by ID
-     * GET /api/events/:eventId
-     */
-    router.get('/:eventId', async (req, res) => {
-        try {
-            const { eventId } = req.params;
-            const { deviceId } = req.query;
-
-            if (!deviceId) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'deviceId is required'
-                });
-            }
-
-            const supremaDeviceId = await getSupremaDeviceId(deviceId);
-            // Get events starting from the specific ID with limit of 1
-            const events = await services.event.getEventLogs(supremaDeviceId, parseInt(eventId), 1);
-            const event = events.find(e => e.id === parseInt(eventId) || e.eventid === parseInt(eventId));
-
-            if (!event) {
-                return res.status(404).json({
-                    error: 'Not Found',
-                    message: 'Event not found'
-                });
-            }
-
-            res.json({
-                success: true,
-                data: event
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    });
+    }));
 
     /**
      * Export event logs
      * GET /api/events/export
      */
-    router.get('/export', async (req, res) => {
+    router.get('/export', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -524,11 +545,12 @@ export default (services) => {
             );
 
             if (format === 'csv') {
-                // Convert to CSV
-                const headers = Object.keys(events[0] || {}).join(',');
-                const rows = events.map(e => Object.values(e).join(','));
-                const csvData = [headers, ...rows].join('\n');
-                
+                const headers = Array.from(new Set(events.flatMap((event) => Object.keys(event))));
+                const csvData = toCsv(events, headers.map((header) => ({
+                    header,
+                    value: (row) => row[header]
+                })));
+
                 res.setHeader('Content-Type', 'text/csv');
                 res.setHeader('Content-Disposition', `attachment; filename="events_${deviceId}_${Date.now()}.csv"`);
                 res.send(csvData);
@@ -548,13 +570,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get real-time event count
      * GET /api/events/count
      */
-    router.get('/count', async (req, res) => {
+    router.get('/count', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.query;
 
@@ -580,14 +602,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get event log from device
      * GET /api/events/device-log/:deviceId
      * Query: startEventId, maxNumOfLog
      */
-    router.get('/device-log/:deviceId', async (req, res) => {
+    router.get('/device-log/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 1000 } = req.query;
@@ -612,14 +634,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get filtered event log from device
      * POST /api/events/device-log/:deviceId/filtered
      * Body: { startEventId, maxNumOfLog, filter: {...} }
      */
-    router.post('/device-log/:deviceId/filtered', async (req, res) => {
+    router.post('/device-log/:deviceId/filtered', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 1000, filter = {} } = req.body;
@@ -646,14 +668,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get image event log from device
      * GET /api/events/image-log/:deviceId
      * Query: startEventId, maxNumOfLog
      */
-    router.get('/image-log/:deviceId', async (req, res) => {
+    router.get('/image-log/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { startEventId = 0, maxNumOfLog = 100 } = req.query;
@@ -676,14 +698,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get historical events with pagination and filters
      * GET /api/events/historical/:deviceId
      * Query: page, pageSize, startEventId, eventType, userId, doorId, startDate, endDate
      */
-    router.get('/historical/:deviceId', async (req, res) => {
+    router.get('/historical/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { 
@@ -726,14 +748,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get authentication events (login/access attempts)
      * GET /api/events/authentication/:deviceId
      * Query: maxEvents, authResult (success/fail)
      */
-    router.get('/authentication/:deviceId', async (req, res) => {
+    router.get('/authentication/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { maxEvents = 100, authResult } = req.query;
@@ -764,14 +786,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get door events
      * GET /api/events/door/:deviceId
      * Query: doorId, maxEvents
      */
-    router.get('/door/:deviceId', async (req, res) => {
+    router.get('/door/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { doorId, maxEvents = 100 } = req.query;
@@ -794,14 +816,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get events for a specific user
      * GET /api/events/user/:deviceId/:userId
      * Query: maxEvents
      */
-    router.get('/user/:deviceId/:userId', async (req, res) => {
+    router.get('/user/:deviceId/:userId', asyncHandler(async (req, res) => {
         try {
             const { deviceId, userId } = req.params;
             const { maxEvents = 500 } = req.query;
@@ -825,14 +847,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Advanced event search with multiple filters
      * POST /api/events/search/:deviceId
      * Body: { filters: {...}, pagination: {...} }
      */
-    router.post('/search/:deviceId', async (req, res) => {
+    router.post('/search/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { 
@@ -876,13 +898,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Enable event monitoring on device
      * POST /api/events/monitoring/:deviceId/enable
      */
-    router.post('/monitoring/:deviceId/enable', async (req, res) => {
+    router.post('/monitoring/:deviceId/enable', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const supremaDeviceId = await getSupremaDeviceId(deviceId);
@@ -900,13 +922,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Disable event monitoring on device
      * POST /api/events/monitoring/:deviceId/disable
      */
-    router.post('/monitoring/:deviceId/disable', async (req, res) => {
+    router.post('/monitoring/:deviceId/disable', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const supremaDeviceId = await getSupremaDeviceId(deviceId);
@@ -924,14 +946,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Enable monitoring on multiple devices
      * POST /api/events/monitoring/enable-multi
      * Body: { deviceIds: [] }
      */
-    router.post('/monitoring/enable-multi', async (req, res) => {
+    router.post('/monitoring/enable-multi', asyncHandler(async (req, res) => {
         try {
             const { deviceIds } = req.body;
 
@@ -965,14 +987,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Subscribe to real-time event stream
      * POST /api/events/stream/subscribe
      * Body: { queueSize }
      */
-    router.post('/stream/subscribe', async (req, res) => {
+    router.post('/stream/subscribe', asyncHandler(async (req, res) => {
         try {
             const { queueSize = 100 } = req.body;
 
@@ -990,14 +1012,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Sync events from device to database
      * POST /api/events/sync/:deviceId
      * Body: { fromEventId, batchSize }
      */
-    router.post('/sync/:deviceId', async (req, res) => {
+    router.post('/sync/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { fromEventId, batchSize = 1000 } = req.body;
@@ -1061,7 +1083,7 @@ export default (services) => {
                     syncedCount++;
                 } catch (upsertError) {
                     // Log but continue with other events
-                    console.error(`Failed to sync event ${event.id}:`, upsertError.message);
+                    services.logger.error(`Failed to sync event ${event.id}:`, upsertError.message);
                 }
             }
             
@@ -1086,14 +1108,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Sync events from all devices
      * POST /api/events/sync-all
      * Body: { batchSize }
      */
-    router.post('/sync-all', async (req, res) => {
+    router.post('/sync-all', asyncHandler(async (req, res) => {
         try {
             const { batchSize = 1000 } = req.body;
 
@@ -1136,13 +1158,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get last synced event ID for device
      * GET /api/events/sync-status/:deviceId
      */
-    router.get('/sync-status/:deviceId', async (req, res) => {
+    router.get('/sync-status/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             
@@ -1173,7 +1195,131 @@ export default (services) => {
                 message: error.message
             });
         }
+    }));
+
+    /**
+     * Server-Sent Events (SSE) real-time event stream
+     * GET /api/events/stream
+     * 
+     * Streams new events as they are persisted by the EventReplicationService.
+     * Clients connect via EventSource and receive 'event' messages with JSON data.
+     */
+    const sseClients = new Set();
+
+    router.get('/stream', (req, res) => {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+        });
+        res.write(':ok\n\n');
+
+        const client = { res };
+        sseClients.add(client);
+
+        // Keep-alive every 30s
+        const keepAlive = setInterval(() => {
+            res.write(':ping\n\n');
+        }, 30000);
+
+        req.on('close', () => {
+            clearInterval(keepAlive);
+            sseClients.delete(client);
+        });
     });
+
+    // Hook into EventReplicationService real-time events to broadcast to SSE clients
+    if (services.event && typeof services.event.on === 'function') {
+        services.event.on('event:received', (rawEvent) => {
+            if (sseClients.size === 0) return;
+            const data = JSON.stringify({
+                deviceId: rawEvent.deviceid ?? rawEvent.deviceId ?? null,
+                eventType: rawEvent.eventType ?? 'other',
+                userId: rawEvent.userid ?? rawEvent.userId ?? null,
+                doorId: rawEvent.doorid ?? rawEvent.doorId ?? null,
+                description: rawEvent.description ?? null,
+                authResult: rawEvent.authResult ?? null,
+                eventCode: rawEvent.eventcode ?? rawEvent.eventCode ?? 0,
+                timestamp: rawEvent.timestamp ?? new Date().toISOString(),
+            });
+            for (const client of sseClients) {
+                try {
+                    client.res.write(`event: event\ndata: ${data}\n\n`);
+                } catch {
+                    sseClients.delete(client);
+                }
+            }
+        });
+    }
+
+    // Also poll DB for new events and broadcast (fallback when realtime is not enabled)
+    let lastBroadcastId = 0;
+    const pollNewEvents = async () => {
+        if (sseClients.size === 0) return;
+        try {
+            const prisma = services.database.getPrisma();
+            const newEvents = await prisma.event.findMany({
+                where: { id: { gt: lastBroadcastId } },
+                orderBy: { id: 'asc' },
+                take: 50,
+            });
+            for (const evt of newEvents) {
+                const data = JSON.stringify({
+                    ...evt,
+                    supremaEventId: evt.supremaEventId?.toString(),
+                });
+                for (const client of sseClients) {
+                    try {
+                        client.res.write(`event: event\ndata: ${data}\n\n`);
+                    } catch {
+                        sseClients.delete(client);
+                    }
+                }
+                if (evt.id > lastBroadcastId) lastBroadcastId = evt.id;
+            }
+        } catch {}
+    };
+    setInterval(pollNewEvents, 5000);
+
+    /**
+     * Get event details by ID
+     * GET /api/events/:eventId
+     */
+    router.get('/:eventId', asyncHandler(async (req, res) => {
+        try {
+            const { eventId } = req.params;
+            const { deviceId } = req.query;
+
+            if (!deviceId) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'deviceId is required'
+                });
+            }
+
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const events = await services.event.getEventLogs(supremaDeviceId, parseInt(eventId), 1);
+            const event = events.find((entry) => entry.id === parseInt(eventId) || entry.eventid === parseInt(eventId));
+
+            if (!event) {
+                return res.status(404).json({
+                    error: 'Not Found',
+                    message: 'Event not found'
+                });
+            }
+
+            res.json({
+                success: true,
+                data: event
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
 
     return router;
 };

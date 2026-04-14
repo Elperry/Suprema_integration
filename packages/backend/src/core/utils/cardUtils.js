@@ -4,6 +4,9 @@
  * Used across services for card encoding/decoding
  */
 
+import { createServiceLogger } from '../utils/createLogger.js';
+const logger = createServiceLogger('cardUtils');
+
 /**
  * Card types mapping
  */
@@ -67,7 +70,7 @@ export function decodeBase64ToDecimal(base64Data) {
         
         return result.toString();
     } catch (error) {
-        console.error('Error decoding Base64 card data:', error);
+        logger.error('Error decoding Base64 card data:', error);
         return base64Data; // Return original on error
     }
 }
@@ -124,7 +127,7 @@ export function decodeHexToDecimal(hexData) {
         
         return result.toString();
     } catch (error) {
-        console.error('Error decoding hex card data:', error);
+        logger.error('Error decoding hex card data:', error);
         return hexData;
     }
 }
@@ -141,7 +144,7 @@ export function encodeDecimalToHex(decimal) {
         const hex = num.toString(16).toUpperCase();
         return hex.padStart(64, '0');
     } catch (error) {
-        console.error('Error encoding decimal to hex:', error);
+        logger.error('Error encoding decimal to hex:', error);
         return '0'.repeat(64);
     }
 }
@@ -161,7 +164,7 @@ export function encodeDecimalToBase64(decimal) {
         }
         return Buffer.from(bytes).toString('base64');
     } catch (error) {
-        console.error('Error encoding decimal to Base64:', error);
+        logger.error('Error encoding decimal to Base64:', error);
         return '';
     }
 }

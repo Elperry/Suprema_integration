@@ -112,10 +112,42 @@ export default function Users() {
   const [showCardModal, setShowCardModal] = useState(false)
   const [selectedUserForCard, setSelectedUserForCard] = useState(null)
 
+  // Pagination state (for "All Users" view when no device is selected or in database mode)
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalUsers, setTotalUsers] = useState(0)
+  const [statusFilter, setStatusFilter] = useState('')
+  const [showAllUsers, setShowAllUsers] = useState(true)
+  const PAGE_SIZE = 25
+
   useEffect(() => { 
     loadDevices()
     loadCardAssignments()
   }, [])
+
+  // Load paginated "All Users" from database
+  const loadAllUsers = useCallback(async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      const params = { page, limit: PAGE_SIZE }
+      if (searchTerm.trim()) params.search = searchTerm.trim()
+      if (statusFilter) params.status = statusFilter
+      const res = await userAPI.getAllUsers(params)
+      setUsers(res.data.data || [])
+      setTotalUsers(res.data.total || 0)
+      setTotalPages(res.data.totalPages || 1)
+    } catch (e) {
+      setError('Failed to load users: ' + (e.userMessage || e.message))
+      setUsers([])
+    } finally {
+      setLoading(false)
+    }
+  }, [page, searchTerm, statusFilter])
+
+  useEffect(() => {
+    if (showAllUsers) loadAllUsers()
+  }, [showAllUsers, loadAllUsers])
 
   const loadDevices = async () => {
     try {
@@ -246,6 +278,52 @@ export default function Users() {
       setError('Batch delete failed: ' + getErrorMessage(e))
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Multi-device bulk actions
+  const [bulkAction, setBulkAction] = useState('')
+  const [bulkDevices, setBulkDevices] = useState([])
+  const [showBulkModal, setShowBulkModal] = useState(false)
+  const [bulkRunning, setBulkRunning] = useState(false)
+
+  const openBulkAction = (action) => {
+    if (selectedUsers.length === 0) { setError('Select users first'); return }
+    setBulkAction(action)
+    setBulkDevices([])
+    setShowBulkModal(true)
+  }
+
+  const toggleBulkDevice = (id) => {
+    setBulkDevices(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
+  }
+
+  const handleBulkExecute = async () => {
+    if (bulkDevices.length === 0) { setError('Select at least one device'); return }
+    setBulkRunning(true)
+    setError(null)
+    try {
+      if (bulkAction === 'enroll') {
+        const res = await userAPI.enrollMulti(bulkDevices, selectedUsers)
+        const results = res.data?.results || []
+        const ok = results.filter(r => r.success).length
+        setSuccess(`Enrolled ${selectedUsers.length} user(s) on ${ok}/${bulkDevices.length} device(s)`)
+      } else if (bulkAction === 'delete') {
+        const res = await userAPI.deleteMulti(bulkDevices, selectedUsers)
+        const results = res.data?.results || []
+        const ok = results.filter(r => r.success).length
+        setSuccess(`Deleted ${selectedUsers.length} user(s) from ${ok}/${bulkDevices.length} device(s)`)
+      } else if (bulkAction === 'deleteAll') {
+        const res = await userAPI.deleteFromAll(selectedUsers)
+        setSuccess(`Deleted ${selectedUsers.length} user(s) from all devices. ${res.data?.message || ''}`)
+      }
+      setShowBulkModal(false)
+      setSelectedUsers([])
+      if (selectedDevice) loadUsers()
+    } catch (e) {
+      setError('Bulk action failed: ' + getErrorMessage(e))
+    } finally {
+      setBulkRunning(false)
     }
   }
 
@@ -434,6 +512,13 @@ export default function Users() {
             >
               {syncing ? '⏳' : '🔄'} Sync All Devices
             </button>
+            <button
+              onClick={() => { setShowAllUsers(!showAllUsers); setSelectedDevice(''); setPage(1) }}
+              className={`btn ${showAllUsers ? 'btn-warning' : 'btn-info'}`}
+              title="View all users in database with pagination"
+            >
+              {showAllUsers ? '✖ Close' : '📋'} All Users
+            </button>
           </div>
         </div>
         
@@ -450,7 +535,84 @@ export default function Users() {
         </div>
       </div>
 
-      {selectedDevice && (
+      {/* All Users (paginated, database-wide) */}
+      {showAllUsers && (
+        <div className="card">
+          <div className="card-header-flex">
+            <h3>📋 All Users in Database ({totalUsers})</h3>
+            <div className="card-actions">
+              <input
+                type="search"
+                placeholder="🔍 Search name or ID..."
+                value={searchTerm}
+                onChange={(e) => { setSearchTerm(e.target.value); setPage(1) }}
+                className="search-input"
+              />
+              <select
+                value={statusFilter}
+                onChange={(e) => { setStatusFilter(e.target.value); setPage(1) }}
+                className="form-control"
+                style={{ width: 'auto' }}
+              >
+                <option value="">All statuses</option>
+                <option value="active">Active</option>
+                <option value="revoked">Revoked</option>
+                <option value="lost">Lost</option>
+                <option value="expired">Expired</option>
+              </select>
+              <button onClick={loadAllUsers} className="btn btn-secondary btn-sm" disabled={loading}>🔄</button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="loading-state"><div className="spinner"></div><p>Loading users...</p></div>
+          ) : users.length === 0 ? (
+            <div className="empty-state"><p>👤 No users found.</p></div>
+          ) : (
+            <>
+              <table className="table users-table">
+                <thead>
+                  <tr>
+                    <th>Employee ID</th>
+                    <th>Name</th>
+                    <th>Card Type</th>
+                    <th>Card No.</th>
+                    <th>Status</th>
+                    <th>Assigned At</th>
+                    <th>Enrolled Devices</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map(u => (
+                    <tr key={u.userID + (u.cardData || '')}>
+                      <td><code>{u.userID}</code></td>
+                      <td>{u.name || 'N/A'}</td>
+                      <td>{u.cardType || '—'}</td>
+                      <td><code>{u.cardData ? decodeHexCardData(u.cardData).decimal : '—'}</code></td>
+                      <td>
+                        <span className={`badge badge-${u.status === 'active' ? 'success' : 'secondary'}`}>
+                          {u.status}
+                        </span>
+                      </td>
+                      <td>{u.assignedAt ? new Date(u.assignedAt).toLocaleDateString() : '—'}</td>
+                      <td>{u.enrolledDevices?.length || 0} device(s)</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {totalPages > 1 && (
+                <div className="batch-actions" style={{ justifyContent: 'center' }}>
+                  <button className="btn btn-sm btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+                  <span>Page {page} / {totalPages} ({totalUsers} total)</span>
+                  <button className="btn btn-sm btn-secondary" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {selectedDevice && !showAllUsers && (
         <>
           {/* Enroll New User */}
           <div className="card">
@@ -508,6 +670,15 @@ export default function Users() {
                 <span>{selectedUsers.length} users selected</span>
                 <button onClick={handleBatchDelete} className="btn btn-danger btn-sm">
                   🗑️ Delete Selected
+                </button>
+                <button onClick={() => openBulkAction('enroll')} className="btn btn-primary btn-sm">
+                  📟 Enroll on Devices
+                </button>
+                <button onClick={() => openBulkAction('delete')} className="btn btn-warning btn-sm">
+                  🗑️ Delete from Devices
+                </button>
+                <button onClick={() => openBulkAction('deleteAll')} className="btn btn-danger btn-sm" title="Delete from ALL connected devices">
+                  ⚠️ Delete from All
                 </button>
                 <button onClick={() => setSelectedUsers([])} className="btn btn-secondary btn-sm">
                   ✖ Clear
@@ -700,6 +871,49 @@ export default function Users() {
                !getCardAssignment(selectedUserForCard.userID) && (
                 <p className="no-cards">No card data available for this user.</p>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Bulk Multi-Device Action Modal */}
+      {showBulkModal && (
+        <div className="modal-overlay" onClick={() => setShowBulkModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>{bulkAction === 'enroll' ? '📟 Enroll on Multiple Devices' : bulkAction === 'delete' ? '🗑️ Delete from Devices' : '⚠️ Delete from All Devices'}</h3>
+              <button className="btn-close" onClick={() => setShowBulkModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: 12 }}>
+                <strong>{selectedUsers.length}</strong> user(s) selected.
+                {bulkAction === 'deleteAll'
+                  ? ' This will remove them from ALL connected devices.'
+                  : ' Select target devices below:'}
+              </p>
+              {bulkAction !== 'deleteAll' && (
+                <div className="device-checklist" style={{ maxHeight: 250, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8 }}>
+                  {devices.filter(d => d.status === 'connected').length === 0 ? (
+                    <p style={{ color: '#94a3b8', textAlign: 'center', padding: 12 }}>No connected devices available.</p>
+                  ) : devices.filter(d => d.status === 'connected').map(d => (
+                    <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderRadius: 6 }}>
+                      <input type="checkbox" checked={bulkDevices.includes(d.id)} onChange={() => toggleBulkDevice(d.id)} />
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />
+                      <span>{d.name || d.ip}</span>
+                      <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 'auto' }}>{d.ip}:{d.port}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="modal-footer" style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', padding: 16, borderTop: '1px solid #e2e8f0' }}>
+              <button className="btn btn-secondary" onClick={() => setShowBulkModal(false)}>Cancel</button>
+              <button
+                className={`btn ${bulkAction === 'enroll' ? 'btn-primary' : 'btn-danger'}`}
+                disabled={bulkRunning || (bulkAction !== 'deleteAll' && bulkDevices.length === 0)}
+                onClick={handleBulkExecute}
+              >
+                {bulkRunning ? '⏳ Running…' : bulkAction === 'enroll' ? `Enroll on ${bulkDevices.length} device(s)` : bulkAction === 'deleteAll' ? 'Delete from All' : `Delete from ${bulkDevices.length} device(s)`}
+              </button>
             </div>
           </div>
         </div>

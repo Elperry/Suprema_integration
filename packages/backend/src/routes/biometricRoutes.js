@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
@@ -11,7 +12,7 @@ export default (services) => {
      * Scan fingerprint
      * POST /api/biometric/scan/fingerprint
      */
-    router.post('/scan/fingerprint', async (req, res) => {
+    router.post('/scan/fingerprint', asyncHandler(async (req, res) => {
         try {
             const { deviceId, templateFormat = 'SUPREMA', quality = 'STANDARD' } = req.body;
 
@@ -38,13 +39,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Scan card
      * POST /api/biometric/scan/card
      */
-    router.post('/scan/card', async (req, res) => {
+    router.post('/scan/card', asyncHandler(async (req, res) => {
         try {
             const { deviceId, timeout = 30 } = req.body;
 
@@ -68,13 +69,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Scan face
      * POST /api/biometric/scan/face
      */
-    router.post('/scan/face', async (req, res) => {
+    router.post('/scan/face', asyncHandler(async (req, res) => {
         try {
             const { deviceId, templateFormat = 'SUPREMA', enrollmentCount = 3 } = req.body;
 
@@ -101,13 +102,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Verify biometric template
      * POST /api/biometric/verify
      */
-    router.post('/verify', async (req, res) => {
+    router.post('/verify', asyncHandler(async (req, res) => {
         try {
             const { deviceId, template1, template2, biometricType } = req.body;
 
@@ -135,13 +136,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get biometric configuration
      * GET /api/biometric/config
      */
-    router.get('/config', async (req, res) => {
+    router.get('/config', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.query;
 
@@ -164,13 +165,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Set biometric configuration
      * POST /api/biometric/config
      */
-    router.post('/config', async (req, res) => {
+    router.post('/config', asyncHandler(async (req, res) => {
         try {
             const { deviceId, config } = req.body;
 
@@ -194,13 +195,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get supported biometric types
      * GET /api/biometric/types
      */
-    router.get('/types', async (req, res) => {
+    router.get('/types', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.query;
 
@@ -223,13 +224,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Optimize biometric settings for HR integration
      * POST /api/biometric/optimize-hr
      */
-    router.post('/optimize-hr', async (req, res) => {
+    router.post('/optimize-hr', asyncHandler(async (req, res) => {
         try {
             const { deviceId, hrRequirements = {} } = req.body;
 
@@ -256,13 +257,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get template statistics
      * GET /api/biometric/statistics
      */
-    router.get('/statistics', async (req, res) => {
+    router.get('/statistics', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.query;
 
@@ -285,13 +286,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Extract template features
      * POST /api/biometric/extract
      */
-    router.post('/extract', async (req, res) => {
+    router.post('/extract', asyncHandler(async (req, res) => {
         try {
             const { deviceId, rawData, biometricType } = req.body;
 
@@ -319,13 +320,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Convert template format
      * POST /api/biometric/convert
      */
-    router.post('/convert', async (req, res) => {
+    router.post('/convert', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -361,13 +362,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Batch template operations
      * POST /api/biometric/batch
      */
-    router.post('/batch', async (req, res) => {
+    router.post('/batch', asyncHandler(async (req, res) => {
         try {
             const { deviceId, operation, templates, options = {} } = req.body;
 
@@ -396,7 +397,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

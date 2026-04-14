@@ -4,10 +4,13 @@
  */
 
 import express from 'express';
+import { validate, schemas } from '../middleware/requestValidator.js';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
     const { enrollment } = services;
+    const audit = services.audit;
 
     // ==================== CARD SCANNING ====================
 
@@ -16,7 +19,7 @@ export default (services) => {
      * POST /api/enrollment/scan
      * Body: { deviceId, timeout }
      */
-    router.post('/scan', async (req, res) => {
+    router.post('/scan', validate.body(schemas.cardScan), asyncHandler(async (req, res) => {
         try {
             const { deviceId, timeout = 10 } = req.body;
 
@@ -39,7 +42,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     // ==================== CARD ASSIGNMENTS ====================
 
@@ -48,7 +51,7 @@ export default (services) => {
      * GET /api/enrollment/cards
      * Query: status, employeeId
      */
-    router.get('/cards', async (req, res) => {
+    router.get('/cards', asyncHandler(async (req, res) => {
         try {
             const { status, employeeId } = req.query;
             const assignments = await enrollment.getAllCardAssignments({ status, employeeId });
@@ -64,13 +67,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get a specific card assignment
      * GET /api/enrollment/cards/:id
      */
-    router.get('/cards/:id', async (req, res) => {
+    router.get('/cards/:id', asyncHandler(async (req, res) => {
         try {
             const { id } = req.params;
             const assignment = await enrollment.getCardAssignment(id);
@@ -92,21 +95,21 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Assign a card to an employee
      * POST /api/enrollment/cards
      * Body: { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes }
      */
-    router.post('/cards', async (req, res) => {
+    router.post('/cards', asyncHandler(async (req, res) => {
         try {
             const { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes } = req.body;
 
-            console.log('POST /enrollment/cards - Request body:', JSON.stringify(req.body, null, 2));
+            services.logger.debug('POST /enrollment/cards - Request body:', JSON.stringify(req.body, null, 2));
 
             if (!employeeId || !cardData) {
-                console.log('Missing required fields:', { employeeId: !!employeeId, cardData: !!cardData });
+                services.logger.warn('Missing required fields:', { employeeId: !!employeeId, cardData: !!cardData });
                 return res.status(400).json({
                     error: 'Bad Request',
                     message: 'employeeId and cardData are required'
@@ -123,7 +126,18 @@ export default (services) => {
                 notes: notes || null
             });
 
-            console.log('Card assignment created:', assignment.id);
+            services.logger.info('Card assignment created:', assignment.id);
+
+            audit?.log({
+                action: 'assign-card',
+                category: 'enrollment',
+                targetType: 'employee',
+                targetId: String(employeeId),
+                details: { assignmentId: assignment.id, cardType: cardType || 'CSN' },
+                status: 'success',
+                ipAddress: req.ip,
+                requestId: req.requestId,
+            });
 
             res.status(201).json({
                 success: true,
@@ -131,25 +145,36 @@ export default (services) => {
                 message: 'Card assigned successfully'
             });
         } catch (error) {
-            console.error('Error in POST /enrollment/cards:', error);
+            services.logger.error('Error in POST /enrollment/cards:', { error: error.message });
             res.status(error.message.includes('already assigned') ? 409 : 500).json({
                 error: error.message.includes('already assigned') ? 'Conflict' : 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Revoke a card assignment
      * DELETE /api/enrollment/cards/:id
      * Body: { reason }
      */
-    router.delete('/cards/:id', async (req, res) => {
+    router.delete('/cards/:id', asyncHandler(async (req, res) => {
         try {
             const { id } = req.params;
             const { reason } = req.body || {};
 
             const assignment = await enrollment.revokeCardAssignment(parseInt(id), reason);
+
+            audit?.log({
+                action: 'revoke-card',
+                category: 'enrollment',
+                targetType: 'card_assignment',
+                targetId: id,
+                details: { reason: reason || 'manual revocation' },
+                status: 'success',
+                ipAddress: req.ip,
+                requestId: req.requestId,
+            });
 
             res.json({
                 success: true,
@@ -162,14 +187,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Update card assignment status
      * PATCH /api/enrollment/cards/:id/status
      * Body: { status, reason }
      */
-    router.patch('/cards/:id/status', async (req, res) => {
+    router.patch('/cards/:id/status', asyncHandler(async (req, res) => {
         try {
             const { id } = req.params;
             const { status, reason } = req.body;
@@ -189,6 +214,17 @@ export default (services) => {
                 assignment = await enrollment.updateCardStatus(parseInt(id), status);
             }
 
+            audit?.log({
+                action: `card-status-${status}`,
+                category: 'enrollment',
+                targetType: 'card_assignment',
+                targetId: id,
+                details: { status, reason: reason || null },
+                status: 'success',
+                ipAddress: req.ip,
+                requestId: req.requestId,
+            });
+
             res.json({
                 success: true,
                 data: assignment
@@ -199,7 +235,71 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
+
+    /**
+     * Replace a card with a new one
+     * POST /api/enrollment/cards/:id/replace
+     * Body: { cardData, cardType, cardFormat, notes }
+     * 
+     * Revokes old card, creates new assignment for the same employee,
+     * and re-enrolls on the same devices.
+     */
+    router.post('/cards/:id/replace', asyncHandler(async (req, res) => {
+        try {
+            const { id } = req.params;
+            const { cardData, cardType, cardFormat, notes } = req.body;
+
+            if (!cardData) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'cardData for the new card is required'
+                });
+            }
+
+            const result = await enrollment.replaceCard(parseInt(id), {
+                cardData,
+                cardType,
+                cardFormat,
+                notes
+            });
+
+            res.json({
+                success: true,
+                data: result,
+                message: `Card replaced successfully. New card assigned and enrolled on ${result.reenrolledDevices} device(s).`
+            });
+        } catch (error) {
+            res.status(error.message.includes('not found') ? 404 : 500).json({
+                error: error.message.includes('not found') ? 'Not Found' : 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
+
+    /**
+     * Get card history for an employee
+     * GET /api/enrollment/cards/history/:employeeId
+     * 
+     * Returns all card assignments (current and past) for an employee.
+     */
+    router.get('/cards/history/:employeeId', asyncHandler(async (req, res) => {
+        try {
+            const { employeeId } = req.params;
+            const history = await enrollment.getCardHistory(employeeId);
+
+            res.json({
+                success: true,
+                data: history,
+                total: history.length
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
 
     // ==================== DEVICE ENROLLMENT ====================
 
@@ -208,7 +308,7 @@ export default (services) => {
      * POST /api/enrollment/enroll
      * Body: { deviceId, assignmentId }
      */
-    router.post('/enroll', async (req, res) => {
+    router.post('/enroll', asyncHandler(async (req, res) => {
         try {
             const { deviceId, assignmentId } = req.body;
 
@@ -232,14 +332,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Enroll on multiple devices
      * POST /api/enrollment/enroll-multi
      * Body: { deviceIds, assignmentId }
      */
-    router.post('/enroll-multi', async (req, res) => {
+    router.post('/enroll-multi', asyncHandler(async (req, res) => {
         try {
             const { deviceIds, assignmentId } = req.body;
 
@@ -263,13 +363,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Remove enrollment from a device
      * DELETE /api/enrollment/devices/:deviceId/assignments/:assignmentId
      */
-    router.delete('/devices/:deviceId/assignments/:assignmentId', async (req, res) => {
+    router.delete('/devices/:deviceId/assignments/:assignmentId', asyncHandler(async (req, res) => {
         try {
             const { deviceId, assignmentId } = req.params;
 
@@ -286,13 +386,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get enrollments for a device
      * GET /api/enrollment/devices/:deviceId/enrollments
      */
-    router.get('/devices/:deviceId/enrollments', async (req, res) => {
+    router.get('/devices/:deviceId/enrollments', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const enrollments = await enrollment.getDeviceEnrollments(parseInt(deviceId));
@@ -308,13 +408,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get enrollments for a card assignment
      * GET /api/enrollment/cards/:assignmentId/enrollments
      */
-    router.get('/cards/:assignmentId/enrollments', async (req, res) => {
+    router.get('/cards/:assignmentId/enrollments', asyncHandler(async (req, res) => {
         try {
             const { assignmentId } = req.params;
             const enrollments = await enrollment.getAssignmentEnrollments(parseInt(assignmentId));
@@ -330,7 +430,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     // ==================== SYNC OPERATIONS ====================
 
@@ -338,7 +438,7 @@ export default (services) => {
      * Sync all enrollments to a device
      * POST /api/enrollment/devices/:deviceId/sync
      */
-    router.post('/devices/:deviceId/sync', async (req, res) => {
+    router.post('/devices/:deviceId/sync', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const result = await enrollment.syncToDevice(parseInt(deviceId));
@@ -354,13 +454,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Sync a card assignment to all its enrolled devices
      * POST /api/enrollment/cards/:assignmentId/sync
      */
-    router.post('/cards/:assignmentId/sync', async (req, res) => {
+    router.post('/cards/:assignmentId/sync', asyncHandler(async (req, res) => {
         try {
             const { assignmentId } = req.params;
             const result = await enrollment.syncAssignmentToDevices(parseInt(assignmentId));
@@ -376,7 +476,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     // ==================== EMPLOYEE QUERIES ====================
 
@@ -385,7 +485,7 @@ export default (services) => {
      * GET /api/enrollment/employees/search
      * Query: q, limit
      */
-    router.get('/employees/search', async (req, res) => {
+    router.get('/employees/search', asyncHandler(async (req, res) => {
         try {
             const { q, limit = 20 } = req.query;
 
@@ -409,14 +509,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get employees with enrollment status
      * GET /api/enrollment/employees
      * Query: limit, offset, enrolled (true/false)
      */
-    router.get('/employees', async (req, res) => {
+    router.get('/employees', asyncHandler(async (req, res) => {
         try {
             const { limit = 100, offset = 0, enrolled } = req.query;
 
@@ -437,7 +537,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     // ==================== QUICK ENROLLMENT ====================
 
@@ -448,7 +548,7 @@ export default (services) => {
      * POST /api/enrollment/quick
      * Body: { employeeId, employeeName, cardData, cardType, cardSize, deviceIds }
      */
-    router.post('/quick', async (req, res) => {
+    router.post('/quick', asyncHandler(async (req, res) => {
         try {
             const { employeeId, employeeName, cardData, cardType, cardSize, deviceIds = [] } = req.body;
 
@@ -490,7 +590,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     // ==================== STATISTICS ====================
 
@@ -498,7 +598,7 @@ export default (services) => {
      * Get enrollment statistics
      * GET /api/enrollment/statistics
      */
-    router.get('/statistics', async (req, res) => {
+    router.get('/statistics', asyncHandler(async (req, res) => {
         try {
             const stats = await enrollment.getStatistics();
 
@@ -512,7 +612,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

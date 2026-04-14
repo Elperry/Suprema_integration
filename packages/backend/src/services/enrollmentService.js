@@ -9,10 +9,11 @@
  * 4. Enroll employee+card on selected devices (stored in DeviceEnrollment)
  */
 
-import { PrismaClient } from '@prisma/client';
 import winston from 'winston';
 
-const prisma = new PrismaClient();
+// PrismaClient is no longer created at module level — it is injected via
+// constructor options to avoid duplicate connections.
+// See bootstrap.js for the wiring.
 
 /**
  * Helper to convert BigInt values to regular numbers/strings for JSON serialization
@@ -39,12 +40,25 @@ function serializeBigInt(obj) {
 }
 
 class EnrollmentService {
-    constructor(userService, cardService, connectionService) {
+    /**
+     * @param {Object} userService
+     * @param {Object} cardService
+     * @param {Object} connectionService
+     * @param {Object} [options]
+     * @param {import('@prisma/client').PrismaClient} [options.prisma] - Shared PrismaClient
+     * @param {Object} [options.logger] - Logger instance
+     */
+    constructor(userService, cardService, connectionService, options = {}) {
         this.userService = userService;
         this.cardService = cardService;
         this.connectionService = connectionService;
+        this.prisma = options.prisma || connectionService.database?.getPrisma();
+
+        if (!this.prisma) {
+            throw new Error('EnrollmentService requires a PrismaClient (pass via options.prisma or connectionService.database)');
+        }
         
-        this.logger = winston.createLogger({
+        this.logger = options.logger || winston.createLogger({
             level: 'info',
             format: winston.format.combine(
                 winston.format.timestamp(),
@@ -252,7 +266,7 @@ class EnrollmentService {
      */
     async getCardAssignmentByCardData(cardData) {
         try {
-            return await prisma.cardAssignment.findUnique({
+            return await this.prisma.cardAssignment.findUnique({
                 where: { cardData },
                 include: {
                     enrollments: {
@@ -275,7 +289,7 @@ class EnrollmentService {
         try {
             // If numeric, treat as ID
             if (typeof idOrCardData === 'number') {
-                return await prisma.cardAssignment.findUnique({
+                return await this.prisma.cardAssignment.findUnique({
                     where: { id: idOrCardData },
                     include: {
                         enrollments: {
@@ -308,7 +322,7 @@ class EnrollmentService {
                 where.employeeId = filters.employeeId;
             }
 
-            return await prisma.cardAssignment.findMany({
+            return await this.prisma.cardAssignment.findMany({
                 where,
                 include: {
                     enrollments: {
@@ -348,7 +362,7 @@ class EnrollmentService {
                 }
                 // Reactivate revoked card for new employee
                 this.logger.info('Reactivating revoked card assignment');
-                const updated = await prisma.cardAssignment.update({
+                const updated = await this.prisma.cardAssignment.update({
                     where: { id: existing.id },
                     data: {
                         employeeId: String(employeeId),
@@ -370,7 +384,7 @@ class EnrollmentService {
 
             // Create new assignment
             this.logger.info('Creating new card assignment');
-            const assignment = await prisma.cardAssignment.create({
+            const assignment = await this.prisma.cardAssignment.create({
                 data: {
                     employeeId: String(employeeId),
                     employeeName: employeeName || null,
@@ -402,7 +416,7 @@ class EnrollmentService {
      */
     async revokeCardAssignment(assignmentId, reason = '') {
         try {
-            const assignment = await prisma.cardAssignment.update({
+            const assignment = await this.prisma.cardAssignment.update({
                 where: { id: assignmentId },
                 data: {
                     status: 'revoked',
@@ -441,7 +455,7 @@ class EnrollmentService {
      */
     async updateCardStatus(assignmentId, status) {
         try {
-            return await prisma.cardAssignment.update({
+            return await this.prisma.cardAssignment.update({
                 where: { id: assignmentId },
                 data: {
                     status,
@@ -459,6 +473,102 @@ class EnrollmentService {
         }
     }
 
+    /**
+     * Replace a card assignment with a new card.
+     * 1. Revokes the old card (removes from all devices)
+     * 2. Creates a new card assignment for the same employee
+     * 3. Re-enrolls on the same devices the old card was on
+     * @param {number} oldAssignmentId - ID of the old card assignment
+     * @param {Object} newCardData - New card data { cardData, cardType, cardFormat, notes }
+     * @returns {Promise<Object>} { oldAssignment, newAssignment, enrollmentResults }
+     */
+    async replaceCard(oldAssignmentId, newCardData) {
+        const oldAssignment = await this.prisma.cardAssignment.findUnique({
+            where: { id: oldAssignmentId },
+            include: {
+                enrollments: {
+                    where: { status: 'active' },
+                    include: { device: true }
+                }
+            }
+        });
+
+        if (!oldAssignment) {
+            throw new Error('Card assignment not found');
+        }
+
+        // Remember enrolled devices before revoking
+        const enrolledDeviceIds = oldAssignment.enrollments.map(e => e.deviceId);
+
+        // Revoke the old card
+        const revokedAssignment = await this.revokeCardAssignment(
+            oldAssignmentId,
+            `Replaced with new card`
+        );
+
+        // Create new card assignment for the same employee
+        const newAssignment = await this.assignCardToEmployee({
+            employeeId: oldAssignment.employeeId,
+            employeeName: oldAssignment.employeeName,
+            cardData: newCardData.cardData,
+            cardType: newCardData.cardType || oldAssignment.cardType,
+            cardFormat: newCardData.cardFormat || oldAssignment.cardFormat || 0,
+            notes: newCardData.notes || `Replacement for card #${oldAssignmentId}`
+        });
+
+        // Re-enroll on the same devices
+        let enrollmentResults = null;
+        if (enrolledDeviceIds.length > 0) {
+            try {
+                enrollmentResults = await this.enrollOnMultipleDevices(enrolledDeviceIds, newAssignment.id);
+            } catch (err) {
+                this.logger.warn('Re-enrollment on devices partially failed:', err.message);
+                enrollmentResults = { error: err.message };
+            }
+        }
+
+        this.logger.info(`Card replaced: old=#${oldAssignmentId} → new=#${newAssignment.id} for employee ${oldAssignment.employeeId}`);
+        return {
+            oldAssignment: revokedAssignment,
+            newAssignment,
+            enrollmentResults,
+            reenrolledDevices: enrolledDeviceIds.length
+        };
+    }
+
+    /**
+     * Get card history for an employee (all card assignments, past and present)
+     * @param {string} employeeId - Employee ID
+     * @returns {Promise<Array>} List of card assignments with enrollment history
+     */
+    async getCardHistory(employeeId) {
+        const assignments = await this.prisma.cardAssignment.findMany({
+            where: { employeeId: String(employeeId) },
+            include: {
+                enrollments: {
+                    include: { device: true }
+                }
+            },
+            orderBy: { assignedAt: 'desc' }
+        });
+
+        return assignments.map(a => ({
+            id: a.id,
+            cardData: a.cardData,
+            cardType: a.cardType,
+            status: a.status,
+            assignedAt: a.assignedAt,
+            revokedAt: a.revokedAt,
+            notes: a.notes,
+            enrollments: a.enrollments.map(e => ({
+                deviceId: e.deviceId,
+                deviceName: e.device?.name,
+                status: e.status,
+                enrolledAt: e.enrolledAt
+            }))
+        }));
+    }
+
     // ==================== DEVICE ENROLLMENT ====================
 
     /**
@@ -470,7 +580,7 @@ class EnrollmentService {
     async enrollOnDevice(deviceId, assignmentId) {
         try {
             // Get the card assignment
-            const assignment = await prisma.cardAssignment.findUnique({
+            const assignment = await this.prisma.cardAssignment.findUnique({
                 where: { id: assignmentId }
             });
 
@@ -483,7 +593,7 @@ class EnrollmentService {
             }
 
             // Check if already enrolled on this device (by card assignment)
-            const existingEnrollment = await prisma.deviceEnrollment.findUnique({
+            const existingEnrollment = await this.prisma.deviceEnrollment.findUnique({
                 where: {
                     deviceId_cardAssignmentId: {
                         deviceId,
@@ -498,7 +608,7 @@ class EnrollmentService {
 
             // Also check if this user (by deviceUserId/employeeId) already has enrollment on this device
             // This handles the case where employee has a new card but already exists on device
-            const existingUserEnrollment = await prisma.deviceEnrollment.findFirst({
+            const existingUserEnrollment = await this.prisma.deviceEnrollment.findFirst({
                 where: {
                     deviceId,
                     deviceUserId: assignment.employeeId
@@ -559,7 +669,7 @@ class EnrollmentService {
             
             if (existingEnrollment) {
                 // Update existing enrollment for this assignment
-                enrollment = await prisma.deviceEnrollment.update({
+                enrollment = await this.prisma.deviceEnrollment.update({
                     where: { id: existingEnrollment.id },
                     data: {
                         status: 'active',
@@ -570,7 +680,7 @@ class EnrollmentService {
                 });
             } else if (existingUserEnrollment) {
                 // User already on device with different assignment - update to new assignment
-                enrollment = await prisma.deviceEnrollment.update({
+                enrollment = await this.prisma.deviceEnrollment.update({
                     where: { id: existingUserEnrollment.id },
                     data: {
                         cardAssignmentId: assignmentId,
@@ -583,7 +693,7 @@ class EnrollmentService {
                 this.logger.info(`Updated enrollment ${existingUserEnrollment.id} to use new card assignment ${assignmentId}`);
             } else {
                 // Create new enrollment
-                enrollment = await prisma.deviceEnrollment.create({
+                enrollment = await this.prisma.deviceEnrollment.create({
                     data: {
                         deviceId,
                         cardAssignmentId: assignmentId,
@@ -635,7 +745,7 @@ class EnrollmentService {
     async removeFromDevice(deviceId, assignmentId) {
         try {
             // Get enrollment
-            const enrollment = await prisma.deviceEnrollment.findUnique({
+            const enrollment = await this.prisma.deviceEnrollment.findUnique({
                 where: {
                     deviceId_cardAssignmentId: {
                         deviceId,
@@ -656,7 +766,7 @@ class EnrollmentService {
             await this.userService.deleteUsers(supremaDeviceId, [enrollment.deviceUserId]);
 
             // Update enrollment status
-            const updated = await prisma.deviceEnrollment.update({
+            const updated = await this.prisma.deviceEnrollment.update({
                 where: { id: enrollment.id },
                 data: { status: 'removed' },
                 include: { device: true, cardAssignment: true }
@@ -677,7 +787,7 @@ class EnrollmentService {
      */
     async getDeviceEnrollments(deviceId) {
         try {
-            return await prisma.deviceEnrollment.findMany({
+            return await this.prisma.deviceEnrollment.findMany({
                 where: { deviceId },
                 include: { cardAssignment: true },
                 orderBy: { enrolledAt: 'desc' }
@@ -695,7 +805,7 @@ class EnrollmentService {
      */
     async getAssignmentEnrollments(assignmentId) {
         try {
-            return await prisma.deviceEnrollment.findMany({
+            return await this.prisma.deviceEnrollment.findMany({
                 where: { cardAssignmentId: assignmentId },
                 include: { device: true },
                 orderBy: { enrolledAt: 'desc' }
@@ -715,7 +825,7 @@ class EnrollmentService {
      */
     async syncToDevice(deviceId) {
         try {
-            const enrollments = await prisma.deviceEnrollment.findMany({
+            const enrollments = await this.prisma.deviceEnrollment.findMany({
                 where: { 
                     deviceId,
                     status: 'active'
@@ -763,7 +873,7 @@ class EnrollmentService {
 
                     await this.userService.setUserCards(supremaDeviceId, cardData);
                     
-                    await prisma.deviceEnrollment.update({
+                    await this.prisma.deviceEnrollment.update({
                         where: { id: enrollment.id },
                         data: { lastSyncAt: new Date() }
                     });
@@ -779,7 +889,7 @@ class EnrollmentService {
             }
 
             // Update device last sync time
-            await prisma.device.update({
+            await this.prisma.device.update({
                 where: { id: deviceId },
                 data: { last_user_sync: new Date() }
             });
@@ -799,7 +909,7 @@ class EnrollmentService {
      */
     async syncAssignmentToDevices(assignmentId) {
         try {
-            const enrollments = await prisma.deviceEnrollment.findMany({
+            const enrollments = await this.prisma.deviceEnrollment.findMany({
                 where: {
                     cardAssignmentId: assignmentId,
                     status: 'active'
@@ -846,7 +956,7 @@ class EnrollmentService {
         try {
             // Query from the allemployees view
             // Using correct column names: id, fullname, displayname, jobtitle, ssn
-            const employees = await prisma.$queryRaw`
+            const employees = await this.prisma.$queryRaw`
                 SELECT 
                     id as employee_id,
                     COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
@@ -875,7 +985,7 @@ class EnrollmentService {
 
             // For each employee, check if they have a card assignment
             const enrichedEmployees = await Promise.all(serializedEmployees.map(async (emp) => {
-                const cardAssignment = await prisma.cardAssignment.findFirst({
+                const cardAssignment = await this.prisma.cardAssignment.findFirst({
                     where: { 
                         employeeId: String(emp.employee_id),
                         status: 'active'
@@ -911,7 +1021,7 @@ class EnrollmentService {
             const { limit = 100, offset = 0, enrolled = null } = options;
 
             // Using correct column names from allemployees table
-            let employees = await prisma.$queryRaw`
+            let employees = await this.prisma.$queryRaw`
                 SELECT 
                     id as employee_id,
                     COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
@@ -934,7 +1044,7 @@ class EnrollmentService {
 
             // Enrich with card assignment info
             employees = await Promise.all(employees.map(async (emp) => {
-                const cardAssignment = await prisma.cardAssignment.findFirst({
+                const cardAssignment = await this.prisma.cardAssignment.findFirst({
                     where: {
                         employeeId: String(emp.employee_id),
                         status: 'active'
@@ -1048,15 +1158,15 @@ class EnrollmentService {
                 totalEnrollments,
                 activeEnrollments
             ] = await Promise.all([
-                prisma.cardAssignment.count(),
-                prisma.cardAssignment.count({ where: { status: 'active' } }),
-                prisma.cardAssignment.count({ where: { status: 'revoked' } }),
-                prisma.deviceEnrollment.count(),
-                prisma.deviceEnrollment.count({ where: { status: 'active' } })
+                this.prisma.cardAssignment.count(),
+                this.prisma.cardAssignment.count({ where: { status: 'active' } }),
+                this.prisma.cardAssignment.count({ where: { status: 'revoked' } }),
+                this.prisma.deviceEnrollment.count(),
+                this.prisma.deviceEnrollment.count({ where: { status: 'active' } })
             ]);
 
             // Get enrollments per device
-            const enrollmentsPerDevice = await prisma.deviceEnrollment.groupBy({
+            const enrollmentsPerDevice = await this.prisma.deviceEnrollment.groupBy({
                 by: ['deviceId'],
                 where: { status: 'active' },
                 _count: { id: true }

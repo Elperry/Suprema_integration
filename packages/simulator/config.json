@@ -1,0 +1,285 @@
+{
+  "deviceServer": {
+    "defaultBindIP": "0.0.0.0",
+    "preferAdvertisedLocalIPs": true,
+    "enableTCPProbe": true,
+    "enableUDPProbe": true,
+    "minimalHandshake": {
+      "enabled": true,
+      "syncPacketMagicHex": "7b7b3c3c",
+      "syncPacketLength": 104
+    },
+    "hexDumpBytes": 64,
+    "connectionTimeoutMs": 30000,
+    "virtualNetwork": {
+      "enabled": false,
+      "provider": "windows-loopback-aliases",
+      "interfaceName": "Loopback Pseudo-Interface 1",
+      "mask": "255.255.255.255",
+      "allowUnsafeMask": false,
+      "skipAsSource": true,
+      "bindAdvertisedIP": true,
+      "strict": true
+    }
+  },
+
+  "gatewayMock": {
+    "ip": "0.0.0.0",
+    "port": 4000,
+    "useTLS": false,
+    "certDir": "../../device_gateway/cert"
+  },
+
+  "devices": [
+    {
+      "deviceID": 540092578,
+      "name": "Main Entrance FaceStation F2",
+      "type": 13,
+      "typeDesc": "FACESTATION_F2",
+      "ip": "192.168.1.120",
+      "port": 51211,
+      "useSSL": false,
+      "useDHCP": true,
+      "connectionMode": 0,
+
+      "firmware": "2.8.1",
+      "model": "FaceStation F2",
+      "macAddr": "00:17:FC:10:AC:22",
+      "kernelVersion": "1.1.2",
+      "bscoreVersion": "2.8.1",
+      "boardVersion": "1.2.0",
+
+      "capabilities": {
+        "maxUsers": 50000,
+        "maxEventLogs": 500000,
+        "maxImageLogs": 50000,
+        "maxBlacklists": 1000,
+        "maxCards": 50000,
+        "maxFaces": 50000,
+        "maxFingerprints": 100000,
+        "maxCardsPerUser": 8,
+        "maxFacesPerUser": 5,
+        "maxFingerprintsPerUser": 10,
+        "maxInputPorts": 4,
+        "maxOutputPorts": 4,
+        "maxRelays": 4,
+        "maxRS485Channels": 4,
+        "cardSupported": true,
+        "fingerSupported": true,
+        "faceSupported": true,
+        "cameraSupported": true,
+        "displaySupported": true,
+        "thermalSupported": true,
+        "qrSupported": true,
+        "wlanSupported": false
+      },
+
+      "doors": [
+        {
+          "doorID": 1,
+          "name": "Main Entrance Door",
+          "relayPort": 0,
+          "sensorPort": 0,
+          "buttonPort": 1,
+          "autoLockTimeout": 3,
+          "heldOpenTimeout": 10
+        }
+      ],
+
+      "users": [
+        {
+          "userID": "1001",
+          "name": "Ahmed Al-Rashid",
+          "cards": ["04:A2:B3:C4:D5:E6:F7:08"],
+          "numOfFinger": 2,
+          "numOfFace": 1,
+          "accessGroupIDs": [1]
+        },
+        {
+          "userID": "1002",
+          "name": "Sara Hassan",
+          "cards": ["04:11:22:33:44:55:66:77"],
+          "numOfFinger": 0,
+          "numOfFace": 1,
+          "accessGroupIDs": [1]
+        },
+        {
+          "userID": "1003",
+          "name": "Mohammed Ali",
+          "cards": ["04:AA:BB:CC:DD:EE:FF:01"],
+          "numOfFinger": 2,
+          "numOfFace": 0,
+          "accessGroupIDs": [1, 2]
+        }
+      ]
+    },
+    {
+      "deviceID": 544114231,
+      "name": "Side Entrance BioStation 2",
+      "type": 12,
+      "typeDesc": "BIOSTATION_2",
+      "ip": "192.168.1.104",
+      "port": 51211,
+      "useSSL": false,
+      "useDHCP": true,
+      "connectionMode": 0,
+
+      "firmware": "2.8.0",
+      "model": "BioStation 2",
+      "macAddr": "00:17:FC:20:BC:33",
+      "kernelVersion": "1.1.0",
+      "bscoreVersion": "2.8.0",
+      "boardVersion": "1.0.0",
+
+      "capabilities": {
+        "maxUsers": 50000,
+        "maxEventLogs": 500000,
+        "maxImageLogs": 0,
+        "maxBlacklists": 1000,
+        "maxCards": 50000,
+        "maxFaces": 0,
+        "maxFingerprints": 100000,
+        "maxCardsPerUser": 8,
+        "maxFacesPerUser": 0,
+        "maxFingerprintsPerUser": 10,
+        "maxInputPorts": 2,
+        "maxOutputPorts": 2,
+        "maxRelays": 2,
+        "maxRS485Channels": 1,
+        "cardSupported": true,
+        "fingerSupported": true,
+        "faceSupported": false,
+        "cameraSupported": false,
+        "displaySupported": true,
+        "thermalSupported": false,
+        "qrSupported": false,
+        "wlanSupported": false
+      },
+
+      "doors": [
+        {
+          "doorID": 2,
+          "name": "Side Entrance Door",
+          "relayPort": 0,
+          "sensorPort": 0,
+          "buttonPort": 1,
+          "autoLockTimeout": 3,
+          "heldOpenTimeout": 10
+        }
+      ],
+
+      "users": [
+        {
+          "userID": "1001",
+          "name": "Ahmed Al-Rashid",
+          "cards": ["04:A2:B3:C4:D5:E6:F7:08"],
+          "numOfFinger": 2,
+          "numOfFace": 0,
+          "accessGroupIDs": [1]
+        }
+      ]
+    },
+    {
+      "deviceID": 939504224,
+      "name": "Parking Gate BioEntry W2",
+      "type": 18,
+      "typeDesc": "BIOENTRY_W2",
+      "ip": "192.168.1.110",
+      "port": 51211,
+      "useSSL": false,
+      "useDHCP": true,
+      "connectionMode": 0,
+
+      "firmware": "2.7.3",
+      "model": "BioEntry W2",
+      "macAddr": "00:17:FC:30:CC:44",
+      "kernelVersion": "1.0.8",
+      "bscoreVersion": "2.7.3",
+      "boardVersion": "1.0.0",
+
+      "capabilities": {
+        "maxUsers": 500000,
+        "maxEventLogs": 1000000,
+        "maxImageLogs": 0,
+        "maxBlacklists": 10000,
+        "maxCards": 500000,
+        "maxFaces": 0,
+        "maxFingerprints": 500000,
+        "maxCardsPerUser": 8,
+        "maxFacesPerUser": 0,
+        "maxFingerprintsPerUser": 10,
+        "maxInputPorts": 2,
+        "maxOutputPorts": 2,
+        "maxRelays": 2,
+        "maxRS485Channels": 1,
+        "cardSupported": true,
+        "fingerSupported": true,
+        "faceSupported": false,
+        "cameraSupported": false,
+        "displaySupported": false,
+        "thermalSupported": false,
+        "qrSupported": true,
+        "wlanSupported": true
+      },
+
+      "doors": [
+        {
+          "doorID": 3,
+          "name": "Parking Gate",
+          "relayPort": 0,
+          "sensorPort": 0,
+          "buttonPort": 1,
+          "autoLockTimeout": 5,
+          "heldOpenTimeout": 15
+        }
+      ],
+
+      "users": []
+    }
+  ],
+
+  "events": {
+    "autoGenerate": true,
+    "intervalMs": 8000,
+    "types": [
+      { "eventCode": 4608, "subCode": 0, "desc": "Verify Success (Card)", "weight": 5 },
+      { "eventCode": 4609, "subCode": 0, "desc": "Verify Fail (Card) - Not Registered", "weight": 1 },
+      { "eventCode": 4864, "subCode": 0, "desc": "Verify Success (Fingerprint)", "weight": 3 },
+      { "eventCode": 4865, "subCode": 0, "desc": "Verify Fail (Fingerprint) - Not Registered", "weight": 1 },
+      { "eventCode": 5120, "subCode": 0, "desc": "Verify Success (Face)", "weight": 4 },
+      { "eventCode": 5121, "subCode": 0, "desc": "Verify Fail (Face) - Not Registered", "weight": 1 },
+      { "eventCode": 8192, "subCode": 0, "desc": "Door Opened", "weight": 3 },
+      { "eventCode": 8193, "subCode": 0, "desc": "Door Closed", "weight": 3 },
+      { "eventCode": 8194, "subCode": 0, "desc": "Door Locked", "weight": 1 },
+      { "eventCode": 8195, "subCode": 0, "desc": "Door Unlocked", "weight": 1 },
+      { "eventCode": 20480, "subCode": 0, "desc": "User Enrolled", "weight": 1 },
+      { "eventCode": 20481, "subCode": 0, "desc": "User Deleted", "weight": 1 },
+      { "eventCode": 20482, "subCode": 0, "desc": "User Updated", "weight": 1 },
+      { "eventCode": 20992, "subCode": 0, "desc": "Credential Added", "weight": 1 },
+      { "eventCode": 20993, "subCode": 0, "desc": "Credential Deleted", "weight": 1 },
+      { "eventCode": 24576, "subCode": 0, "desc": "Time Attendance - Check In", "weight": 2 },
+      { "eventCode": 24577, "subCode": 0, "desc": "Time Attendance - Check Out", "weight": 2 },
+      { "eventCode": 24578, "subCode": 0, "desc": "Time Attendance - Break Start", "weight": 1 },
+      { "eventCode": 24579, "subCode": 0, "desc": "Time Attendance - Break End", "weight": 1 }
+    ]
+  },
+
+  "cards": {
+    "scanDelayMs": 1500,
+    "defaultType": 1,
+    "defaultSize": 8,
+    "mockCards": [
+      "04:A2:B3:C4:D5:E6:F7:08",
+      "04:11:22:33:44:55:66:77",
+      "04:AA:BB:CC:DD:EE:FF:01",
+      "04:DE:AD:BE:EF:CA:FE:01",
+      "04:FE:ED:FA:CE:00:11:22"
+    ]
+  },
+
+  "auth": {
+    "matchTimeout": 10,
+    "authTimeout": 15,
+    "usePrivateAuth": false
+  }
+}

@@ -7,8 +7,14 @@ import { PrismaClient } from '@prisma/client';
 import winston from 'winston';
 
 class DatabaseManager {
-    constructor(logger = null) {
-        this.prisma = null;
+    /**
+     * @param {Object} [logger] - Winston logger instance
+     * @param {import('@prisma/client').PrismaClient} [prisma] - Shared PrismaClient
+     *        When provided, DatabaseManager will NOT create its own client,
+     *        avoiding duplicate connections.
+     */
+    constructor(logger = null, prisma = null) {
+        this.prisma = prisma;
         this.logger = logger || winston.createLogger({
             level: 'info',
             format: winston.format.json(),
@@ -17,52 +23,49 @@ class DatabaseManager {
     }
 
     /**
-     * Initialize database connection
+     * Initialize database connection.
+     * If a PrismaClient was provided via the constructor, it is reused
+     * (no duplicate client is created).
      */
     async initialize() {
         try {
-            // Initialize Prisma client
-            this.prisma = new PrismaClient({
-                log: [
-                    {
-                        emit: 'event',
-                        level: 'query',
-                    },
-                    {
-                        emit: 'event',
-                        level: 'error',
-                    },
-                    {
-                        emit: 'event',
-                        level: 'info',
-                    },
-                    {
-                        emit: 'event',
-                        level: 'warn',
-                    },
-                ],
-            });
+            const wasProvided = !!this.prisma;
 
-            // Setup logging
-            this.prisma.$on('query', (e) => {
-                this.logger.debug('Query: ' + e.query);
-                this.logger.debug('Params: ' + e.params);
-                this.logger.debug('Duration: ' + e.duration + 'ms');
-            });
+            if (!this.prisma) {
+                // Create PrismaClient only when none was injected
+                this.prisma = new PrismaClient({
+                    log: [
+                        { emit: 'event', level: 'query' },
+                        { emit: 'event', level: 'error' },
+                        { emit: 'event', level: 'info' },
+                        { emit: 'event', level: 'warn' },
+                    ],
+                });
+            }
 
-            this.prisma.$on('error', (e) => {
-                this.logger.error('Database error:', e);
-            });
+            // Only attach event hooks if we created the client ourselves.
+            // An externally-provided client may already have its own logging.
+            if (!wasProvided) {
+                this.prisma.$on('query', (e) => {
+                    this.logger.debug('Query: ' + e.query);
+                    this.logger.debug('Params: ' + e.params);
+                    this.logger.debug('Duration: ' + e.duration + 'ms');
+                });
 
-            this.prisma.$on('info', (e) => {
-                this.logger.info('Database info:', e.message);
-            });
+                this.prisma.$on('error', (e) => {
+                    this.logger.error('Database error:', e);
+                });
 
-            this.prisma.$on('warn', (e) => {
-                this.logger.warn('Database warning:', e.message);
-            });
+                this.prisma.$on('info', (e) => {
+                    this.logger.info('Database info:', e.message);
+                });
 
-            // Test connection
+                this.prisma.$on('warn', (e) => {
+                    this.logger.warn('Database warning:', e.message);
+                });
+            }
+
+            // Ensure connection (idempotent if already connected)
             await this.prisma.$connect();
             this.logger.info('Database connection established successfully');
 
@@ -207,12 +210,14 @@ class DatabaseManager {
 
     async getActiveDevices() {
         return await this.prisma.device.findMany({
+            where: { isActive: true },
             orderBy: { name: 'asc' }
         });
     }
 
     async getConnectedDevices() {
         return await this.prisma.device.findMany({
+            where: { status: 'connected' },
             orderBy: { name: 'asc' }
         });
     }
@@ -421,16 +426,19 @@ class DatabaseManager {
                 params.push(filters.suspend ? 'yes' : 'no');
             }
 
-            let query = 'SELECT * FROM allemployees';
+            let query = 'SELECT * FROM employee';
             if (whereConditions.length > 0) {
                 query += ' WHERE ' + whereConditions.join(' AND ');
             }
-            query += ' ORDER BY displayname ASC';
+            query += ' ORDER BY id ASC';
 
             const employees = await this.prisma.$queryRawUnsafe(query, ...params);
             
             // Convert BigInt values to Number for JSON serialization
-            return this.convertBigIntToNumber(employees);
+            const converted = this.convertBigIntToNumber(employees);
+
+            // Enrich with card data from our card_assignments table
+            return await this._enrichEmployeesWithCards(converted);
         } catch (error) {
             this.logger.error('Error fetching all employees:', error);
             throw error;
@@ -448,9 +456,14 @@ class DatabaseManager {
                 id
             );
             const employee = employees[0] || null;
-            
+            if (!employee) return null;
+
             // Convert BigInt values to Number for JSON serialization
-            return employee ? this.convertBigIntToNumber([employee])[0] : null;
+            const converted = this.convertBigIntToNumber([employee])[0];
+
+            // Enrich with card data from our card_assignments table
+            const enriched = await this._enrichEmployeesWithCards([converted]);
+            return enriched[0];
         } catch (error) {
             this.logger.error('Error fetching employee by ID:', error);
             throw error;
@@ -464,7 +477,7 @@ class DatabaseManager {
     async searchEmployees(searchTerm) {
         try {
             const employees = await this.prisma.$queryRawUnsafe(
-                `SELECT * FROM allemployees 
+                `SELECT * FROM employee 
                  WHERE displayname LIKE ? OR email LIKE ? OR fullname LIKE ?
                  LIMIT 50`,
                 `%${searchTerm}%`,
@@ -477,6 +490,38 @@ class DatabaseManager {
         } catch (error) {
             this.logger.error('Error searching employees:', error);
             throw error;
+        }
+    }
+
+    /**
+     * Enrich employee records with card data from our card_assignments table.
+     * The Suprema employee view may not contain cards enrolled via this system.
+     */
+    async _enrichEmployeesWithCards(employees) {
+        if (!employees || employees.length === 0) return employees;
+        try {
+            const ids = employees.map(e => String(e.id || e.employee_id)).filter(Boolean);
+            const assignments = await this.prisma.cardAssignment.findMany({
+                where: { employeeId: { in: ids }, status: 'active' },
+                select: { employeeId: true, cardData: true, cardType: true },
+            });
+            const cardMap = new Map();
+            for (const ca of assignments) {
+                if (!cardMap.has(ca.employeeId)) cardMap.set(ca.employeeId, ca);
+            }
+            return employees.map(e => {
+                const empId = String(e.id || e.employee_id);
+                const ca = cardMap.get(empId);
+                return {
+                    ...e,
+                    card: ca?.cardData || e.card || null,
+                    card_type: ca?.cardType || e.card_type || null,
+                    has_card: !!(ca || e.card),
+                };
+            });
+        } catch {
+            // If enrichment fails, return original data unchanged
+            return employees;
         }
     }
 

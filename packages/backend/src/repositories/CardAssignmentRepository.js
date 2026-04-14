@@ -4,7 +4,7 @@
  * Extends BaseRepository with card-specific operations
  */
 
-import { BaseRepository } from '../../core/base/BaseRepository.js';
+import { BaseRepository } from '../core/base/BaseRepository.js';
 
 /**
  * @class CardAssignmentRepository

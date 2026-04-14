@@ -108,7 +108,7 @@ const syncApi = setupInterceptors(axios.create({
 export const healthAPI = {
   check: async () => {
     try {
-      const response = await api.get('/health');
+      const response = await axios.get(`${API_CONFIG.BASE_URL}/health`);
       return response.data;
     } catch (error) {
       // Return a default health object if health check fails
@@ -162,7 +162,7 @@ export const userAPI = {
   // Use source=device to fetch directly from device
   getUsers: (deviceId, detailed = false, source = 'database') => 
     api.get(`/users/${deviceId}?detailed=${detailed}&source=${source}`),
-  getAllUsers: () => api.get('/users/all'),  // Get all users from database
+  getAllUsers: (params = {}) => api.get('/users/all', { params }),  // Get all users from database (supports page, limit, search, status)
   getUserById: (deviceId, userId) => api.get(`/users/${deviceId}/user/${userId}`),
   enroll: (deviceId, users) => api.post(`/users/${deviceId}`, { users }),
   enrollMulti: (deviceIds, users) => api.post('/users/enroll-multi', { deviceIds, users }),
@@ -174,6 +174,9 @@ export const userAPI = {
   
   // Import users from device to database
   importFromDevice: (deviceId) => api.post(`/users/import/${deviceId}`),
+
+  // Bulk CSV import
+  importCsv: (csvData, dryRun = false) => api.post('/users/import-csv', { csvData, dryRun }),
   
   // Biometric credentials
   setFingerprints: (deviceId, userFingerData) => api.post(`/users/${deviceId}/fingerprints`, { userFingerData }),
@@ -192,6 +195,13 @@ export const userAPI = {
   // Sync
   sync: (deviceId) => api.post(`/users/${deviceId}/sync`),
   syncAll: () => api.post('/users/sync-all'),
+  getSyncStatusOverview: () => api.get('/users/sync-status'),
+  getReconciliation: (params = {}) => api.get('/users/reconciliation', { params }),
+  exportReconciliation: (params = {}) => api.get('/users/reconciliation', { params, responseType: 'blob' }),
+  getDeviceReconciliation: (deviceId) => api.get(`/users/reconciliation/${deviceId}`),
+  repairDevice: (deviceId) => syncApi.post(`/users/reconciliation/${deviceId}/repair`),
+  repairUser: (deviceId, userId) => syncApi.post(`/users/reconciliation/${deviceId}/repair-user/${userId}`),
+  repairAllDevices: () => syncApi.post('/users/reconciliation/repair-all'),
   
   // Statistics
   getStatistics: (deviceId) => api.get(`/users/${deviceId}/statistics`),
@@ -290,6 +300,7 @@ export const eventAPI = {
   syncAll: (batchSize = 1000) => syncApi.post('/events/sync-all', { batchSize }),
   syncAllToDB: (batchSize = 500) => syncApi.post('/events/sync-all-to-db', { batchSize }),
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
+  getReplicationHealth: (params = {}) => api.get('/events/replication/health', { params }),
   
   // Database events (synced events)
   getFromDB: (params = {}) => {
@@ -305,6 +316,7 @@ export const eventAPI = {
     if (params.endDate) query.append('endDate', params.endDate);
     return api.get(`/events/db?${query.toString()}`);
   },
+  exportSyncedFromDB: (params = {}) => api.get('/events/db/export', { params, responseType: 'blob' }),
   
   // Statistics
   getStatistics: (deviceId, params = {}) => api.get('/events/statistics', { params: { deviceId, ...params } }),
@@ -320,6 +332,7 @@ export const gateEventAPI = {
   getByEmployee: (employeeId, limit = 50) => 
     api.get(`/gate-events/employee/${employeeId}?limit=${limit}`),
   getStats: (params) => api.get('/gate-events/stats', { params }),
+  exportReport: (params = {}) => api.get('/gate-events/export', { params, responseType: 'blob' }),
 };
 
 // ==================== EMPLOYEE ENDPOINTS ====================
@@ -334,10 +347,33 @@ export const employeeAPI = {
 // ==================== DOOR ENDPOINTS ====================
 
 export const doorAPI = {
-  getAll: (deviceId) => api.get(`/doors/${deviceId}`),
-  control: (deviceId, doorId, action, duration) => 
-    api.post(`/doors/${deviceId}/control`, { doorId, action, duration }),
-  getStatus: (deviceId, doorId) => api.get(`/doors/${deviceId}/status/${doorId}`),
+  getAll: (deviceId) => api.get('/doors', { params: { deviceId } }),
+  create: (deviceId, doorConfig) => api.post('/doors', { deviceId, doorConfig }),
+  getById: (deviceId, doorId) => api.get(`/doors/${doorId}`, { params: { deviceId } }),
+  update: (deviceId, doorId, doorConfig) => api.put(`/doors/${doorId}`, { deviceId, doorConfig }),
+  delete: (deviceId, doorId) => api.delete(`/doors/${doorId}`, { params: { deviceId } }),
+  unlock: (deviceId, doorId, duration = 5) => api.post(`/doors/${doorId}/unlock`, { deviceId, duration }),
+  lock: (deviceId, doorId) => api.post(`/doors/${doorId}/lock`, { deviceId }),
+  getStatus: (deviceId, doorId) => api.get(`/doors/${doorId}/status`, { params: { deviceId } }),
+
+  // Access levels
+  getAccessLevels: (deviceId) => api.get('/doors/access-levels', { params: { deviceId } }),
+  createAccessLevel: (deviceId, accessLevelConfig) => api.post('/doors/access-levels', { deviceId, accessLevelConfig }),
+  deleteAccessLevels: (deviceId, accessLevelIds) => api.delete('/doors/access-levels', { data: { deviceId, accessLevelIds } }),
+
+  // Schedules
+  getSchedules: (deviceId) => api.get('/doors/schedules', { params: { deviceId } }),
+  createSchedule: (deviceId, scheduleConfig) => api.post('/doors/schedules', { deviceId, scheduleConfig }),
+  deleteSchedules: (deviceId, scheduleIds) => api.delete('/doors/schedules', { data: { deviceId, scheduleIds } }),
+
+  // Access groups
+  getAccessGroups: (deviceId) => api.get('/doors/access-groups', { params: { deviceId } }),
+  createAccessGroup: (deviceId, accessGroupConfig) => api.post('/doors/access-groups', { deviceId, accessGroupConfig }),
+  deleteAccessGroups: (deviceId, accessGroupIds) => api.delete('/doors/access-groups', { data: { deviceId, accessGroupIds } }),
+
+  // Setup & status
+  setupBasicAccess: (deviceId) => api.post('/doors/setup-basic-access', { deviceId }),
+  getAccessStatus: (deviceId) => api.get('/doors/access-status', { params: { deviceId } }),
 };
 
 // ==================== TNA ENDPOINTS ====================
@@ -346,23 +382,30 @@ export const tnaAPI = {
   getLogs: (params) => api.get('/tna/logs', { params }),
   getSummary: (params) => api.get('/tna/summary', { params }),
   process: (deviceId, eventIds) => api.post('/tna/process', { deviceId, eventIds }),
+  // DB-based attendance reports (no gRPC required)
+  getDailyReport: (params) => api.get('/tna/attendance/daily', { params }),
+  getMonthlyReport: (params) => api.get('/tna/attendance/monthly', { params }),
+  exportDaily: (params) => api.get('/tna/attendance/daily', { params: { ...params, format: params.format || 'csv' }, responseType: 'blob' }),
+  exportMonthly: (params) => api.get('/tna/attendance/monthly', { params: { ...params, format: params.format || 'csv' }, responseType: 'blob' }),
 };
 
 // ==================== BIOMETRIC ENDPOINTS ====================
 
 export const biometricAPI = {
-  scanFingerprint: (deviceId) => api.post(`/biometric/${deviceId}/scan/fingerprint`),
-  scanFace: (deviceId) => api.post(`/biometric/${deviceId}/scan/face`),
-  getConfig: (deviceId) => api.get(`/biometric/${deviceId}/config`),
-  setConfig: (deviceId, config) => api.put(`/biometric/${deviceId}/config`, { config }),
+  scanFingerprint: (deviceId, options = {}) => api.post('/biometric/scan/fingerprint', { deviceId, ...options }),
+  scanFace: (deviceId, options = {}) => api.post('/biometric/scan/face', { deviceId, ...options }),
+  getConfig: (deviceId) => api.get('/biometric/config', { params: { deviceId } }),
+  setConfig: (deviceId, config) => api.post('/biometric/config', { deviceId, config }),
+  getTypes: (deviceId) => api.get('/biometric/types', { params: { deviceId } }),
+  getStatistics: (deviceId) => api.get('/biometric/statistics', { params: { deviceId } }),
+  optimizeForHR: (deviceId, hrRequirements = {}) => api.post('/biometric/optimize-hr', { deviceId, hrRequirements }),
+  verify: (deviceId, template1, template2, biometricType) => api.post('/biometric/verify', { deviceId, template1, template2, biometricType }),
 };
 
 // ==================== HR ENDPOINTS ====================
 
 export const hrAPI = {
-  getWebhooks: () => api.get('/hr/webhooks'),
-  triggerSync: () => api.post('/hr/sync'),
-  getSyncStatus: () => api.get('/hr/sync/status'),
+  terminateEmployee: (employeeId, reason) => api.post(`/hr/employees/${employeeId}/terminate`, { reason }),
 };
 
 // ==================== ENROLLMENT ENDPOINTS ====================
@@ -383,6 +426,10 @@ export const enrollmentAPI = {
     api.delete(`/enrollment/cards/${id}`, { data: { reason } }),
   updateCardStatus: (id, status) => 
     api.patch(`/enrollment/cards/${id}/status`, { status }),
+  replaceCard: (id, newCardData) =>
+    api.post(`/enrollment/cards/${id}/replace`, newCardData),
+  getCardHistory: (employeeId) =>
+    api.get(`/enrollment/cards/history/${employeeId}`),
 
   // Device enrollment
   enrollOnDevice: (deviceId, assignmentId) => 
@@ -437,6 +484,47 @@ export const locationAPI = {
     api.delete(`/locations/${locationId}/devices/${deviceId}`),
   updateDeviceDirection: (deviceId, direction) => 
     api.patch(`/locations/devices/${deviceId}/direction`, { direction }),
+};
+
+// ==================== AUDIT ENDPOINTS ====================
+
+export const auditAPI = {
+  getLogs: (params = {}) => api.get('/audit', { params }),
+  getSummary: (params = {}) => api.get('/audit/summary', { params }),
+  exportLogs: (params = {}) => api.get('/audit/export', { params, responseType: 'blob' }),
+};
+
+// ==================== PRESET ENDPOINTS ====================
+
+export const presetAPI = {
+  getAll: (scope) => api.get('/presets', { params: scope ? { scope } : {} }),
+  create: (data) => api.post('/presets', data),
+  update: (id, data) => api.put(`/presets/${id}`, data),
+  delete: (id) => api.delete(`/presets/${id}`),
+};
+
+// ==================== TNA / ATTENDANCE ENDPOINTS ====================
+
+export const attendanceAPI = {
+  getDaily: (params = {}) => api.get('/tna/attendance/daily', { params }),
+  getMonthly: (params = {}) => api.get('/tna/attendance/monthly', { params }),
+  exportDaily: (params = {}) => api.get('/tna/attendance/daily', { params, responseType: 'blob' }),
+  exportMonthly: (params = {}) => api.get('/tna/attendance/monthly', { params, responseType: 'blob' }),
+};
+
+// ==================== REPORT ENDPOINTS ====================
+
+export const reportAPI = {
+  index: () => api.get('/reports'),
+  users: (params = {}) => api.get('/reports/users', { params }),
+  usersInDevice: (params = {}) => api.get('/reports/users-in-device', { params }),
+  usersWithoutCredential: (params = {}) => api.get('/reports/users-without-credential', { params }),
+  cards: (params = {}) => api.get('/reports/cards', { params }),
+  inactiveCards: (params = {}) => api.get('/reports/cards/inactive', { params }),
+  devices: (params = {}) => api.get('/reports/devices', { params }),
+  events: (params = {}) => api.get('/reports/events', { params }),
+  enrollments: (params = {}) => api.get('/reports/enrollments', { params }),
+  replicationLag: (params = {}) => api.get('/reports/replication-lag', { params }),
 };
 
 export default api;

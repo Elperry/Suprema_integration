@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
@@ -11,7 +12,7 @@ export default (services) => {
      * Sync users from HR system to Suprema devices
      * POST /api/hr/users/sync
      */
-    router.post('/users/sync', async (req, res) => {
+    router.post('/users/sync', asyncHandler(async (req, res) => {
         try {
             const { deviceId, users } = req.body;
 
@@ -51,13 +52,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get attendance data for HR system
      * GET /api/hr/attendance
      */
-    router.get('/attendance', async (req, res) => {
+    router.get('/attendance', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -134,13 +135,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Calculate work hours for employees
      * POST /api/hr/attendance/work-hours
      */
-    router.post('/attendance/work-hours', async (req, res) => {
+    router.post('/attendance/work-hours', asyncHandler(async (req, res) => {
         try {
             const { deviceId, employeeIds, startDate, endDate } = req.body;
 
@@ -188,13 +189,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get access events for HR system
      * GET /api/hr/access-events
      */
-    router.get('/access-events', async (req, res) => {
+    router.get('/access-events', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -283,13 +284,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get employee biometric enrollment status
      * GET /api/hr/employees/:employeeId/biometric-status
      */
-    router.get('/employees/:employeeId/biometric-status', async (req, res) => {
+    router.get('/employees/:employeeId/biometric-status', asyncHandler(async (req, res) => {
         try {
             const { employeeId } = req.params;
             const { deviceId } = req.query;
@@ -348,7 +349,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Helper function to wrap async operations with timeout
@@ -370,7 +371,7 @@ export default (services) => {
      * Bulk enroll employee biometrics
      * POST /api/hr/employees/biometric-enrollment
      */
-    router.post('/employees/biometric-enrollment', async (req, res) => {
+    router.post('/employees/biometric-enrollment', asyncHandler(async (req, res) => {
         try {
             const { deviceId, enrollments } = req.body;
             const timeout = req.body.timeout || 30000; // Default 30 second timeout per enrollment
@@ -455,13 +456,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get system status for HR dashboard
      * GET /api/hr/system-status
      */
-    router.get('/system-status', async (req, res) => {
+    router.get('/system-status', asyncHandler(async (req, res) => {
         try {
             let devices = [];
             let connectionStats = { gatewayConnected: false, connectedDeviceCount: 0 };
@@ -472,14 +473,14 @@ export default (services) => {
                 devices = await services.connection.getConnectedDevices();
                 connectionStats = services.connection.getConnectionStats();
             } catch (connErr) {
-                console.warn('Failed to get connection info:', connErr.message);
+                services.logger.warn('Failed to get connection info:', connErr.message);
             }
 
             // Safely get event status
             try {
                 eventStatus = services.event.getMonitoringStatus();
             } catch (eventErr) {
-                console.warn('Failed to get event status:', eventErr.message);
+                services.logger.warn('Failed to get event status:', eventErr.message);
             }
 
             const systemStatus = {
@@ -524,13 +525,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Webhook endpoint for HR system notifications
      * POST /api/hr/webhook
      */
-    router.post('/webhook', async (req, res) => {
+    router.post('/webhook', asyncHandler(async (req, res) => {
         try {
             const { type, data } = req.body;
 
@@ -574,7 +575,150 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
+
+    // ==================== WEBHOOK & TERMINATION ====================
+
+    /**
+     * Receive webhook from external HR system for employee lifecycle events.
+     * POST /api/hr/webhooks/employee-update
+     * Body: { event, employeeId, data }
+     * 
+     * Supported events:
+     *   - 'terminated' / 'suspended' → Revoke all active cards, remove from devices
+     *   - 'reactivated' → Re-activate cards
+     *   - 'department_changed' → Log for audit
+     */
+    router.post('/webhooks/employee-update', asyncHandler(async (req, res) => {
+        try {
+            const { event, employeeId, data } = req.body;
+
+            if (!event || !employeeId) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'event and employeeId are required'
+                });
+            }
+
+            const result = { event, employeeId, actions: [] };
+
+            if (event === 'terminated' || event === 'suspended') {
+                // Revoke all active card assignments for this employee
+                const prisma = services.database.getPrisma();
+                const activeCards = await prisma.cardAssignment.findMany({
+                    where: { employeeId: String(employeeId), status: 'active' },
+                    include: { enrollments: { where: { status: 'active' } } }
+                });
+
+                for (const card of activeCards) {
+                    try {
+                        await services.enrollment.revokeCardAssignment(
+                            card.id,
+                            `HR ${event}: ${data?.reason || event}`
+                        );
+                        result.actions.push({
+                            type: 'card_revoked',
+                            cardId: card.id,
+                            success: true
+                        });
+                    } catch (err) {
+                        result.actions.push({
+                            type: 'card_revoke_failed',
+                            cardId: card.id,
+                            error: err.message
+                        });
+                    }
+                }
+
+                result.cardsRevoked = result.actions.filter(a => a.type === 'card_revoked').length;
+                result.message = `Employee ${employeeId} ${event}: ${result.cardsRevoked} card(s) revoked`;
+
+            } else if (event === 'reactivated') {
+                result.message = `Employee ${employeeId} reactivated. Cards must be re-assigned manually.`;
+                result.actions.push({ type: 'info', message: 'Reactivation noted; manual card re-assignment required' });
+
+            } else {
+                result.message = `Event "${event}" received for employee ${employeeId}`;
+                result.actions.push({ type: 'info', message: `Event logged: ${event}` });
+            }
+
+            // Audit log the webhook
+            if (services.audit) {
+                services.audit.log({
+                    action: `hr-webhook-${event}`,
+                    category: 'hr',
+                    targetType: 'employee',
+                    targetId: String(employeeId),
+                    details: { event, data, result: result.actions },
+                    ipAddress: req.ip,
+                    requestId: req.requestId
+                });
+            }
+
+            res.json({ success: true, data: result });
+
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
+
+    /**
+     * Terminate an employee: revoke all cards, remove from all devices.
+     * POST /api/hr/employees/:employeeId/terminate
+     * Body: { reason }
+     */
+    router.post('/employees/:employeeId/terminate', asyncHandler(async (req, res) => {
+        try {
+            const { employeeId } = req.params;
+            const { reason } = req.body || {};
+
+            const prisma = services.database.getPrisma();
+            const activeCards = await prisma.cardAssignment.findMany({
+                where: { employeeId: String(employeeId), status: 'active' },
+                include: { enrollments: { where: { status: 'active' } } }
+            });
+
+            const results = [];
+            for (const card of activeCards) {
+                try {
+                    await services.enrollment.revokeCardAssignment(
+                        card.id,
+                        reason || 'Employee terminated'
+                    );
+                    results.push({ cardId: card.id, status: 'revoked' });
+                } catch (err) {
+                    results.push({ cardId: card.id, status: 'error', error: err.message });
+                }
+            }
+
+            if (services.audit) {
+                services.audit.log({
+                    action: 'employee-terminated',
+                    category: 'hr',
+                    targetType: 'employee',
+                    targetId: String(employeeId),
+                    details: { reason, cardsRevoked: results.filter(r => r.status === 'revoked').length },
+                    ipAddress: req.ip,
+                    requestId: req.requestId
+                });
+            }
+
+            res.json({
+                success: true,
+                message: `Employee ${employeeId} terminated: ${results.filter(r => r.status === 'revoked').length} card(s) revoked`,
+                data: { employeeId, results }
+            });
+
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
 
     return router;
 };

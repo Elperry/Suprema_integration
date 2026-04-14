@@ -48,12 +48,13 @@ class SupremaBiometricService extends EventEmitter {
      * Initialize all biometric service clients
      */
     initializeClients() {
-        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const gatewayAddress = this.connectionService.getGatewayAddress();
         const credentials = this.connectionService.sslCreds;
+        const clientOptions = this.connectionService.getGatewayClientOptions();
 
-        this.fingerClient = new fingerService.FingerClient(gatewayAddress, credentials);
-        this.cardClient = new cardService.CardClient(gatewayAddress, credentials);
-        this.faceClient = new faceService.FaceClient(gatewayAddress, credentials);
+        this.fingerClient = new fingerService.FingerClient(gatewayAddress, credentials, clientOptions);
+        this.cardClient = new cardService.CardClient(gatewayAddress, credentials, clientOptions);
+        this.faceClient = new faceService.FaceClient(gatewayAddress, credentials, clientOptions);
 
         this.logger.info('Biometric service clients initialized');
     }

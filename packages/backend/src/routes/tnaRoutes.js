@@ -4,14 +4,215 @@
  */
 
 import express from 'express';
+import { toCsv, toExcelTable } from '../utils/csv.js';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
+    const prisma = services.database.getPrisma();
+
+    // ==================== DB-BASED ATTENDANCE REPORTS ====================
+
+    /**
+     * Daily attendance report from replicated events.
+     * GET /api/tna/attendance/daily
+     * Query: date (YYYY-MM-DD, defaults today), deviceId, userId
+     *
+     * Groups authentication-success events per user and computes
+     * first-in / last-out / total hours for the given date.
+     */
+    router.get('/attendance/daily', asyncHandler(async (req, res) => {
+        try {
+            const {
+                date,
+                deviceId,
+                userId,
+                format: fmt = 'json',
+            } = req.query;
+
+            const targetDate = date || new Date().toISOString().slice(0, 10);
+            const dayStart = new Date(`${targetDate}T00:00:00`);
+            const dayEnd = new Date(`${targetDate}T23:59:59.999`);
+
+            const where = {
+                timestamp: { gte: dayStart, lte: dayEnd },
+                authResult: 'success',
+            };
+            if (deviceId) where.deviceId = parseInt(deviceId);
+            if (userId) where.userId = { contains: userId };
+
+            const events = await prisma.event.findMany({
+                where,
+                orderBy: { timestamp: 'asc' },
+                select: { userId: true, deviceId: true, timestamp: true, eventType: true, doorId: true },
+            });
+
+            // Group by userId
+            const userMap = new Map();
+            for (const e of events) {
+                if (!e.userId) continue;
+                if (!userMap.has(e.userId)) {
+                    userMap.set(e.userId, []);
+                }
+                userMap.get(e.userId).push(e);
+            }
+
+            const rows = [];
+            for (const [uid, userEvents] of userMap) {
+                const first = userEvents[0];
+                const last = userEvents[userEvents.length - 1];
+                const durationMs = last.timestamp - first.timestamp;
+                const hours = Math.round((durationMs / 3_600_000) * 100) / 100;
+
+                rows.push({
+                    userId: uid,
+                    date: targetDate,
+                    firstEvent: first.timestamp.toISOString(),
+                    lastEvent: last.timestamp.toISOString(),
+                    totalHours: hours,
+                    eventCount: userEvents.length,
+                    devices: [...new Set(userEvents.map(e => e.deviceId))],
+                });
+            }
+
+            rows.sort((a, b) => a.userId.localeCompare(b.userId));
+
+            if (fmt === 'csv' || fmt === 'xls') {
+                const columns = [
+                    { header: 'User ID', value: r => r.userId },
+                    { header: 'Date', value: r => r.date },
+                    { header: 'First Event', value: r => r.firstEvent },
+                    { header: 'Last Event', value: r => r.lastEvent },
+                    { header: 'Total Hours', value: r => r.totalHours },
+                    { header: 'Event Count', value: r => r.eventCount },
+                    { header: 'Devices', value: r => r.devices.join(', ') },
+                ];
+                if (fmt === 'xls') {
+                    const wb = toExcelTable(rows, columns, 'Daily Attendance');
+                    res.setHeader('Content-Type', 'application/vnd.ms-excel');
+                    res.setHeader('Content-Disposition', `attachment; filename="attendance_${targetDate}.xls"`);
+                    return res.send(wb);
+                }
+                res.setHeader('Content-Type', 'text/csv');
+                res.setHeader('Content-Disposition', `attachment; filename="attendance_${targetDate}.csv"`);
+                return res.send(toCsv(rows, columns));
+            }
+
+            res.json({
+                success: true,
+                date: targetDate,
+                totalUsers: rows.length,
+                data: rows,
+            });
+        } catch (error) {
+            res.status(500).json({ error: 'Internal Server Error', message: error.message });
+        }
+    }));
+
+    /**
+     * Monthly attendance summary from replicated events.
+     * GET /api/tna/attendance/monthly
+     * Query: month (YYYY-MM, defaults to current), deviceId, userId
+     *
+     * Returns per-user summary: total days present, avg hours, total hours.
+     */
+    router.get('/attendance/monthly', asyncHandler(async (req, res) => {
+        try {
+            const {
+                month,
+                deviceId,
+                userId,
+                format: fmt = 'json',
+            } = req.query;
+
+            const targetMonth = month || new Date().toISOString().slice(0, 7);
+            const [year, mon] = targetMonth.split('-').map(Number);
+            const monthStart = new Date(year, mon - 1, 1);
+            const monthEnd = new Date(year, mon, 0, 23, 59, 59, 999);
+
+            const where = {
+                timestamp: { gte: monthStart, lte: monthEnd },
+                authResult: 'success',
+            };
+            if (deviceId) where.deviceId = parseInt(deviceId);
+            if (userId) where.userId = { contains: userId };
+
+            const events = await prisma.event.findMany({
+                where,
+                orderBy: { timestamp: 'asc' },
+                select: { userId: true, timestamp: true },
+            });
+
+            // Group by userId → date → events
+            const userDays = new Map();
+            for (const e of events) {
+                if (!e.userId) continue;
+                const dateKey = e.timestamp.toISOString().slice(0, 10);
+                if (!userDays.has(e.userId)) userDays.set(e.userId, new Map());
+                const days = userDays.get(e.userId);
+                if (!days.has(dateKey)) days.set(dateKey, []);
+                days.get(dateKey).push(e.timestamp);
+            }
+
+            const rows = [];
+            for (const [uid, days] of userDays) {
+                let totalHours = 0;
+                for (const [, timestamps] of days) {
+                    const first = timestamps[0];
+                    const last = timestamps[timestamps.length - 1];
+                    totalHours += (last - first) / 3_600_000;
+                }
+                const daysPresent = days.size;
+                const avgHours = daysPresent > 0 ? Math.round((totalHours / daysPresent) * 100) / 100 : 0;
+
+                rows.push({
+                    userId: uid,
+                    month: targetMonth,
+                    daysPresent,
+                    totalHours: Math.round(totalHours * 100) / 100,
+                    avgHoursPerDay: avgHours,
+                });
+            }
+
+            rows.sort((a, b) => a.userId.localeCompare(b.userId));
+
+            if (fmt === 'csv' || fmt === 'xls') {
+                const columns = [
+                    { header: 'User ID', value: r => r.userId },
+                    { header: 'Month', value: r => r.month },
+                    { header: 'Days Present', value: r => r.daysPresent },
+                    { header: 'Total Hours', value: r => r.totalHours },
+                    { header: 'Avg Hours/Day', value: r => r.avgHoursPerDay },
+                ];
+                if (fmt === 'xls') {
+                    const wb = toExcelTable(rows, columns, 'Monthly Attendance');
+                    res.setHeader('Content-Type', 'application/vnd.ms-excel');
+                    res.setHeader('Content-Disposition', `attachment; filename="attendance_${targetMonth}.xls"`);
+                    return res.send(wb);
+                }
+                res.setHeader('Content-Type', 'text/csv');
+                res.setHeader('Content-Disposition', `attachment; filename="attendance_${targetMonth}.csv"`);
+                return res.send(toCsv(rows, columns));
+            }
+
+            res.json({
+                success: true,
+                month: targetMonth,
+                totalUsers: rows.length,
+                data: rows,
+            });
+        } catch (error) {
+            res.status(500).json({ error: 'Internal Server Error', message: error.message });
+        }
+    }));
+
+    // ==================== DEVICE-BASED T&A ====================
+
     /**
      * Get T&A configuration
      * GET /api/tna/config
      */
-    router.get('/config', async (req, res) => {
+    router.get('/config', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.query;
 
@@ -32,7 +233,7 @@ export default (services) => {
             } catch (grpcError) {
                 // Handle gRPC parsing errors gracefully
                 if (grpcError.message && grpcError.message.includes('parsing error')) {
-                    console.warn('gRPC parsing error for TNA config, returning defaults:', grpcError.message);
+                    services.logger.warn('gRPC parsing error for TNA config, returning defaults:', grpcError.message);
                     res.json({
                         success: true,
                         data: {
@@ -54,13 +255,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Set T&A configuration
      * POST /api/tna/config
      */
-    router.post('/config', async (req, res) => {
+    router.post('/config', asyncHandler(async (req, res) => {
         try {
             const { deviceId, config } = req.body;
 
@@ -84,13 +285,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get T&A logs
      * GET /api/tna/logs
      */
-    router.get('/logs', async (req, res) => {
+    router.get('/logs', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -111,7 +312,17 @@ export default (services) => {
                 targetDeviceIds = [deviceId];
             } else {
                 // Get all connected devices
-                const connectedDevices = await services.connection.getConnectedDevices();
+                let connectedDevices = [];
+                try {
+                    connectedDevices = await services.connection.getConnectedDevices();
+                } catch {
+                    return res.json({
+                        success: true,
+                        data: [],
+                        total: 0,
+                        message: 'Gateway not available'
+                    });
+                }
                 // Extract device IDs - connectedDevices returns protobuf objects with .deviceid property
                 targetDeviceIds = connectedDevices.map(d => d.deviceid || d.id);
                 
@@ -144,7 +355,7 @@ export default (services) => {
                     const logs = await services.tna.getTNALogs(devId, 0, filters.maxLogs);
                     allLogs = allLogs.concat(logs.map(log => ({ ...log, deviceId: devId })));
                 } catch (e) {
-                    console.error(`Failed to get logs from device ${devId}:`, e.message);
+                    services.logger.error(`Failed to get logs from device ${devId}:`, e.message);
                 }
             }
 
@@ -190,13 +401,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Calculate work hours
      * GET /api/tna/work-hours
      */
-    router.get('/work-hours', async (req, res) => {
+    router.get('/work-hours', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -231,13 +442,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Export T&A data to CSV
      * GET /api/tna/export
      */
-    router.get('/export', async (req, res) => {
+    router.get('/export', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -283,13 +494,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get attendance summary
      * GET /api/tna/summary
      */
-    router.get('/summary', async (req, res) => {
+    router.get('/summary', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId,
@@ -303,7 +514,16 @@ export default (services) => {
             // If no deviceId, try to get from first connected device
             let targetDeviceId = deviceId;
             if (!targetDeviceId) {
-                const connectedDevices = await services.connection.getConnectedDevices();
+                let connectedDevices = [];
+                try {
+                    connectedDevices = await services.connection.getConnectedDevices();
+                } catch {
+                    return res.json({
+                        success: true,
+                        data: null,
+                        message: 'Gateway not available'
+                    });
+                }
                 if (connectedDevices.length > 0) {
                     // Extract device ID - protobuf objects have .deviceid property
                     targetDeviceId = connectedDevices[0].deviceid || connectedDevices[0].id;
@@ -333,13 +553,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Set work schedule
      * POST /api/tna/schedule
      */
-    router.post('/schedule', async (req, res) => {
+    router.post('/schedule', asyncHandler(async (req, res) => {
         try {
             const { deviceId, userId, schedule } = req.body;
 
@@ -364,13 +584,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get work schedule
      * GET /api/tna/schedule/:userId
      */
-    router.get('/schedule/:userId', async (req, res) => {
+    router.get('/schedule/:userId', asyncHandler(async (req, res) => {
         try {
             const { userId } = req.params;
             const { deviceId } = req.query;
@@ -394,13 +614,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Process attendance for payroll
      * POST /api/tna/payroll
      */
-    router.post('/payroll', async (req, res) => {
+    router.post('/payroll', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -433,13 +653,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get overtime calculations
      * GET /api/tna/overtime
      */
-    router.get('/overtime', async (req, res) => {
+    router.get('/overtime', asyncHandler(async (req, res) => {
         try {
             const { 
                 deviceId, 
@@ -474,7 +694,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

@@ -1,0 +1,297 @@
+/* Biometric Page Styles */
+
+/* Device row */
+.bio-device-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.bio-device-selector {
+  margin-bottom: 20px;
+}
+
+/* Stats */
+.bio-stats-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.bio-stat {
+  flex: 1;
+  min-width: 140px;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 10px;
+  padding: 18px 20px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+}
+
+.bio-stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--primary-color, #2563eb);
+  line-height: 1.2;
+}
+
+.bio-stat-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary, #64748b);
+  margin-top: 4px;
+}
+
+/* Tabs */
+.bio-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 2px solid var(--border-color, #e2e8f0);
+  margin-bottom: 20px;
+}
+
+.bio-tab {
+  padding: 12px 20px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  color: var(--text-secondary, #64748b);
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+
+.bio-tab:hover {
+  background: var(--bg-color, #f8fafc);
+  color: var(--text-primary, #1e293b);
+}
+
+.bio-tab.active {
+  border-bottom-color: var(--primary-color, #2563eb);
+  font-weight: 600;
+  color: var(--primary-color, #2563eb);
+}
+
+/* Scan Card */
+.bio-scan-card {
+  text-align: center;
+}
+
+.bio-scan-desc {
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 20px;
+}
+
+.btn-lg {
+  padding: 14px 32px;
+  font-size: 1.1rem;
+}
+
+/* Scan Animation */
+.bio-scan-animation {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-top: 24px;
+  padding: 30px;
+}
+
+.bio-scan-pulse {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: rgba(37, 99, 235, 0.1);
+  animation: bio-pulse 1.5s ease-in-out infinite;
+  position: absolute;
+}
+
+.bio-scan-animation {
+  position: relative;
+}
+
+.bio-scan-icon {
+  font-size: 3rem;
+  z-index: 1;
+  animation: bio-bounce 1s ease-in-out infinite;
+}
+
+.bio-scan-animation p {
+  color: var(--primary-color, #2563eb);
+  font-weight: 500;
+  margin-top: 12px;
+}
+
+@keyframes bio-pulse {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  50% { transform: scale(1.4); opacity: 0.2; }
+  100% { transform: scale(0.8); opacity: 0.8; }
+}
+
+@keyframes bio-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+/* Scan Result */
+.bio-scan-result {
+  margin-top: 20px;
+  padding: 16px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.bio-scan-result.success {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+}
+
+.bio-scan-result h4 {
+  margin: 0 0 10px;
+  color: #16a34a;
+}
+
+.bio-result-details p {
+  margin: 4px 0;
+  font-size: 0.9rem;
+}
+
+/* Config Grid */
+.bio-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.bio-config-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  background: var(--bg-color, #f8fafc);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+}
+
+.bio-config-key {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--text-primary, #1e293b);
+}
+
+.bio-config-value {
+  font-size: 0.85rem;
+  color: var(--text-secondary, #64748b);
+  font-family: monospace;
+  max-width: 50%;
+  text-align: right;
+  word-break: break-word;
+}
+
+/* Type badges */
+.bio-types-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.bio-type-badge {
+  display: inline-block;
+  padding: 6px 14px;
+  background: #eff6ff;
+  color: var(--primary-color, #2563eb);
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.bio-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.bio-badge-fingerprint {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.bio-badge-face {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+/* Empty state */
+.bio-empty {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-secondary, #64748b);
+}
+
+.bio-empty-icon {
+  font-size: 3rem;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+.bio-empty h3 {
+  margin: 0 0 8px;
+  color: var(--text-primary, #1e293b);
+}
+
+.bio-empty p {
+  margin: 0;
+  max-width: 400px;
+  margin-inline: auto;
+}
+
+/* Device select common */
+.device-select-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.device-select-wrapper select {
+  flex: 1;
+}
+
+.device-connection-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.device-connection-dot.online {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+}
+
+.device-connection-dot.offline {
+  background: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .bio-device-row {
+    flex-direction: column;
+  }
+
+  .bio-stats-row {
+    flex-direction: column;
+  }
+
+  .bio-config-grid {
+    grid-template-columns: 1fr;
+  }
+}

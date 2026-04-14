@@ -4,6 +4,8 @@
  */
 
 import express from 'express';
+import { validate, schemas } from '../middleware/requestValidator.js';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
@@ -12,7 +14,7 @@ export default (services) => {
      * POST /api/cards/scan
      * Body: { deviceId, format, threshold }
      */
-    router.post('/scan', async (req, res) => {
+    router.post('/scan', validate.body(schemas.cardScan), asyncHandler(async (req, res) => {
         try {
             const { deviceId, format, threshold } = req.body;
 
@@ -36,13 +38,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get card blacklist from device
      * GET /api/cards/blacklist/:deviceId
      */
-    router.get('/blacklist/:deviceId', async (req, res) => {
+    router.get('/blacklist/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const blacklist = await services.card.getBlacklist(deviceId);
@@ -58,14 +60,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Add cards to blacklist
      * POST /api/cards/blacklist/:deviceId
      * Body: { cardInfos: [{cardID, issueCount}] }
      */
-    router.post('/blacklist/:deviceId', async (req, res) => {
+    router.post('/blacklist/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { cardInfos } = req.body;
@@ -89,14 +91,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Remove cards from blacklist
      * DELETE /api/cards/blacklist/:deviceId
      * Body: { cardInfos: [{cardID, issueCount}] }
      */
-    router.delete('/blacklist/:deviceId', async (req, res) => {
+    router.delete('/blacklist/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { cardInfos } = req.body;
@@ -120,13 +122,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get card configuration from device
      * GET /api/cards/config/:deviceId
      */
-    router.get('/config/:deviceId', async (req, res) => {
+    router.get('/config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const config = await services.card.getConfig(deviceId);
@@ -154,13 +156,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get QR code configuration from device
      * GET /api/cards/qr-config/:deviceId
      */
-    router.get('/qr-config/:deviceId', async (req, res) => {
+    router.get('/qr-config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const qrConfig = await services.card.getQRConfig(deviceId);
@@ -175,14 +177,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Set card configuration on device
      * PUT /api/cards/config/:deviceId
      * Body: { config: {...} }
      */
-    router.put('/config/:deviceId', async (req, res) => {
+    router.put('/config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { config } = req.body;
@@ -206,14 +208,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Set QR code configuration on device
      * PUT /api/cards/qr-config/:deviceId
      * Body: { qrConfig: {...} }
      */
-    router.put('/qr-config/:deviceId', async (req, res) => {
+    router.put('/qr-config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const { qrConfig } = req.body;
@@ -237,14 +239,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Verify card data
      * POST /api/cards/verify
      * Body: { deviceId, cardData }
      */
-    router.post('/verify', async (req, res) => {
+    router.post('/verify', asyncHandler(async (req, res) => {
         try {
             const { deviceId, cardData } = req.body;
 
@@ -268,13 +270,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get card statistics
      * GET /api/cards/statistics/:deviceId
      */
-    router.get('/statistics/:deviceId', async (req, res) => {
+    router.get('/statistics/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
             const stats = await services.card.getCardStatistics(deviceId);
@@ -289,7 +291,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

@@ -1,5 +1,6 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { deviceAPI, gateEventAPI, employeeAPI } from '../services/api';
+import { SkeletonCards, SkeletonTable } from './Skeleton';
 import './Dashboard.css';
 
 export default function Dashboard({ health }) {
@@ -105,10 +106,21 @@ export default function Dashboard({ health }) {
 
   if (loading && !lastUpdate) {
     return (
-      <div className="dashboard loading-state">
-        <div className="loading-spinner">
-          <div className="spinner"></div>
-          <p>Loading dashboard...</p>
+      <div className="dashboard">
+        <div className="dashboard-header">
+          <h2>📊 Dashboard</h2>
+        </div>
+        <SkeletonCards count={4} height={120} />
+        <div className="card" style={{ marginTop: 20 }}>
+          <h3 style={{ marginBottom: 12 }}>Recent Activity</h3>
+          <table className="table" style={{ width: '100%' }}>
+            <thead>
+              <tr><th>Time</th><th>Employee</th><th>Device</th><th>Direction</th></tr>
+            </thead>
+            <tbody>
+              <SkeletonTable rows={5} cols={4} />
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -203,6 +215,77 @@ export default function Dashboard({ health }) {
         </div>
       </div>
 
+      {/* Quick Actions — above device grid for visibility */}
+      <div className="card quick-actions-card">
+        <h3>⚡ Quick Actions</h3>
+        <div className="quick-actions-grid">
+          <a href="/devices" className="quick-action-btn">
+            <span className="icon">🖥️</span>
+            <span>Manage Devices</span>
+          </a>
+          <a href="/enrollment" className="quick-action-btn">
+            <span className="icon">🎫</span>
+            <span>Enroll Cards</span>
+          </a>
+          <a href="/events" className="quick-action-btn">
+            <span className="icon">🔄</span>
+            <span>Sync Events</span>
+          </a>
+          <a href="/users" className="quick-action-btn">
+            <span className="icon">👤</span>
+            <span>Manage Users</span>
+          </a>
+        </div>
+      </div>
+
+      {/* System Health Services Widget */}
+      {health?.services && (
+        <div className="card health-services-card">
+          <div className="card-header-flex">
+            <h3>🩺 Service Health</h3>
+            <span className={`badge badge-${healthInfo.color}`}>{healthInfo.label}</span>
+          </div>
+          <div className="services-grid">
+            {Object.entries(health.services).map(([name, svc]) => {
+              const ok = svc === true || svc?.status === 'ok' || svc?.status === 'healthy' || svc?.connected === true
+              return (
+                <div key={name} className={`service-item ${ok ? 'ok' : 'err'}`}>
+                  <span className={`status-dot ${ok ? 'success' : 'danger'}`} />
+                  <span className="service-name">{name}</span>
+                  <span className="service-status">{ok ? 'Online' : 'Offline'}</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Replication Status Widget */}
+      <div className="card replication-card">
+        <div className="card-header-flex">
+          <h3>🔁 Replication Status</h3>
+          <a href="/sync-center" className="btn btn-link">Sync Center →</a>
+        </div>
+        <div className="replication-grid">
+          <div className="repl-stat">
+            <span className="repl-label">Gateway</span>
+            <span className={`badge badge-${health?.gateway === 'connected' ? 'success' : 'warning'}`}>
+              {health?.gateway || 'Unknown'}
+            </span>
+          </div>
+          <div className="repl-stat">
+            <span className="repl-label">Database</span>
+            <span className={`badge badge-${health?.database?.connected ? 'success' : 'danger'}`}>
+              {health?.database?.connected ? 'Connected' : 'Disconnected'}
+            </span>
+          </div>
+          <div className="repl-stat">
+            <span className="repl-label">Devices Online</span>
+            <span className="badge badge-info">{stats.devices.connected} / {stats.devices.total}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Device Status Grid */}
       <div className="card device-status-card">
         <div className="card-header-flex">
@@ -274,28 +357,6 @@ export default function Dashboard({ health }) {
         )}
       </div>
 
-      {/* Quick Actions */}
-      <div className="card quick-actions-card">
-        <h3>⚡ Quick Actions</h3>
-        <div className="quick-actions-grid">
-          <a href="/devices" className="quick-action-btn">
-            <span className="icon">🖥️</span>
-            <span>Manage Devices</span>
-          </a>
-          <a href="/enrollment" className="quick-action-btn">
-            <span className="icon">🎫</span>
-            <span>Enroll Cards</span>
-          </a>
-          <a href="/events" className="quick-action-btn">
-            <span className="icon">🔄</span>
-            <span>Sync Events</span>
-          </a>
-          <a href="/users" className="quick-action-btn">
-            <span className="icon">👤</span>
-            <span>Manage Users</span>
-          </a>
-        </div>
-      </div>
     </div>
   );
 }

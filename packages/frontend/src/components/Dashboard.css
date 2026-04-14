@@ -426,3 +426,74 @@
     grid-template-columns: 1fr 1fr;
   }
 }
+
+/* Service Health Widget */
+.health-services-card .services-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 0.5rem;
+}
+
+.service-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  border: 1px solid #e5e7eb;
+}
+
+.service-item.ok {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.service-item.err {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.service-name {
+  flex: 1;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.service-status {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
+/* Replication Widget */
+.replication-card .replication-grid {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.repl-stat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.repl-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #374151;
+}
+
+/* Card header flex utility */
+.card-header-flex {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.card-header-flex h3 {
+  margin: 0;
+}
+
+

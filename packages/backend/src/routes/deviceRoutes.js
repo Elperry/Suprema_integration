@@ -4,6 +4,8 @@
  */
 
 import express from 'express';
+import { validate, schemas } from '../middleware/requestValidator.js';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
@@ -42,7 +44,7 @@ export default (services) => {
             
             return device ? device.deviceid : null;
         } catch (error) {
-            console.error('Error finding connected device:', error);
+            services.logger.error('Error finding connected device:', { error: error.message });
             return null;
         }
     };
@@ -57,12 +59,12 @@ export default (services) => {
         let deviceId = await findConnectedDeviceByIp(ip, parsedPort);
         
         if (deviceId) {
-            console.log(`Device already connected at ${ip}:${parsedPort} with ID ${deviceId}`);
+            services.logger.info(`Device already connected at ${ip}:${parsedPort} with ID ${deviceId}`);
             return { deviceId, alreadyConnected: true };
         }
 
         // Device not connected, establish new connection
-        console.log(`Connecting to device at ${ip}:${parsedPort}...`);
+        services.logger.info(`Connecting to device at ${ip}:${parsedPort}...`);
         const deviceConfig = {
             ip: ip,
             port: parsedPort,
@@ -125,7 +127,7 @@ export default (services) => {
      * GET /api/devices/direct/info
      * Query: ip, port (optional, default 51211), deviceId (optional, use if already connected)
      */
-    router.get('/direct/info', async (req, res) => {
+    router.get('/direct/info', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
@@ -176,14 +178,14 @@ export default (services) => {
                 hint: 'Ensure the device is powered on, reachable, and the gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Get device capabilities directly from device using IP
      * GET /api/devices/direct/capabilities
      * Query: ip, port (optional, default 51211), deviceId (optional)
      */
-    router.get('/direct/capabilities', async (req, res) => {
+    router.get('/direct/capabilities', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
@@ -234,14 +236,14 @@ export default (services) => {
                 hint: 'Ensure the device is powered on, reachable, and the gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Test direct connection to a device using IP
      * POST /api/devices/direct/connect
      * Body: { ip, port, useSSL }
      */
-    router.post('/direct/connect', async (req, res) => {
+    router.post('/direct/connect', validate.body(schemas.deviceConnect), asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, useSSL = false } = req.body;
 
@@ -301,14 +303,14 @@ export default (services) => {
                 hint: 'Check: 1) Device is powered on, 2) IP/Port are correct, 3) Network is reachable, 4) Gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Disconnect from a device by deviceId (from gateway connection)
      * POST /api/devices/direct/disconnect
      * Body: { deviceId }
      */
-    router.post('/direct/disconnect', async (req, res) => {
+    router.post('/direct/disconnect', asyncHandler(async (req, res) => {
         try {
             const { deviceId: rawDeviceId } = req.body;
 
@@ -334,13 +336,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get list of currently connected devices (from gateway)
      * GET /api/devices/direct/connected
      */
-    router.get('/direct/connected', async (req, res) => {
+    router.get('/direct/connected', asyncHandler(async (req, res) => {
         try {
             const devices = await services.connection.getConnectedDevices();
             
@@ -359,14 +361,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get users enrolled on a device
      * GET /api/devices/direct/users
      * Query: ip, port (optional, default 51211), deviceId (optional)
      */
-    router.get('/direct/users', async (req, res) => {
+    router.get('/direct/users', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
@@ -422,14 +424,14 @@ export default (services) => {
                 hint: 'Ensure the device is connected and the gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Get detailed user information from a device
      * GET /api/devices/direct/users/:userId
      * Query: ip, port (optional, default 51211), deviceId (optional)
      */
-    router.get('/direct/users/:userId', async (req, res) => {
+    router.get('/direct/users/:userId', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
             const { userId } = req.params;
@@ -485,14 +487,14 @@ export default (services) => {
                 hint: 'Ensure the device is connected and the gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Get cards for a specific user on a device
      * GET /api/devices/direct/users/:userId/cards
      * Query: ip, port (optional, default 51211), deviceId (optional)
      */
-    router.get('/direct/users/:userId/cards', async (req, res) => {
+    router.get('/direct/users/:userId/cards', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
             const { userId } = req.params;
@@ -555,21 +557,25 @@ export default (services) => {
                 hint: 'Ensure the device is connected and the gateway is running'
             });
         }
-    });
+    }));
 
     /**
      * Get all users with their cards from a device (combined view)
      * GET /api/devices/direct/users-cards
      * Query: ip, port (optional, default 51211), deviceId (optional)
      */
-    router.get('/direct/users-cards', async (req, res) => {
+    router.get('/direct/users-cards', asyncHandler(async (req, res) => {
         try {
             const { ip, port = 51211, deviceId: providedDeviceId } = req.query;
 
             let deviceId = parseDeviceId(providedDeviceId);
+            let deviceRecord = null;
 
-            // If deviceId not provided or invalid, try to find by IP
-            if (deviceId === null) {
+            if (deviceId !== null) {
+                const resolved = await resolveSupremaDeviceId(deviceId);
+                deviceId = resolved.supremaDeviceId;
+                deviceRecord = resolved.deviceRecord;
+            } else {
                 if (!ip) {
                     return res.status(400).json({
                         error: 'Bad Request',
@@ -660,8 +666,8 @@ export default (services) => {
                 success: true,
                 source: 'direct_device',
                 connectionInfo: {
-                    ip: ip || 'N/A',
-                    port: parseInt(port, 10) || 51211,
+                    ip: ip || deviceRecord?.ip || 'N/A',
+                    port: parseInt(port, 10) || deviceRecord?.port || 51211,
                     deviceId: deviceId
                 },
                 data: usersWithCards,
@@ -679,7 +685,7 @@ export default (services) => {
                 hint: 'Ensure the device is connected and the gateway is running'
             });
         }
-    });
+    }));
 
     // =====================================================
     // DATABASE-BASED ROUTES (Original functionality)
@@ -689,7 +695,7 @@ export default (services) => {
      * Search for devices on network
      * GET /api/devices/search
      */
-    router.get('/search', async (req, res) => {
+    router.get('/search', asyncHandler(async (req, res) => {
         try {
             const { timeout = 5 } = req.query;
             const devices = await services.connection.searchDevices(parseInt(timeout));
@@ -705,13 +711,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get all devices from database
      * GET /api/devices
      */
-    router.get('/', async (req, res) => {
+    router.get('/', asyncHandler(async (req, res) => {
         try {
             const { status, connected } = req.query;
             
@@ -738,23 +744,15 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Add new device to database
      * POST /api/devices
      */
-    router.post('/', async (req, res) => {
+    router.post('/', validate.body(schemas.deviceCreate), asyncHandler(async (req, res) => {
         try {
             const deviceConfig = req.body;
-
-            // Validate required fields
-            if (!deviceConfig.name || !deviceConfig.ip || !deviceConfig.port) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'name, ip, and port are required'
-                });
-            }
 
             const device = await services.connection.addDeviceToDB(deviceConfig);
 
@@ -769,13 +767,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Connect to device from database
      * POST /api/devices/:deviceId/connect
      */
-    router.post('/:deviceId/connect', async (req, res) => {
+    router.post('/:deviceId/connect', asyncHandler(async (req, res) => {
         try {
             const deviceId = parseInt(req.params.deviceId);
             
@@ -804,13 +802,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Disconnect device
      * POST /api/devices/:deviceId/disconnect
      */
-    router.post('/:deviceId/disconnect', async (req, res) => {
+    router.post('/:deviceId/disconnect', asyncHandler(async (req, res) => {
         try {
             const deviceId = req.params.deviceId; // deviceId can be string or number depending on service
             await services.connection.disconnectDevice(deviceId);
@@ -825,7 +823,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get device information by DB ID or Suprema device ID
@@ -839,7 +837,7 @@ export default (services) => {
      * - /api/devices/1/info (DB ID)
      * - /api/devices/546173337/info (Suprema device ID)
      */
-    router.get('/:deviceId/info', async (req, res) => {
+    router.get('/:deviceId/info', asyncHandler(async (req, res) => {
         try {
             const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
             
@@ -867,13 +865,13 @@ export default (services) => {
                 hint: 'For DB IDs (1-999), ensure device has IP configured. For Suprema IDs (large numbers), ensure device is connected.'
             });
         }
-    });
+    }));
 
     /**
      * Get device capabilities by DB ID or Suprema device ID
      * GET /api/devices/:deviceId/capabilities
      */
-    router.get('/:deviceId/capabilities', async (req, res) => {
+    router.get('/:deviceId/capabilities', asyncHandler(async (req, res) => {
         try {
             const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
             const capabilities = await services.connection.getDeviceCapabilities(supremaDeviceId);
@@ -893,13 +891,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Test device connection by DB ID or Suprema device ID
      * GET /api/devices/:deviceId/test
      */
-    router.get('/:deviceId/test', async (req, res) => {
+    router.get('/:deviceId/test', asyncHandler(async (req, res) => {
         try {
             const { supremaDeviceId, deviceRecord } = await resolveSupremaDeviceId(req.params.deviceId);
             const isConnected = await services.connection.testDeviceConnection(supremaDeviceId);
@@ -917,14 +915,14 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Test network connectivity to a device before connecting
      * POST /api/devices/test-network
      * Body: { ip, port }
      */
-    router.post('/test-network', async (req, res) => {
+    router.post('/test-network', asyncHandler(async (req, res) => {
         try {
             const { ip, port } = req.body;
 
@@ -947,16 +945,23 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Update device in database
      * PUT /api/devices/:deviceId
      */
-    router.put('/:deviceId', async (req, res) => {
+    router.put('/:deviceId', asyncHandler(async (req, res) => {
         try {
-            const { deviceId } = req.params;
+            const deviceId = parseDeviceId(req.params.deviceId);
             const updates = req.body;
+
+            if (deviceId === null) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Expected an integer.'
+                });
+            }
 
             const device = await services.connection.updateDeviceInDB(deviceId, updates);
 
@@ -971,15 +976,22 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Delete device from database
      * DELETE /api/devices/:deviceId
      */
-    router.delete('/:deviceId', async (req, res) => {
+    router.delete('/:deviceId', asyncHandler(async (req, res) => {
         try {
-            const { deviceId } = req.params;
+            const deviceId = parseDeviceId(req.params.deviceId);
+
+            if (deviceId === null) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'Invalid device ID. Expected an integer.'
+                });
+            }
 
             await services.connection.removeDeviceFromDB(deviceId);
 
@@ -993,13 +1005,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Sync all device statuses
      * POST /api/devices/sync
      */
-    router.post('/sync', async (req, res) => {
+    router.post('/sync', asyncHandler(async (req, res) => {
         try {
             await services.connection.syncDeviceStatus();
 
@@ -1013,13 +1025,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Auto-reconnect failed devices
      * POST /api/devices/reconnect
      */
-    router.post('/reconnect', async (req, res) => {
+    router.post('/reconnect', asyncHandler(async (req, res) => {
         try {
             await services.connection.autoReconnectDevices();
 
@@ -1033,13 +1045,13 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get connection statistics
      * GET /api/devices/statistics
      */
-    router.get('/statistics', async (req, res) => {
+    router.get('/statistics', asyncHandler(async (req, res) => {
         try {
             const stats = services.connection.getConnectionStats();
 
@@ -1053,7 +1065,7 @@ export default (services) => {
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { eventAPI, deviceAPI } from '../services/api'
+import { eventAPI, deviceAPI, presetAPI } from '../services/api'
 import { useNotification } from './Notifications'
+import { SkeletonTable } from './Skeleton'
 
 export default function Events() {
   const { showNotification } = useNotification()
@@ -26,6 +27,46 @@ export default function Events() {
   // Export
   const [exporting, setExporting] = useState(false)
   
+  // Filter presets
+  const [presets, setPresets] = useState([])
+  const [selectedPreset, setSelectedPreset] = useState('')
+  const [showSavePreset, setShowSavePreset] = useState(false)
+  const [presetName, setPresetName] = useState('')
+  
+  // SSE live events
+  const [liveEvents, setLiveEvents] = useState([])
+  const [sseConnected, setSseConnected] = useState(false)
+  const [showLive, setShowLive] = useState(false)
+  const sseRef = useRef(null)
+  
+  // Column visibility
+  const ALL_COLUMNS = [
+    { key: 'device', label: 'Device', default: true },
+    { key: 'type', label: 'Type', default: true },
+    { key: 'userId', label: 'User ID', default: true },
+    { key: 'eventCode', label: 'Event Code', default: false },
+    { key: 'description', label: 'Description', default: true },
+    { key: 'result', label: 'Result', default: true },
+    { key: 'door', label: 'Door', default: false },
+    { key: 'timestamp', label: 'Timestamp', default: true },
+  ]
+  const [visibleCols, setVisibleCols] = useState(() => {
+    const saved = localStorage.getItem('events-visible-cols')
+    if (saved) try { return JSON.parse(saved) } catch {}
+    return ALL_COLUMNS.filter(c => c.default).map(c => c.key)
+  })
+  const [showColPicker, setShowColPicker] = useState(false)
+
+  const toggleColumn = (key) => {
+    setVisibleCols(prev => {
+      const next = prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+      localStorage.setItem('events-visible-cols', JSON.stringify(next))
+      return next
+    })
+  }
+
+  const isColVisible = (key) => visibleCols.includes(key)
+  
   // Filters - deviceId is empty by default (show ALL devices)
   const [filters, setFilters] = useState({
     deviceId: '',
@@ -40,11 +81,15 @@ export default function Events() {
   useEffect(() => { 
     loadDevices()
     loadEvents()
+    loadPresets()
     
     // Cleanup on unmount
     return () => {
       if (refreshTimerRef.current) {
         clearInterval(refreshTimerRef.current)
+      }
+      if (sseRef.current) {
+        sseRef.current.close()
       }
     }
   }, [])
@@ -85,6 +130,92 @@ export default function Events() {
     } catch (e) { 
       console.error(e)
     }
+  }
+
+  const loadPresets = async () => {
+    try {
+      const res = await presetAPI.getAll('events')
+      setPresets(res.data.data || [])
+    } catch (e) {
+      console.error('Failed to load presets:', e)
+    }
+  }
+
+  const handleApplyPreset = (presetId) => {
+    setSelectedPreset(presetId)
+    if (!presetId) return
+    const preset = presets.find(p => p.id === parseInt(presetId))
+    if (preset?.filters) {
+      setFilters({
+        deviceId: preset.filters.deviceId || '',
+        eventType: preset.filters.eventType || '',
+        userId: preset.filters.userId || '',
+        doorId: preset.filters.doorId || '',
+        startDate: preset.filters.startDate || '',
+        endDate: preset.filters.endDate || '',
+        authResult: preset.filters.authResult || ''
+      })
+      setTimeout(() => loadEvents(true), 0)
+      showNotification(`Applied preset "${preset.name}"`, 'success')
+    }
+  }
+
+  const handleSavePreset = async () => {
+    if (!presetName.trim()) return
+    try {
+      await presetAPI.create({ name: presetName.trim(), scope: 'events', filters })
+      showNotification(`Preset "${presetName}" saved`, 'success')
+      setPresetName('')
+      setShowSavePreset(false)
+      loadPresets()
+    } catch (e) {
+      showNotification(e.response?.data?.message || 'Failed to save preset', 'error')
+    }
+  }
+
+  const handleDeletePreset = async (id) => {
+    try {
+      await presetAPI.delete(id)
+      showNotification('Preset deleted', 'success')
+      if (selectedPreset === String(id)) setSelectedPreset('')
+      loadPresets()
+    } catch (e) {
+      showNotification('Failed to delete preset', 'error')
+    }
+  }
+
+  const connectSSE = () => {
+    if (sseRef.current) sseRef.current.close()
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const es = new EventSource(`${baseUrl}/api/events/stream`)
+    sseRef.current = es
+    es.onopen = () => setSseConnected(true)
+    es.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        setLiveEvents(prev => [event, ...prev].slice(0, 100))
+      } catch {}
+    }
+    es.addEventListener('event', (e) => {
+      try {
+        const event = JSON.parse(e.data)
+        setLiveEvents(prev => [event, ...prev].slice(0, 100))
+      } catch {}
+    })
+    es.onerror = () => {
+      setSseConnected(false)
+      es.close()
+      sseRef.current = null
+    }
+    setShowLive(true)
+  }
+
+  const disconnectSSE = () => {
+    if (sseRef.current) {
+      sseRef.current.close()
+      sseRef.current = null
+    }
+    setSseConnected(false)
   }
 
   const loadEvents = useCallback(async (resetPage = false) => {
@@ -397,7 +528,64 @@ export default function Events() {
 
       {/* Filters */}
       <div className="card">
-        <h3>🔍 Filters</h3>
+        <div className="card-header" style={{ marginBottom: '10px' }}>
+          <h3>🔍 Filters</h3>
+          <div className="btn-group">
+            <select
+              value={selectedPreset}
+              onChange={(e) => handleApplyPreset(e.target.value)}
+              className="form-control"
+              style={{ width: 'auto', minWidth: '160px' }}
+            >
+              <option value="">📋 Load Preset...</option>
+              {presets.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {selectedPreset && (
+              <button
+                onClick={() => handleDeletePreset(parseInt(selectedPreset))}
+                className="btn btn-sm btn-danger"
+                title="Delete selected preset"
+              >
+                🗑️
+              </button>
+            )}
+            <button
+              onClick={() => setShowSavePreset(!showSavePreset)}
+              className="btn btn-sm btn-secondary"
+              title="Save current filters as preset"
+            >
+              💾 Save Preset
+            </button>
+            <button
+              onClick={sseConnected ? disconnectSSE : connectSSE}
+              className={`btn btn-sm ${sseConnected ? 'btn-danger' : 'btn-success'}`}
+            >
+              {sseConnected ? '⏹️ Stop Live' : '📡 Live Feed'}
+            </button>
+          </div>
+        </div>
+        
+        {showSavePreset && (
+          <div className="save-preset-bar" style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #eee', marginBottom: '10px' }}>
+            <input
+              type="text"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              placeholder="Preset name..."
+              className="form-control"
+              style={{ maxWidth: '250px' }}
+              onKeyDown={(e) => e.key === 'Enter' && handleSavePreset()}
+            />
+            <button onClick={handleSavePreset} className="btn btn-sm btn-primary" disabled={!presetName.trim()}>
+              Save
+            </button>
+            <button onClick={() => { setShowSavePreset(false); setPresetName('') }} className="btn btn-sm btn-secondary">
+              Cancel
+            </button>
+          </div>
+        )}
         <div className="filter-grid">
           <div className="filter-item">
             <label>Device</label>
@@ -537,6 +725,21 @@ export default function Events() {
               </button>
             </div>
             {loading && <span className="loading-spinner">⏳ Loading...</span>}
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <button onClick={() => setShowColPicker(p => !p)} className="btn btn-secondary btn-sm" title="Toggle columns">
+                🔧 Columns ({visibleCols.length}/{ALL_COLUMNS.length})
+              </button>
+              {showColPicker && (
+                <div style={{ position: 'absolute', right: 0, top: '100%', zIndex: 20, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 0', minWidth: 180, boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+                  {ALL_COLUMNS.map(col => (
+                    <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 14 }}>
+                      <input type="checkbox" checked={visibleCols.includes(col.key)} onChange={() => toggleColumn(col.key)} style={{ width: 16, height: 16 }} />
+                      {col.label}
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         
@@ -544,40 +747,38 @@ export default function Events() {
           <table className="table">
             <thead>
               <tr>
-                <th>Device</th>
-                <th>Type</th>
-                <th>User ID</th>
-                <th>Event Code</th>
-                <th>Description</th>
-                <th>Result</th>
-                <th>Door</th>
-                <th>Timestamp</th>
+                {isColVisible('device') && <th>Device</th>}
+                {isColVisible('type') && <th>Type</th>}
+                {isColVisible('userId') && <th>User ID</th>}
+                {isColVisible('eventCode') && <th>Event Code</th>}
+                {isColVisible('description') && <th>Description</th>}
+                {isColVisible('result') && <th>Result</th>}
+                {isColVisible('door') && <th>Door</th>}
+                {isColVisible('timestamp') && <th>Timestamp</th>}
               </tr>
             </thead>
             <tbody>
               {events.length === 0 ? (
-                <tr>
-                  <td colSpan="8" className="text-center">
-                    {loading ? '⏳ Loading events...' : '📭 No events found. Click "Sync All Devices" to fetch events.'}
-                  </td>
-                </tr>
+                loading ? (
+                  <SkeletonTable rows={10} cols={visibleCols.length} />
+                ) : (
+                  <tr>
+                    <td colSpan={visibleCols.length} className="text-center">
+                      📭 No events found. Click "Sync All Devices" to fetch events.
+                    </td>
+                  </tr>
+                )
               ) : (
                 events.map((e, i) => (
                   <tr key={e.id || i}>
-                    <td>
-                      <span className="device-badge">
-                        {getDeviceName(e.deviceId)}
-                      </span>
-                    </td>
-                    <td>{getEventTypeBadge(e.eventType)}</td>
-                    <td>{e.userId || 'N/A'}</td>
-                    <td>
-                      <code>0x{(e.eventCode || 0).toString(16).toUpperCase().padStart(4, '0')}</code>
-                    </td>
-                    <td className="desc-cell">{e.description || '-'}</td>
-                    <td>{getAuthResultBadge(e.authResult)}</td>
-                    <td>{e.doorId !== null ? e.doorId : '-'}</td>
-                    <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>
+                    {isColVisible('device') && <td><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>}
+                    {isColVisible('type') && <td>{getEventTypeBadge(e.eventType)}</td>}
+                    {isColVisible('userId') && <td>{e.userId || 'N/A'}</td>}
+                    {isColVisible('eventCode') && <td><code>0x{(e.eventCode || 0).toString(16).toUpperCase().padStart(4, '0')}</code></td>}
+                    {isColVisible('description') && <td className="desc-cell">{e.description || '-'}</td>}
+                    {isColVisible('result') && <td>{getAuthResultBadge(e.authResult)}</td>}
+                    {isColVisible('door') && <td>{e.doorId !== null ? e.doorId : '-'}</td>}
+                    {isColVisible('timestamp') && <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>}
                   </tr>
                 ))
               )}
@@ -622,6 +823,49 @@ export default function Events() {
           </div>
         )}
       </div>
+
+      {/* Live Event Feed */}
+      {showLive && (
+        <div className="card">
+          <div className="card-header">
+            <h3>📡 Live Event Feed {sseConnected ? <span className="badge badge-success" style={{ fontSize: '11px' }}>Connected</span> : <span className="badge badge-danger" style={{ fontSize: '11px' }}>Disconnected</span>}</h3>
+            <div className="btn-group">
+              <button onClick={() => setLiveEvents([])} className="btn btn-sm btn-secondary">Clear</button>
+              <button onClick={() => setShowLive(false)} className="btn btn-sm btn-secondary">Hide</button>
+            </div>
+          </div>
+          <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th>Type</th>
+                  <th>User</th>
+                  <th>Description</th>
+                  <th>Result</th>
+                  <th>Time</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveEvents.length === 0 ? (
+                  <tr><td colSpan="6" className="text-center">Waiting for events...</td></tr>
+                ) : (
+                  liveEvents.map((e, i) => (
+                    <tr key={`live-${i}`} style={{ animation: 'fadeIn 0.3s' }}>
+                      <td><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>
+                      <td>{getEventTypeBadge(e.eventType)}</td>
+                      <td>{e.userId || 'N/A'}</td>
+                      <td className="desc-cell">{e.description || '-'}</td>
+                      <td>{getAuthResultBadge(e.authResult)}</td>
+                      <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .flex-row {
@@ -835,6 +1079,10 @@ export default function Events() {
         }
         .table-responsive {
           overflow-x: auto;
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; background: #fffde7; }
+          to { opacity: 1; background: transparent; }
         }
       `}</style>
     </div>

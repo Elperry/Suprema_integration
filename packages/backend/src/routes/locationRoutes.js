@@ -4,6 +4,7 @@
  */
 
 import express from 'express';
+import { asyncHandler } from '../core/errors/index.js';
 const router = express.Router();
 
 export default (services) => {
@@ -24,7 +25,7 @@ export default (services) => {
      * Get all locations as a tree structure
      * GET /api/locations/tree
      */
-    router.get('/tree', async (req, res) => {
+    router.get('/tree', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             // Get all locations with their devices
@@ -68,19 +69,19 @@ export default (services) => {
                 data: tree
             });
         } catch (error) {
-            console.error('Error fetching location tree:', error);
+            services.logger.error('Error fetching location tree:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get all locations (flat list)
      * GET /api/locations
      */
-    router.get('/', async (req, res) => {
+    router.get('/', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             const locations = await prisma.location.findMany({
@@ -106,19 +107,19 @@ export default (services) => {
                 total: locations.length
             });
         } catch (error) {
-            console.error('Error fetching locations:', error);
+            services.logger.error('Error fetching locations:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Get single location with devices
      * GET /api/locations/:id
      */
-    router.get('/:id', async (req, res) => {
+    router.get('/:id', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
@@ -144,19 +145,19 @@ export default (services) => {
                 data: location
             });
         } catch (error) {
-            console.error('Error fetching location:', error);
+            services.logger.error('Error fetching location:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Create new location
      * POST /api/locations
      */
-    router.post('/', async (req, res) => {
+    router.post('/', asyncHandler(async (req, res) => {
         try {
             const { name, description, parentId, locationType, sortOrder } = req.body;
 
@@ -197,19 +198,19 @@ export default (services) => {
                 data: location
             });
         } catch (error) {
-            console.error('Error creating location:', error);
+            services.logger.error('Error creating location:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Update location
      * PUT /api/locations/:id
      */
-    router.put('/:id', async (req, res) => {
+    router.put('/:id', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
@@ -250,19 +251,19 @@ export default (services) => {
                 data: location
             });
         } catch (error) {
-            console.error('Error updating location:', error);
+            services.logger.error('Error updating location:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Delete location
      * DELETE /api/locations/:id
      */
-    router.delete('/:id', async (req, res) => {
+    router.delete('/:id', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             const id = parseInt(req.params.id, 10);
@@ -294,19 +295,19 @@ export default (services) => {
                 message: 'Location deleted successfully'
             });
         } catch (error) {
-            console.error('Error deleting location:', error);
+            services.logger.error('Error deleting location:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Assign device to location
      * POST /api/locations/:id/devices
      */
-    router.post('/:id/devices', async (req, res) => {
+    router.post('/:id/devices', asyncHandler(async (req, res) => {
         try {
             const locationId = parseInt(req.params.id, 10);
             const { deviceId, direction } = req.body;
@@ -333,19 +334,19 @@ export default (services) => {
                 data: device
             });
         } catch (error) {
-            console.error('Error assigning device:', error);
+            services.logger.error('Error assigning device:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Remove device from location
      * DELETE /api/locations/:id/devices/:deviceId
      */
-    router.delete('/:id/devices/:deviceId', async (req, res) => {
+    router.delete('/:id/devices/:deviceId', asyncHandler(async (req, res) => {
         try {
             const prisma = getPrisma();
             const deviceId = parseInt(req.params.deviceId, 10);
@@ -361,19 +362,19 @@ export default (services) => {
                 data: device
             });
         } catch (error) {
-            console.error('Error removing device:', error);
+            services.logger.error('Error removing device:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     /**
      * Update device direction (in/out)
      * PATCH /api/locations/devices/:deviceId/direction
      */
-    router.patch('/devices/:deviceId/direction', async (req, res) => {
+    router.patch('/devices/:deviceId/direction', asyncHandler(async (req, res) => {
         try {
             const deviceId = parseInt(req.params.deviceId, 10);
             const { direction } = req.body;
@@ -397,13 +398,13 @@ export default (services) => {
                 data: device
             });
         } catch (error) {
-            console.error('Error updating device direction:', error);
+            services.logger.error('Error updating device direction:', { error: error.message });
             res.status(500).json({
                 error: 'Internal Server Error',
                 message: error.message
             });
         }
-    });
+    }));
 
     return router;
 };

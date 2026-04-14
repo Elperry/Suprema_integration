@@ -26,7 +26,7 @@ export function sleep(ms) {
  */
 export async function retry(fn, options = {}) {
     const {
-        maxRetries = 3,
+        maxRetries = 1,
         baseDelay = 1000,
         maxDelay = 30000,
         shouldRetry = () => true

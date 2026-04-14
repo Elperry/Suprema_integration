@@ -42,10 +42,11 @@ class SupremaTNAService extends EventEmitter {
      * Initialize TNA service client
      */
     initializeClient() {
-        const gatewayAddress = `${this.connectionService.config.gateway.ip}:${this.connectionService.config.gateway.port}`;
+        const gatewayAddress = this.connectionService.getGatewayAddress();
         const credentials = this.connectionService.sslCreds;
+        const clientOptions = this.connectionService.getGatewayClientOptions();
 
-        this.tnaClient = new tnaService.TNAClient(gatewayAddress, credentials);
+        this.tnaClient = new tnaService.TNAClient(gatewayAddress, credentials, clientOptions);
         this.logger.info('T&A service client initialized');
     }
 
@@ -272,7 +273,8 @@ class SupremaTNAService extends EventEmitter {
                     }
 
                     try {
-                        const events = response.toObject().eventsList;
+                        const payload = response.toObject();
+                        const events = payload.tnaeventsList || payload.eventsList || [];
                         const enhancedEvents = events.map(event => this.enhanceTNAEvent(event, deviceId));
                         
                         this.logger.info(`Retrieved ${enhancedEvents.length} T&A events from device ${deviceId}`);

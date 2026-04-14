@@ -33,12 +33,6 @@ export const ERROR_CODES = {
     INTERNAL_ERROR: 'INTERNAL_ERROR',
     VALIDATION_ERROR: 'VALIDATION_ERROR',
     
-    // Authentication/Authorization
-    AUTHENTICATION_ERROR: 'AUTHENTICATION_ERROR',
-    AUTHORIZATION_ERROR: 'AUTHORIZATION_ERROR',
-    TOKEN_EXPIRED: 'TOKEN_EXPIRED',
-    TOKEN_INVALID: 'TOKEN_INVALID',
-    
     // Resource
     NOT_FOUND: 'NOT_FOUND',
     ALREADY_EXISTS: 'ALREADY_EXISTS',
@@ -170,32 +164,6 @@ export class AlreadyExistsError extends AppError {
         super(message, ERROR_CODES.ALREADY_EXISTS, HTTP_STATUS.CONFLICT);
         this.resource = resource;
         this.field = field;
-    }
-}
-
-/**
- * Authentication Error
- * For authentication failures
- */
-export class AuthenticationError extends AppError {
-    /**
-     * @param {string} [message='Authentication required'] - Error message
-     */
-    constructor(message = 'Authentication required') {
-        super(message, ERROR_CODES.AUTHENTICATION_ERROR, HTTP_STATUS.UNAUTHORIZED);
-    }
-}
-
-/**
- * Authorization Error
- * For permission failures
- */
-export class AuthorizationError extends AppError {
-    /**
-     * @param {string} [message='Access denied'] - Error message
-     */
-    constructor(message = 'Access denied') {
-        super(message, ERROR_CODES.AUTHORIZATION_ERROR, HTTP_STATUS.FORBIDDEN);
     }
 }
 
@@ -370,8 +338,6 @@ export default {
     ValidationError,
     NotFoundError,
     AlreadyExistsError,
-    AuthenticationError,
-    AuthorizationError,
     DeviceError,
     DeviceNotConnectedError,
     ConnectionError,

@@ -171,6 +171,44 @@ model Event {
   @@map("events")
 }
 
+// Audit log - records administrative and operator actions
+model AuditLog {
+  id            Int       @id @default(autoincrement())
+  action        String    @db.VarChar(100)  // repair-device, repair-user, import-users, sync-all, export-report, etc.
+  category      String    @default("general") @db.VarChar(50) // sync, enrollment, export, device, user
+  targetType    String?   @db.VarChar(50)   // device, user, card, report
+  targetId      String?   @db.VarChar(100)  // device ID, user ID, etc.
+  details       Json?                        // Structured outcome data
+  status        String    @default("success") @db.VarChar(20) // success, failure, partial
+  errorMessage  String?   @db.Text
+  ipAddress     String?   @db.VarChar(45)
+  requestId     String?   @db.VarChar(100)
+  duration      Int?                          // Duration in ms
+  createdAt     DateTime  @default(now())
+
+  @@index([action])
+  @@index([category])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@index([status])
+  @@map("audit_logs")
+}
+
+// Saved filter presets for reusable report and event filter configurations
+model FilterPreset {
+  id          Int       @id @default(autoincrement())
+  name        String    @db.VarChar(100)
+  scope       String    @db.VarChar(50)  // events, gate-events, audit, attendance, reconciliation
+  filters     Json                        // Serialized filter key-value pairs
+  isDefault   Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([name, scope])
+  @@index([scope])
+  @@map("filter_presets")
+}
+
 // Enrollment debug logs - stores verbose logging for troubleshooting
 model EnrollmentLog {
   id              Int       @id @default(autoincrement())
