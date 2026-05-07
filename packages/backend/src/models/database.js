@@ -20,6 +20,10 @@ class DatabaseManager {
             format: winston.format.json(),
             transports: [new winston.transports.Console()]
         });
+        this.isConnected = false;
+        this._monitorTimer = null;
+        this._reconnectInProgress = false;
+        this._stopRequested = false;
     }
 
     /**
@@ -67,6 +71,10 @@ class DatabaseManager {
 
             // Ensure connection (idempotent if already connected)
             await this.prisma.$connect();
+            // Verify with a real round-trip — $connect may resolve before
+            // a TCP session is actually usable on some drivers.
+            await this.prisma.$queryRaw`SELECT 1`;
+            this.isConnected = true;
             this.logger.info('Database connection established successfully');
 
             // Seed initial data if needed
@@ -74,9 +82,105 @@ class DatabaseManager {
 
             return true;
         } catch (error) {
-            this.logger.error('Database initialization failed:', error);
-            throw error;
+            this.isConnected = false;
+            this.logger.error('Database initialization failed (will keep retrying in background):', error.message);
+            // Don't throw — let the monitor keep trying so the HTTP server
+            // can still start and recover when the network returns.
+            return false;
         }
+    }
+
+    /**
+     * Start a background connection monitor that pings the database
+     * periodically and reconnects on failure. Safe to call once after init.
+     *
+     * @param {Object} [opts]
+     * @param {number} [opts.heartbeatIntervalMs=15000] - How often to ping while healthy
+     * @param {number} [opts.reconnectInitialDelayMs=2000] - First backoff delay
+     * @param {number} [opts.reconnectMaxDelayMs=60000] - Max backoff delay
+     */
+    startConnectionMonitor(opts = {}) {
+        const heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 15000;
+        const reconnectInitialDelayMs = opts.reconnectInitialDelayMs ?? 2000;
+        const reconnectMaxDelayMs = opts.reconnectMaxDelayMs ?? 60000;
+
+        if (this._monitorTimer) return; // already running
+        this._stopRequested = false;
+
+        const tick = async () => {
+            if (this._stopRequested) return;
+
+            try {
+                await this.prisma.$queryRaw`SELECT 1`;
+                if (!this.isConnected) {
+                    this.isConnected = true;
+                    this.logger.info('Database connection restored');
+                }
+            } catch (err) {
+                if (this.isConnected) {
+                    this.logger.warn('Database heartbeat failed — entering reconnect loop:', err.message);
+                }
+                this.isConnected = false;
+                await this._reconnectLoop(reconnectInitialDelayMs, reconnectMaxDelayMs);
+            } finally {
+                if (!this._stopRequested) {
+                    this._monitorTimer = setTimeout(tick, heartbeatIntervalMs);
+                }
+            }
+        };
+
+        // Kick off immediately so the first ping happens without waiting
+        // a full interval after startup.
+        this._monitorTimer = setTimeout(tick, 0);
+        this.logger.info(`Database connection monitor started (heartbeat ${heartbeatIntervalMs}ms)`);
+    }
+
+    /**
+     * Stop the background monitor. Idempotent.
+     */
+    stopConnectionMonitor() {
+        this._stopRequested = true;
+        if (this._monitorTimer) {
+            clearTimeout(this._monitorTimer);
+            this._monitorTimer = null;
+        }
+    }
+
+    /**
+     * Reconnect loop with exponential backoff. Returns when either the
+     * connection is restored or stop has been requested.
+     */
+    async _reconnectLoop(initialDelayMs, maxDelayMs) {
+        if (this._reconnectInProgress) return;
+        this._reconnectInProgress = true;
+
+        let delay = initialDelayMs;
+        let attempt = 0;
+
+        try {
+            while (!this._stopRequested) {
+                attempt += 1;
+                try {
+                    // Drop any half-open pool sockets, then re-open.
+                    try { await this.prisma.$disconnect(); } catch (_) { /* ignore */ }
+                    await this.prisma.$connect();
+                    await this.prisma.$queryRaw`SELECT 1`;
+                    this.isConnected = true;
+                    this.logger.info(`Database reconnected after ${attempt} attempt(s)`);
+                    return;
+                } catch (err) {
+                    this.logger.warn(`Database reconnect attempt ${attempt} failed (retrying in ${delay}ms): ${err.message}`);
+                    await this._sleep(delay);
+                    delay = Math.min(delay * 2, maxDelayMs);
+                }
+            }
+        } finally {
+            this._reconnectInProgress = false;
+        }
+    }
+
+    _sleep(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
 
 
@@ -121,8 +225,10 @@ class DatabaseManager {
      * Close database connection
      */
     async close() {
+        this.stopConnectionMonitor();
         if (this.prisma) {
             await this.prisma.$disconnect();
+            this.isConnected = false;
             this.logger.info('Database connection closed');
         }
     }

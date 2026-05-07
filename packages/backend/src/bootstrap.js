@@ -85,6 +85,14 @@ export async function bootstrap() {
 
     const database = new DatabaseManager(logger, prisma);
     await database.initialize();
+    // Watch the connection and auto-reconnect when the network drops.
+    // Initialize() does not throw on failure anymore — the monitor will keep
+    // retrying in the background until connectivity is restored.
+    database.startConnectionMonitor({
+        heartbeatIntervalMs: parseInt(process.env.DB_HEARTBEAT_INTERVAL_MS) || 15000,
+        reconnectInitialDelayMs: parseInt(process.env.DB_RECONNECT_INITIAL_DELAY_MS) || 2000,
+        reconnectMaxDelayMs: parseInt(process.env.DB_RECONNECT_MAX_DELAY_MS) || 60000,
+    });
     container.registerInstance('database', database);
 
     // ── 4. Repositories ───────────────────────────────────────────────────
