@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { API_CONFIG, API_ENDPOINTS } from '../config/constants'
 import { deviceAPI, eventAPI } from '../services/api'
+import { deriveHealthSummary } from '../utils/healthStatus'
 import './SystemHealth.css'
 
 export default function SystemHealth() {
@@ -73,7 +74,7 @@ export default function SystemHealth() {
 
   const getUptimePercent = () => {
     if (history.length < 2) return '100.0'
-    const healthy = history.filter(h => h.status === 'healthy').length
+    const healthy = history.filter(h => deriveHealthSummary(h).status === 'healthy').length
     return ((healthy / history.length) * 100).toFixed(1)
   }
 
@@ -90,6 +91,7 @@ export default function SystemHealth() {
 
   const connectedDevices = devices.filter(d => d.status === 'connected')
   const offlineDevices = devices.filter(d => d.status !== 'connected')
+  const healthSummary = deriveHealthSummary(health)
 
   const serviceList = health?.services
     ? Object.entries(health.services).map(([name, online]) => ({ name, online }))
@@ -138,10 +140,10 @@ export default function SystemHealth() {
       )}
 
       {/* Overall Status Banner */}
-      <div className={`health-status-banner ${health?.status || 'unhealthy'}`}>
-        <div className="banner-icon">{health?.status === 'healthy' ? '✅' : health?.status === 'degraded' ? '⚠️' : '❌'}</div>
+      <div className={`health-status-banner ${healthSummary.status}`}>
+        <div className="banner-icon">{healthSummary.status === 'healthy' ? '✅' : healthSummary.status === 'degraded' ? '⚠️' : '❌'}</div>
         <div className="banner-text">
-          <h3>System {health?.status === 'healthy' ? 'Healthy' : health?.status === 'degraded' ? 'Degraded' : 'Unhealthy'}</h3>
+          <h3>System {healthSummary.label}</h3>
           <span>Last checked: {health?.timestamp ? new Date(health.timestamp).toLocaleString() : 'N/A'}</span>
         </div>
         <div className="banner-metrics">
@@ -153,10 +155,10 @@ export default function SystemHealth() {
 
       {/* Core Metrics Grid */}
       <div className="metrics-grid">
-        <MetricCard icon="🗄️" label="Database" value={health?.database?.connected ? 'Connected' : 'Disconnected'} status={health?.database?.connected ? 'ok' : 'critical'} detail={health?.database?.message} />
-        <MetricCard icon="🔌" label="Gateway" value={health?.gateway || 'N/A'} status={health?.gateway === 'connected' ? 'ok' : 'critical'} />
+        <MetricCard icon="🗄️" label="Database" value={healthSummary.databaseConnected ? 'Connected' : 'Disconnected'} status={healthSummary.databaseConnected ? 'ok' : 'critical'} detail={health?.database?.message} />
+        <MetricCard icon="🔌" label="Gateway" value={healthSummary.gatewayLabel} status={healthSummary.isGatewayConnected ? 'ok' : 'critical'} />
         <MetricCard icon="🖥️" label="Devices" value={`${health?.devices?.connected || 0} / ${health?.devices?.total || 0}`} status={offlineDevices.length === 0 ? 'ok' : offlineDevices.length < 3 ? 'warn' : 'critical'} detail={`${offlineDevices.length} offline`} />
-        <MetricCard icon="⚡" label="Active Devices" value={health?.devices?.active || 0} status="ok" />
+        <MetricCard icon="⚡" label="Registered Devices" value={healthSummary.devices.total} status="ok" />
       </div>
 
       {/* Services Grid */}
@@ -251,11 +253,16 @@ export default function SystemHealth() {
         ) : (
           <div className="uptime-bar">
             {history.map((h, i) => (
+              (() => {
+                const sample = deriveHealthSummary(h)
+                return (
               <div
                 key={i}
-                className={`uptime-tick ${h.status === 'healthy' ? 'tick-ok' : h.status === 'degraded' ? 'tick-warn' : 'tick-bad'}`}
-                title={`${new Date(h._ts).toLocaleTimeString()} — ${h.status}`}
+                className={`uptime-tick ${sample.status === 'healthy' ? 'tick-ok' : sample.status === 'degraded' ? 'tick-warn' : 'tick-bad'}`}
+                title={`${new Date(h._ts).toLocaleTimeString()} — ${sample.status}`}
               />
+                )
+              })()
             ))}
           </div>
         )}

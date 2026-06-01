@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { eventAPI, gateEventAPI, userAPI } from '../services/api'
+import { eventAPI, gateEventAPI, healthAPI, userAPI } from '../services/api'
 import { useNotification } from './Notifications'
 import ErrorBanner from './ErrorBanner'
+import { GATEWAY_OFFLINE_MESSAGE } from '../utils/gatewayErrors'
+import { deriveHealthSummary } from '../utils/healthStatus'
 import './SyncCenter.css'
 
 const PRESET_KEY = 'suprema-sync-center-presets'
@@ -68,13 +70,32 @@ export default function SyncCenter() {
     setLoading(true)
     setError(null)
     try {
-      const [reconciliationRes, replicationRes] = await Promise.all([
-        userAPI.getReconciliation(),
-        eventAPI.getReplicationHealth()
+      const [healthResponse, replicationRes] = await Promise.all([
+        healthAPI.check(),
+        eventAPI.getReplicationHealth().catch(() => null)
       ])
 
+      const healthSummary = deriveHealthSummary(healthResponse)
+
+      if (!healthSummary.isGatewayConnected) {
+        setOverview({
+          summary: {
+            totalDevices: healthSummary.devices.total,
+            devicesWithIssues: 0,
+            missingOnDevice: 0,
+            cardMismatches: 0,
+          },
+          devices: [],
+        })
+        setReplication(replicationRes?.data?.data || null)
+        setError(GATEWAY_OFFLINE_MESSAGE)
+        return
+      }
+
+      const reconciliationRes = await userAPI.getReconciliation()
+
       setOverview(reconciliationRes.data?.data || null)
-      setReplication(replicationRes.data?.data || null)
+      setReplication(replicationRes?.data?.data || null)
     } catch (err) {
       setError(err.userMessage || 'Failed to load synchronization center data')
     } finally {
@@ -311,69 +332,71 @@ export default function SyncCenter() {
                 <h3 className="card-title">Device Drift Overview</h3>
                 <span className="stat-badge info">{visibleDevices.length} shown</span>
               </div>
-              <table className="data-table sync-table">
-                <thead>
-                  <tr>
-                    <th>Device</th>
-                    <th>Connection</th>
-                    <th>Missing</th>
-                    <th>DB Only</th>
-                    <th>Mismatches</th>
-                    <th>Lag</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleDevices.length === 0 ? (
-                    <tr><td colSpan={7} className="empty-cell">No devices match the current filters.</td></tr>
-                  ) : visibleDevices.map((entry) => {
-                    const replicationEntry = replication?.devices?.find((device) => String(device.deviceId) === String(entry.device.databaseDeviceId))
-                    const isSelected = String(filters.selectedDeviceId) === String(entry.device.databaseDeviceId)
-                    const repairKey = `repair:${entry.device.databaseDeviceId}`
-                    const importKey = `import:${entry.device.databaseDeviceId}`
+              <div className="sync-table-wrapper">
+                <table className="data-table sync-table">
+                  <thead>
+                    <tr>
+                      <th>Device</th>
+                      <th>Connection</th>
+                      <th>Missing</th>
+                      <th>DB Only</th>
+                      <th>Mismatches</th>
+                      <th>Lag</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleDevices.length === 0 ? (
+                      <tr><td colSpan={7} className="empty-cell">No devices match the current filters.</td></tr>
+                    ) : visibleDevices.map((entry) => {
+                      const replicationEntry = replication?.devices?.find((device) => String(device.deviceId) === String(entry.device.databaseDeviceId))
+                      const isSelected = String(filters.selectedDeviceId) === String(entry.device.databaseDeviceId)
+                      const repairKey = `repair:${entry.device.databaseDeviceId}`
+                      const importKey = `import:${entry.device.databaseDeviceId}`
 
-                    return (
-                      <tr key={entry.device.databaseDeviceId} className={isSelected ? 'selected-row' : ''}>
-                        <td>
-                          <button type="button" className="link-button" onClick={() => setFilters((prev) => ({ ...prev, selectedDeviceId: String(entry.device.databaseDeviceId) }))}>
-                            {entry.device.name || `Device ${entry.device.databaseDeviceId}`}
-                          </button>
-                          <div className="cell-subtitle">{entry.device.ip}:{entry.device.port}</div>
-                        </td>
-                        <td>
-                          <span className={`status-pill ${entry.device.connected ? 'online' : 'offline'}`}>
-                            {entry.device.connected ? 'Online' : 'Offline'}
-                          </span>
-                        </td>
-                        <td>{entry.summary.missingOnDevice}</td>
-                        <td>{entry.summary.missingInDatabase}</td>
-                        <td>{entry.summary.cardMismatches}</td>
-                        <td>{replicationEntry?.replicationLagSeconds ?? '—'}s</td>
-                        <td>
-                          <div className="table-actions">
-                            <button
-                              type="button"
-                              className="btn btn-primary btn-sm"
-                              disabled={actionKey === repairKey || !entry.device.connected}
-                              onClick={() => runAction(repairKey, () => userAPI.repairDevice(entry.device.databaseDeviceId), `Repaired ${entry.device.name || `device ${entry.device.databaseDeviceId}`}`)}
-                            >
-                              {actionKey === repairKey ? 'Working…' : 'Repair'}
+                      return (
+                        <tr key={entry.device.databaseDeviceId} className={isSelected ? 'selected-row' : ''}>
+                          <td data-label="Device">
+                            <button type="button" className="link-button" onClick={() => setFilters((prev) => ({ ...prev, selectedDeviceId: String(entry.device.databaseDeviceId) }))}>
+                              {entry.device.name || `Device ${entry.device.databaseDeviceId}`}
                             </button>
-                            <button
-                              type="button"
-                              className="btn btn-secondary btn-sm"
-                              disabled={actionKey === importKey || !entry.device.connected}
-                              onClick={() => runAction(importKey, () => userAPI.importFromDevice(entry.device.databaseDeviceId), `Imported users from ${entry.device.name || `device ${entry.device.databaseDeviceId}`}`)}
-                            >
-                              {actionKey === importKey ? 'Working…' : 'Import'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+                            <div className="cell-subtitle">{entry.device.ip}:{entry.device.port}</div>
+                          </td>
+                          <td data-label="Connection">
+                            <span className={`status-pill ${entry.device.connected ? 'online' : 'offline'}`}>
+                              {entry.device.connected ? 'Online' : 'Offline'}
+                            </span>
+                          </td>
+                          <td data-label="Missing">{entry.summary.missingOnDevice}</td>
+                          <td data-label="DB Only">{entry.summary.missingInDatabase}</td>
+                          <td data-label="Mismatches">{entry.summary.cardMismatches}</td>
+                          <td data-label="Lag">{replicationEntry?.replicationLagSeconds ?? '—'}s</td>
+                          <td data-label="Actions">
+                            <div className="table-actions">
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                disabled={actionKey === repairKey || !entry.device.connected}
+                                onClick={() => runAction(repairKey, () => userAPI.repairDevice(entry.device.databaseDeviceId), `Repaired ${entry.device.name || `device ${entry.device.databaseDeviceId}`}`)}
+                              >
+                                {actionKey === repairKey ? 'Working…' : 'Repair'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                disabled={actionKey === importKey || !entry.device.connected}
+                                onClick={() => runAction(importKey, () => userAPI.importFromDevice(entry.device.databaseDeviceId), `Imported users from ${entry.device.name || `device ${entry.device.databaseDeviceId}`}`)}
+                              >
+                                {actionKey === importKey ? 'Working…' : 'Import'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div className="card sync-detail-card">

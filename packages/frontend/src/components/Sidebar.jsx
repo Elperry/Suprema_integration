@@ -12,6 +12,7 @@ const NAV_GROUPS = [
       { to: '/employees', icon: '👤', label: 'Employees' },
       { to: '/users', icon: '👥', label: 'Users & Cards' },
       { to: '/onboarding', icon: '🚀', label: 'Onboarding' },
+      { to: '/processes', icon: '⚙️', label: 'Processes' },
     ]
   },
   {

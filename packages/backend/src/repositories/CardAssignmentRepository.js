@@ -35,18 +35,34 @@ export class CardAssignmentRepository extends BaseRepository {
     }
 
     /**
-     * Find by employee ID
-     * 
-     * @param {string} employeeId - Employee ID
+     * Find by user ID (local user table FK)
+     *
+     * @param {number} userId - User.id
+     * @param {Object} [options] - Query options
+     * @returns {Promise<Array>}
+     */
+    async findByUserId(userId, options = {}) {
+        return this.findMany({
+            where: { user_id: userId },
+            include: options.include || { user: true, enrollments: { include: { device: true } } },
+            orderBy: { assignedAt: 'desc' }
+        });
+    }
+
+    /**
+     * Find by employee ID — resolves to user first, then queries by user_id.
+     *
+     * @param {number|string} employeeId - employee.id from the employee table
      * @param {Object} [options] - Query options
      * @returns {Promise<Array>}
      */
     async findByEmployeeId(employeeId, options = {}) {
-        return this.findMany({
-            where: { employeeId },
-            include: options.include || { enrollments: { include: { device: true } } },
-            orderBy: { assignedAt: 'desc' }
+        const user = await this.prisma.user.findFirst({
+            where: { employee_id: Number(employeeId) },
+            select: { id: true },
         });
+        if (!user) return [];
+        return this.findByUserId(user.id, options);
     }
 
     /**
@@ -57,8 +73,8 @@ export class CardAssignmentRepository extends BaseRepository {
      */
     async findByCardData(cardData) {
         return this.findOne(
-            { cardData },
-            { include: { enrollments: { include: { device: true } } } }
+            { card_data: cardData },
+            { include: { user: true, enrollments: { include: { device: true } } } }
         );
     }
 
@@ -71,6 +87,7 @@ export class CardAssignmentRepository extends BaseRepository {
     async findWithEnrollments(id) {
         return this.findById(id, {
             include: {
+                user: true,
                 enrollments: {
                     include: { device: true }
                 }
@@ -120,6 +137,7 @@ export class CardAssignmentRepository extends BaseRepository {
         return this.findMany({
             where: { status: 'active' },
             include: {
+                user: true,
                 enrollments: {
                     include: { device: true },
                     where: { status: { in: ['active', 'pending'] } }
@@ -134,25 +152,13 @@ export class CardAssignmentRepository extends BaseRepository {
      * @returns {Promise<Object>}
      */
     async getStatistics() {
-        const [total, active, revoked, byType] = await Promise.all([
+        const [total, active, revoked] = await Promise.all([
             this.count(),
             this.count({ status: 'active' }),
             this.count({ status: 'revoked' }),
-            this.prisma.cardAssignment.groupBy({
-                by: ['cardType'],
-                _count: { cardType: true }
-            })
         ]);
 
-        return {
-            total,
-            active,
-            revoked,
-            byType: byType.reduce((acc, item) => {
-                acc[item.cardType] = item._count.cardType;
-                return acc;
-            }, {})
-        };
+        return { total, active, revoked };
     }
 }
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { biometricAPI, deviceAPI } from '../services/api'
 import { ErrorBanner } from './shared'
+import { formatDeviceOptionLabel, getDeviceSelectGroups, isDeviceOnline } from '../utils/deviceOptions'
 import './Biometric.css'
 
 export default function Biometric() {
@@ -22,6 +23,8 @@ export default function Biometric() {
   useEffect(() => {
     loadDevices()
   }, [])
+
+  const { onlineDevices, offlineDevices, hasOnlineDevices } = getDeviceSelectGroups(devices)
 
   const loadDevices = async () => {
     try {
@@ -51,6 +54,12 @@ export default function Biometric() {
       setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (selectedDevice && !onlineDevices.some((device) => String(device.id) === String(selectedDevice))) {
+      setSelectedDevice('')
+    }
+  }, [onlineDevices, selectedDevice])
 
   useEffect(() => {
     if (selectedDevice) {
@@ -111,7 +120,6 @@ export default function Biometric() {
     }
   }
 
-  const connectedDevices = devices.filter(d => d.status === 'connected')
   const selectedDeviceObj = devices.find(d => String(d.id) === String(selectedDevice))
 
   return (
@@ -129,15 +137,29 @@ export default function Biometric() {
                 onChange={e => setSelectedDevice(e.target.value)}
                 className="form-control"
               >
-                <option value="">-- Select a device --</option>
-                {devices.map(d => (
-                  <option key={d.id} value={d.id} disabled={d.status !== 'connected'}>
-                    {d.status === 'connected' ? '🟢' : '🔴'} {d.name} ({d.ip}) {d.status !== 'connected' ? '— Offline' : ''}
-                  </option>
-                ))}
+                <option value="">-- Select an online device --</option>
+                {!hasOnlineDevices && <option value="" disabled>No online devices available</option>}
+                {hasOnlineDevices && (
+                  <optgroup label="Online Devices">
+                    {onlineDevices.map(d => (
+                      <option key={d.id} value={d.id}>
+                        {formatDeviceOptionLabel(d)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {offlineDevices.length > 0 && (
+                  <optgroup label="Registered but Offline">
+                    {offlineDevices.map(d => (
+                      <option key={d.id} value={d.id} disabled>
+                        {formatDeviceOptionLabel(d)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               {selectedDevice && (
-                <span className={`device-connection-dot ${selectedDeviceObj?.status === 'connected' ? 'online' : 'offline'}`} />
+                <span className={`device-connection-dot ${isDeviceOnline(selectedDeviceObj) ? 'online' : 'offline'}`} />
               )}
             </div>
           </div>
@@ -161,7 +183,7 @@ export default function Biometric() {
         <div className="bio-empty">
           <div className="bio-empty-icon">🧬</div>
           <h3>Select a Device</h3>
-          <p>Choose a connected device to manage biometric operations — fingerprint scanning, face recognition, and configuration.</p>
+          <p>{hasOnlineDevices ? 'Choose an online device to manage biometric operations — fingerprint scanning, face recognition, and configuration.' : 'No online devices available. Registered offline devices are shown in the selector for reference.'}</p>
         </div>
       ) : loading && !config ? (
         <div className="loading-state">

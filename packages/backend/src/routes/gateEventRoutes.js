@@ -15,31 +15,58 @@ export default (services) => {
 
     /**
      * GET /api/gate-events
-     * Get gate events with optional filters
+     * Get authentication events from the event log with optional filters
      */
     router.get('/', asyncHandler(async (req, res) => {
         try {
-            const filters = {
-                employee_id: req.query.employee_id,
-                gate_id: req.query.gate_id ? parseInt(req.query.gate_id) : null,
-                startDate: req.query.startDate,
-                endDate: req.query.endDate,
-                limit: req.query.limit ? parseInt(req.query.limit) : 100
-            };
+            const limit = req.query.limit ? Math.min(parseInt(req.query.limit), 500) : 50;
+            const offset = req.query.offset ? parseInt(req.query.offset) : 0;
+            const where = { eventType: 'authentication' };
 
-            const events = await database.getGateEvents(filters);
+            if (req.query.employee_id) where.userId = req.query.employee_id;
+            if (req.query.gate_id) where.deviceId = parseInt(req.query.gate_id);
+            if (req.query.authResult) where.authResult = req.query.authResult;
+            if (req.query.startDate || req.query.endDate) {
+                where.timestamp = {};
+                if (req.query.startDate) where.timestamp.gte = new Date(req.query.startDate);
+                if (req.query.endDate) where.timestamp.lte = new Date(req.query.endDate);
+            }
 
-            res.json({
-                success: true,
-                count: events.length,
-                data: events
-            });
+            const [rows, total] = await Promise.all([
+                database.prisma.event.findMany({
+                    where,
+                    orderBy: { timestamp: 'desc' },
+                    take: limit,
+                    skip: offset,
+                    select: {
+                        id: true,
+                        userId: true,
+                        deviceId: true,
+                        doorId: true,
+                        description: true,
+                        authResult: true,
+                        subType: true,
+                        timestamp: true,
+                    },
+                }),
+                database.prisma.event.count({ where }),
+            ]);
+
+            const data = rows.map(ev => ({
+                id: ev.id,
+                employee_id: ev.userId,
+                gate_id: ev.deviceId,
+                door_no: ev.doorId,
+                description: ev.description,
+                authResult: ev.authResult,
+                subType: ev.subType,
+                etime: ev.timestamp,
+            }));
+
+            res.json({ success: true, count: data.length, total, data });
         } catch (error) {
             logger.error('Error fetching gate events:', error);
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
+            res.status(500).json({ success: false, error: error.message });
         }
     }));
 
@@ -163,46 +190,37 @@ export default (services) => {
 
     /**
      * GET /api/gate-events/stats
-     * Get gate event statistics
+     * Get authentication event statistics for today
      */
     router.get('/stats', asyncHandler(async (req, res) => {
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            
-            const todayEvents = await database.getGateEvents({
-                startDate: today.toISOString(),
-                endDate: new Date().toISOString(),
-                limit: 10000
-            });
+            const todayWhere = { eventType: 'authentication', timestamp: { gte: today } };
 
-            // Calculate statistics
-            const stats = {
-                total_today: todayEvents.length,
-                entries: todayEvents.filter(e => e.dir === 'in').length,
-                exits: todayEvents.filter(e => e.dir === 'out').length,
-                by_location: {}
-            };
-
-            // Group by location
-            todayEvents.forEach(event => {
-                const loc = event.loc || 'Unknown';
-                if (!stats.by_location[loc]) {
-                    stats.by_location[loc] = 0;
-                }
-                stats.by_location[loc]++;
-            });
+            const [todayTotal, successCount, failCount, uniqueUsers] = await Promise.all([
+                database.prisma.event.count({ where: todayWhere }),
+                database.prisma.event.count({ where: { ...todayWhere, authResult: 'success' } }),
+                database.prisma.event.count({ where: { ...todayWhere, authResult: { not: 'success' } } }),
+                database.prisma.event.findMany({
+                    where: { ...todayWhere, userId: { not: null } },
+                    select: { userId: true },
+                    distinct: ['userId'],
+                }),
+            ]);
 
             res.json({
                 success: true,
-                data: stats
+                data: {
+                    todayTotal,
+                    successes: successCount,
+                    failures: failCount,
+                    uniqueEmployees: uniqueUsers.length,
+                },
             });
         } catch (error) {
             logger.error('Error fetching gate event stats:', error);
-            res.status(500).json({
-                success: false,
-                error: error.message
-            });
+            res.status(500).json({ success: false, error: error.message });
         }
     }));
 

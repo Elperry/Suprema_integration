@@ -41,6 +41,7 @@ class EventReplicationService {
         this.realtimeQueueSize = opts.realtimeQueueSize ?? 100;
 
         this._interval = null;
+        this._started = false;
         this._realtimeSubscription = null;
         this._onDeviceConnected = null;
         this._onRealtimeEvent = null;
@@ -63,7 +64,8 @@ class EventReplicationService {
     }
 
     start() {
-        if (this._interval) return;
+        if (this._started) return;
+        this._started = true;
 
         this._stats.startedAt = new Date();
         this.logger.info('[EventReplication] Starting event replication service', {
@@ -80,41 +82,50 @@ class EventReplicationService {
         this.eventService.on('event:received', this._onRealtimeEvent);
 
         this._onDeviceConnected = ({ deviceId, config }) => {
+            // FIX: Run catch-up sync FIRST before enabling realtime to prevent gaps
+            this._syncConnectedDevice(deviceId, config).then(() => {
+                if (this.enableRealtime) {
+                    this._ensureRealtimeMonitoring(deviceId).catch((error) => {
+                        this.logger.warn('[EventReplication] Failed to enable realtime monitoring for connected device', {
+                            deviceId,
+                            error: error.message,
+                        });
+                    });
+                }
+            }).catch(() => {});
+        };
+        this.connectionService.on('device:connected', this._onDeviceConnected);
+
+        // FIX: Sequential Startup. Perform full periodic catch-up sync first.
+        this._syncAllDevices('periodic').then(() => {
+            if (!this._started) return;
+
             if (this.enableRealtime) {
-                this._ensureRealtimeMonitoring(deviceId).catch((error) => {
-                    this.logger.warn('[EventReplication] Failed to enable realtime monitoring for connected device', {
-                        deviceId,
+                this._startRealtimeSubscription().catch((error) => {
+                    this.logger.warn('[EventReplication] Failed to start realtime subscription', {
+                        error: error.message,
+                    });
+                });
+
+                this._enableRealtimeForCurrentConnections().catch((error) => {
+                    this.logger.warn('[EventReplication] Failed to enable realtime monitoring for current devices', {
                         error: error.message,
                     });
                 });
             }
 
-            this._syncConnectedDevice(deviceId, config).catch(() => {});
-        };
-        this.connectionService.on('device:connected', this._onDeviceConnected);
-
-        if (this.enableRealtime) {
-            this._startRealtimeSubscription().catch((error) => {
-                this.logger.warn('[EventReplication] Failed to start realtime subscription', {
-                    error: error.message,
-                });
-            });
-
-            this._enableRealtimeForCurrentConnections().catch((error) => {
-                this.logger.warn('[EventReplication] Failed to enable realtime monitoring for current devices', {
-                    error: error.message,
-                });
-            });
-        }
-
-        this._interval = setInterval(() => {
-            this._syncAllDevices('periodic').catch(() => {});
-        }, this.intervalMs);
-
-        this._syncAllDevices('periodic').catch(() => {});
+            // THEN start the interval
+            this._interval = setInterval(() => {
+                this._syncAllDevices('periodic').catch(() => {});
+            }, this.intervalMs);
+        }).catch(() => {
+            this._started = false;
+        });
     }
 
     async stop() {
+        this._started = false;
+
         if (this._interval) {
             clearInterval(this._interval);
             this._interval = null;
@@ -145,6 +156,28 @@ class EventReplicationService {
         this.logger.info('[EventReplication] Stopped');
     }
 
+    configure(options = {}) {
+        if (options.intervalMs !== undefined) this.intervalMs = options.intervalMs;
+        if (options.batchSize !== undefined) this.batchSize = options.batchSize;
+        if (options.maxBatches !== undefined) this.maxBatches = options.maxBatches;
+        if (options.enableRealtime !== undefined) this.enableRealtime = !!options.enableRealtime;
+        if (options.realtimeQueueSize !== undefined) this.realtimeQueueSize = options.realtimeQueueSize;
+    }
+
+    getRuntimeStatus() {
+        return {
+            running: this._started,
+            intervalActive: !!this._interval,
+            realtimeEnabled: this.enableRealtime,
+            realtimeSubscribed: !!this._realtimeSubscription,
+            monitoredDevices: Array.from(this._monitoredDevices),
+            intervalMs: this.intervalMs,
+            batchSize: this.batchSize,
+            maxBatches: this.maxBatches,
+            realtimeQueueSize: this.realtimeQueueSize,
+        };
+    }
+
     async getHealthStatus(options = {}) {
         const { deviceId } = options;
         let devices = await this.database.getAllDevices();
@@ -153,11 +186,18 @@ class EventReplicationService {
             devices = devices.filter((device) => String(device.id) === String(deviceId));
         }
 
-        const deviceHealth = await Promise.all(devices.map(async (device) => {
-            const lastEvent = await this.eventRepository.findLatestByDevice(device.id);
+        // Single aggregated query instead of one query per device (N+1 fix)
+        const deviceIds = devices.map((d) => d.id);
+        const latestEventMap = await this.eventRepository.findLatestPerDevice(
+            deviceIds.length > 0 ? deviceIds : null
+        );
+
+        const now = Date.now();
+        const deviceHealth = devices.map((device) => {
             const state = this._deviceStatus.get(String(device.id)) || {};
             const connectedSupremaId = this._resolveSupremaId(device);
-            const lastEventTimestamp = lastEvent?.timestamp ? new Date(lastEvent.timestamp) : null;
+            const latest = latestEventMap.get(device.id) ?? null;
+            const lastEventTimestamp = latest?.timestamp ? new Date(latest.timestamp) : null;
 
             return {
                 deviceId: device.id,
@@ -172,10 +212,10 @@ class EventReplicationService {
                 syncInProgress: this._syncing.has(String(device.id)),
                 status: device.status,
                 lastEventSync: device.last_event_sync,
-                lastPersistedEventId: lastEvent ? lastEvent.supremaEventId.toString() : null,
-                lastPersistedEventAt: lastEvent?.timestamp ?? null,
+                lastPersistedEventId: latest?.supremaEventId != null ? latest.supremaEventId.toString() : null,
+                lastPersistedEventAt: latest?.timestamp ?? null,
                 replicationLagSeconds: lastEventTimestamp
-                    ? Math.max(0, Math.floor((Date.now() - lastEventTimestamp.getTime()) / 1000))
+                    ? Math.max(0, Math.floor((now - lastEventTimestamp.getTime()) / 1000))
                     : null,
                 lastAttemptAt: state.lastAttemptAt ?? null,
                 lastSuccessAt: state.lastSuccessAt ?? null,
@@ -188,11 +228,12 @@ class EventReplicationService {
                 lastRealtimePersistAt: state.lastRealtimePersistAt ?? null,
                 lastBackfillPersistAt: state.lastBackfillPersistAt ?? null,
             };
-        }));
+        });
 
         return {
             service: {
-                running: !!this._interval,
+                running: this._started,
+                intervalActive: !!this._interval,
                 realtimeEnabled: this.enableRealtime,
                 realtimeSubscribed: !!this._realtimeSubscription,
                 monitoredDevices: Array.from(this._monitoredDevices),
@@ -320,8 +361,9 @@ class EventReplicationService {
 
             this._recordAttempt(deviceRecord.id);
 
-            const lastEvent = await this.eventRepository.findLatestByDevice(deviceRecord.id);
-            const startEventId = lastEvent ? Number(lastEvent.supremaEventId) + 1 : 0;
+            // FIX: Use independent replication cursor to avoid real-time race condition jump
+            const cursorId = deviceRecord.last_replicated_event_id ? Number(deviceRecord.last_replicated_event_id) : 0;
+            const startEventId = cursorId > 0 ? cursorId + 1 : 0;
 
             this.logger.info('[EventReplication] Syncing device', {
                 device: deviceRecord.name,
@@ -401,14 +443,20 @@ class EventReplicationService {
         const result = await this.eventRepository.bulkCreate(rows);
         const inserted = result?.count ?? rows.length;
 
-        if (inserted > 0) {
-            await this.database.updateDevice(deviceRecord.id, {
-                last_event_sync: new Date(),
-            });
-        }
-
         const lastEventId = this._maxEventId(events);
         const lastEventTimestamp = this._maxEventTimestamp(events);
+
+        if (inserted > 0) {
+            const updateInfo = { last_event_sync: new Date() };
+
+            // FIX: Only advance the cursor if this is a sequential pull (not real-time ping)
+            if (source !== 'realtime' && lastEventId !== null) {
+                updateInfo.last_replicated_event_id = lastEventId;
+            }
+
+            await this.database.updateDevice(deviceRecord.id, updateInfo);
+        }
+
         this._recordSuccess(deviceRecord.id, {
             source,
             inserted,
@@ -485,7 +533,11 @@ class EventReplicationService {
 
     _resolveSupremaId(deviceRecord) {
         for (const [supremaId, info] of this.connectionService.connectedDevices.entries()) {
-            if (info.ip === deviceRecord.ip && info.port === deviceRecord.port) {
+            if (
+                info && typeof info === 'object' &&
+                info.ip === deviceRecord.ip &&
+                Number(info.port) === Number(deviceRecord.port)
+            ) {
                 return supremaId;
             }
         }

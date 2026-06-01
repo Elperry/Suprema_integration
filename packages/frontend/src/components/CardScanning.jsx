@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { cardAPI, deviceAPI } from '../services/api'
 import ErrorBanner from './ErrorBanner'
+import { formatDeviceOptionLabel, getDeviceSelectGroups, getDeviceDisplayName, isDeviceOnline } from '../utils/deviceOptions'
 import './CardScanning.css'
 
 export default function CardScanning() {
@@ -13,11 +14,19 @@ export default function CardScanning() {
   const [success, setSuccess] = useState(null)
   const scanTimerRef = useRef(null)
 
+  const { onlineDevices, offlineDevices, hasOnlineDevices } = getDeviceSelectGroups(devices)
+
   useEffect(() => { loadDevices() }, [])
 
   useEffect(() => {
     if (selectedDevice) loadBlacklist()
   }, [selectedDevice])
+
+  useEffect(() => {
+    if (selectedDevice && !onlineDevices.some((device) => String(device.id) === String(selectedDevice))) {
+      setSelectedDevice('')
+    }
+  }, [onlineDevices, selectedDevice])
 
   // Clean up on unmount
   useEffect(() => () => { if (scanTimerRef.current) clearTimeout(scanTimerRef.current) }, [])
@@ -40,6 +49,11 @@ export default function CardScanning() {
 
   const handleScan = async () => {
     if (!selectedDevice) { setError('Please select a device first'); return }
+    const device = devices.find((entry) => String(entry.id) === String(selectedDevice))
+    if (!isDeviceOnline(device)) {
+      setError('Select an online device before scanning cards.')
+      return
+    }
     setScanning(true)
     setError(null)
     setSuccess(null)
@@ -77,7 +91,8 @@ export default function CardScanning() {
     } catch (e) { setError('Failed to remove from blacklist: ' + (e.userMessage || e.message)) }
   }
 
-  const selectedDeviceName = devices.find(d => String(d.id) === String(selectedDevice))?.name || ''
+  const selectedDeviceObj = devices.find(d => String(d.id) === String(selectedDevice))
+  const selectedDeviceName = selectedDeviceObj ? getDeviceDisplayName(selectedDeviceObj) : ''
 
   return (
     <div className="page scanning-page">
@@ -106,24 +121,36 @@ export default function CardScanning() {
               onChange={(e) => setSelectedDevice(e.target.value)}
               className="select-input"
             >
-              <option value="">Select Device…</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id}>{d.name || `Device ${d.id}`}</option>
-              ))}
+              <option value="">Select Online Device…</option>
+              {!hasOnlineDevices && <option value="" disabled>No online devices available</option>}
+              {hasOnlineDevices && (
+                <optgroup label="Online Devices">
+                  {onlineDevices.map(d => (
+                    <option key={d.id} value={d.id}>{formatDeviceOptionLabel(d)}</option>
+                  ))}
+                </optgroup>
+              )}
+              {offlineDevices.length > 0 && (
+                <optgroup label="Registered but Offline">
+                  {offlineDevices.map(d => (
+                    <option key={d.id} value={d.id} disabled>{formatDeviceOptionLabel(d, { includePort: true })}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
           {!selectedDevice ? (
             <div className="empty-state">
               <div className="empty-icon">📱</div>
-              <p>Select a device to start scanning cards</p>
-              <p className="hint">The device must be connected and have a card reader</p>
+              <p>{hasOnlineDevices ? 'Select an online device to start scanning cards' : 'No online devices available right now'}</p>
+              <p className="hint">{hasOnlineDevices ? 'The device must be connected and have a card reader' : 'Registered offline devices are shown in the selector for reference.'}</p>
             </div>
           ) : (
             <div className="scan-action">
               <button
                 onClick={handleScan}
-                disabled={scanning}
+                disabled={scanning || !isDeviceOnline(selectedDeviceObj)}
                 className={`btn btn-primary btn-scan ${scanning ? 'scanning' : ''}`}
               >
                 {scanning ? (

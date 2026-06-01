@@ -3,9 +3,11 @@
  * Usage: <ErrorBanner error={errorString} onDismiss={() => setError(null)} />
  */
 
+import { DEVICE_OFFLINE_MESSAGE, GATEWAY_OFFLINE_MESSAGE, isDeviceUnavailableMessage, isGatewayUnavailableMessage } from '../utils/gatewayErrors'
+
 const GRPC_ERROR_MAP = {
-  UNAVAILABLE: 'Device gateway is offline. Check that the Suprema gateway service is running.',
-  NOT_FOUND: 'Device is not connected. Please connect to the device first.',
+  UNAVAILABLE: GATEWAY_OFFLINE_MESSAGE,
+  NOT_FOUND: DEVICE_OFFLINE_MESSAGE,
   DEADLINE_EXCEEDED: 'Connection timed out. The device may be offline or unreachable.',
   PERMISSION_DENIED: 'Permission denied. Check your credentials.',
   UNAUTHENTICATED: 'Authentication failed. Please log in again.',
@@ -17,6 +19,8 @@ const GRPC_ERROR_MAP = {
 export function friendlyErrorMessage(raw) {
   if (!raw) return null
   const str = typeof raw === 'string' ? raw : raw.message || String(raw)
+  if (isGatewayUnavailableMessage(str)) return GATEWAY_OFFLINE_MESSAGE
+  if (isDeviceUnavailableMessage(str)) return DEVICE_OFFLINE_MESSAGE
   for (const [code, friendly] of Object.entries(GRPC_ERROR_MAP)) {
     if (str.includes(code)) return friendly
   }

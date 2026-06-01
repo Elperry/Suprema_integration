@@ -40,6 +40,7 @@ export default function Enrollment() {
   const [cardAssignments, setCardAssignments] = useState([])
   const [employees, setEmployees] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [cardSearchQuery, setCardSearchQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const [scanning, setScanning] = useState(false)
   const [error, setError] = useState(null)
@@ -630,11 +631,24 @@ export default function Enrollment() {
 
       {activeTab === 'cards' && (
         <div className="card">
-          <div className="card-header">
-            <h3>Card Assignments</h3>
-            <button onClick={loadCardAssignments} className="btn btn-secondary btn-sm">
-              🔄 Refresh
-            </button>
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h3>Card Assignments ({cardAssignments.length})</h3>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={cardSearchQuery}
+                onChange={e => setCardSearchQuery(e.target.value)}
+                placeholder="Search name, ID or card…"
+                className="form-control"
+                style={{ width: 220, fontSize: '0.9rem' }}
+              />
+              {cardSearchQuery && (
+                <button onClick={() => setCardSearchQuery('')} className="btn btn-secondary btn-sm">✕ Clear</button>
+              )}
+              <button onClick={loadCardAssignments} className="btn btn-secondary btn-sm">
+                🔄 Refresh
+              </button>
+            </div>
           </div>
           
           {loading && <p>Loading...</p>}
@@ -644,7 +658,7 @@ export default function Enrollment() {
               <thead>
                 <tr>
                   <th>Employee</th>
-                  <th>Card Data</th>
+                  <th>Card Number</th>
                   <th>Type</th>
                   <th>Status</th>
                   <th>Assigned</th>
@@ -658,15 +672,26 @@ export default function Enrollment() {
                     <td colSpan="7" className="text-center">No card assignments found</td>
                   </tr>
                 ) : (
-                  cardAssignments.map(ca => (
+                  cardAssignments
+                    .filter(ca => {
+                      if (!cardSearchQuery) return true
+                      const q = cardSearchQuery.toLowerCase()
+                      return (
+                        (ca.employeeName || '').toLowerCase().includes(q) ||
+                        String(ca.employeeId || '').toLowerCase().includes(q) ||
+                        decodeHexToDecimal(ca.card_data).includes(q) ||
+                        (ca.card_data || '').toLowerCase().includes(q)
+                      )
+                    })
+                    .map(ca => (
                     <tr key={ca.id}>
                       <td>
                         <strong>{ca.employeeName || 'N/A'}</strong>
                         <br />
                         <small>ID: {ca.employeeId}</small>
                       </td>
-                      <td><code className="card-number">{decodeHexToDecimal(ca.cardData)}</code></td>
-                      <td>{ca.cardType}</td>
+                      <td><code className="card-number">{decodeHexToDecimal(ca.card_data)}</code></td>
+                      <td>CSN</td>
                       <td>{getStatusBadge(ca.status)}</td>
                       <td>{new Date(ca.assignedAt).toLocaleDateString('en-EG', { timeZone: 'Africa/Cairo' })}</td>
                       <td>
@@ -786,7 +811,7 @@ export default function Enrollment() {
             <div className="modal-body">
               <p>
                 <strong>Employee:</strong> {selectedAssignment.employeeName}<br />
-                <strong>Card:</strong> <code className="card-number">{decodeHexToDecimal(selectedAssignment.cardData)}</code>
+                <strong>Card:</strong> <code className="card-number">{decodeHexToDecimal(selectedAssignment.card_data)}</code>
               </p>
               
               <div className="form-group">

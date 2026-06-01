@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Suprema Event Monitoring Service
  * Handles real-time event monitoring, event log retrieval, and event processing
  */
@@ -173,7 +173,19 @@ class SupremaEventService extends EventEmitter {
             { event_code: 0x6100, sub_code: 0x0, desc: 'TNA Key 1' },
             { event_code: 0x6101, sub_code: 0x0, desc: 'TNA Key 2' },
             { event_code: 0x6102, sub_code: 0x0, desc: 'TNA Key 3' },
-            { event_code: 0x6103, sub_code: 0x0, desc: 'TNA Key 4' }
+            { event_code: 0x6103, sub_code: 0x0, desc: 'TNA Key 4' },
+            { event_code: 0x6104, sub_code: 0x0, desc: 'TNA Key 5' },
+            { event_code: 0x6105, sub_code: 0x0, desc: 'TNA Key 6' },
+            { event_code: 0x6106, sub_code: 0x0, desc: 'TNA Key 7' },
+            { event_code: 0x6107, sub_code: 0x0, desc: 'TNA Key 8' },
+            { event_code: 0x6108, sub_code: 0x0, desc: 'TNA Key 9' },
+            { event_code: 0x6109, sub_code: 0x0, desc: 'TNA Key 10' },
+            { event_code: 0x610A, sub_code: 0x0, desc: 'TNA Key 11' },
+            { event_code: 0x610B, sub_code: 0x0, desc: 'TNA Key 12' },
+            { event_code: 0x610C, sub_code: 0x0, desc: 'TNA Key 13' },
+            { event_code: 0x610D, sub_code: 0x0, desc: 'TNA Key 14' },
+            { event_code: 0x610E, sub_code: 0x0, desc: 'TNA Key 15' },
+            { event_code: 0x610F, sub_code: 0x0, desc: 'TNA Key 16' }
         ];
 
         defaultEvents.forEach(event => {
@@ -272,12 +284,10 @@ class SupremaEventService extends EventEmitter {
                         return;
                     }
 
-                    // Cancel subscription if exists
-                    if (this.eventSubscriptions.has(deviceId)) {
-                        const subscription = this.eventSubscriptions.get(deviceId);
-                        subscription.cancel();
-                        this.eventSubscriptions.delete(deviceId);
-                    }
+                    // Remove device from tracking map.
+                    // Do NOT cancel the shared gRPC stream here — it is shared across all
+                    // monitored devices and is only torn down in stopMonitoring().
+                    this.eventSubscriptions.delete(deviceId);
 
                     this.logger.info(`Monitoring disabled for device ${deviceId}`);
                     this.emit('monitoring:disabled', { deviceId });
@@ -306,8 +316,8 @@ class SupremaEventService extends EventEmitter {
             subscription.on('data', (eventData) => {
                 const event = eventData.toObject();
                 
-                // Filter by device IDs if specified
-                if (deviceIds && !deviceIds.includes(event.deviceid)) {
+                // Filter by device IDs if specified (normalize to string — protobuf returns numbers)
+                if (deviceIds && !deviceIds.map(String).includes(String(event.deviceid))) {
                     return;
                 }
 
@@ -321,18 +331,39 @@ class SupremaEventService extends EventEmitter {
                 this.emitSpecificEventTypes(enhancedEvent);
             });
 
+            const handleStreamDropped = () => {
+                this.isMonitoring = false;
+                const currentDevices = Array.from(this.eventSubscriptions.keys());
+                if (currentDevices.length > 0) {
+                    this.logger.info(`Scheduling auto-reconnect of real-time events for ${currentDevices.length} devices...`);
+
+                    const attemptReconnect = () => {
+                        if (this.isMonitoring) return; // already reconnected somewhere else
+                        this.startMonitoring(currentDevices, queueSize).catch((e) => {
+                            this.logger.error(`Event stream auto-reconnect failed: ${e.message}. Retrying in 10s...`);
+                            setTimeout(attemptReconnect, 10000);
+                        });
+                    };
+                    
+                    setTimeout(attemptReconnect, 5000);
+                }
+            };
+
             subscription.on('end', () => {
                 this.logger.info('Event subscription ended');
                 this.emit('subscription:ended');
+                handleStreamDropped();
             });
 
             subscription.on('error', (err) => {
                 if (err.details === 'Cancelled') {
                     this.logger.info('Event subscription cancelled');
                     this.emit('subscription:cancelled');
+                    this.isMonitoring = false;
                 } else {
                     this.logger.error('Event subscription error:', err);
                     this.emit('subscription:error', err);
+                    handleStreamDropped();
                 }
             });
 
@@ -509,14 +540,16 @@ class SupremaEventService extends EventEmitter {
                     event.userid === filters.userId);
             }
 
-            // Filter by date range
+            // Filter by date range — event.timestamp is an ISO string set by enhanceEvent()
             if (filters.startDate || filters.endDate) {
+                const startDate = filters.startDate ? new Date(filters.startDate) : null;
+                const endDate   = filters.endDate   ? new Date(filters.endDate)   : null;
                 filteredEvents = filteredEvents.filter(event => {
-                    if (!event.datetime || event.datetime <= 0) return false;
-                    const eventDate = new Date(event.datetime * 1000);
+                    if (!event.timestamp) return false;
+                    const eventDate = new Date(event.timestamp);
                     if (isNaN(eventDate.getTime())) return false;
-                    if (filters.startDate && eventDate < new Date(filters.startDate)) return false;
-                    if (filters.endDate && eventDate > new Date(filters.endDate)) return false;
+                    if (startDate && eventDate < startDate) return false;
+                    if (endDate   && eventDate > endDate)   return false;
                     return true;
                 });
             }
@@ -529,8 +562,15 @@ class SupremaEventService extends EventEmitter {
             
             // Filter by success/failure for authentication events
             if (filters.authResult !== undefined) {
-                const successCodes = [0x1000, 0x1100]; // Verify Success, Identify Success
-                const failCodes = [0x1001, 0x1101]; // Verify Fail, Identify Fail
+                const successCodes = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
+                const failCodes = [
+                    0x1001, 0x1002, 0x1003,
+                    0x1101, 0x1102, 0x1103,
+                    0x1201, 0x1202, 0x1203,
+                    0x1301, 0x1302, 0x1303,
+                    0x1401, 0x1402, 0x1403,
+                    0x1501, 0x1502,
+                ];
                 
                 if (filters.authResult === 'success') {
                     filteredEvents = filteredEvents.filter(event => 
@@ -618,13 +658,13 @@ class SupremaEventService extends EventEmitter {
         }
         
         if (filters.startDate) {
-            const startTime = new Date(filters.startDate).getTime() / 1000;
-            result = result.filter(e => e.datetime >= startTime);
+            const startDate = new Date(filters.startDate);
+            result = result.filter(e => e.timestamp && new Date(e.timestamp) >= startDate);
         }
         
         if (filters.endDate) {
-            const endTime = new Date(filters.endDate).getTime() / 1000;
-            result = result.filter(e => e.datetime <= endTime);
+            const endDate = new Date(filters.endDate);
+            result = result.filter(e => e.timestamp && new Date(e.timestamp) <= endDate);
         }
         
         if (filters.eventCodes && filters.eventCodes.length > 0) {
@@ -757,16 +797,28 @@ class SupremaEventService extends EventEmitter {
      * @returns {string} Severity level
      */
     getEventSeverity(eventCode, subCode) {
-        // Failure events are typically warnings or errors
-        if (eventCode === 0x1001 || eventCode === 0x1101) return 'warning'; // Auth failures
-        if (eventCode >= 0x3000 && eventCode < 0x4000) return 'error'; // Zone violations
+        const AUTH_SUCCESS_CODES = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
+
+        // Authentication failures → warning
+        if (eventCode >= 0x1000 && eventCode < 0x2000 && !AUTH_SUCCESS_CODES.includes(eventCode)) return 'warning';
+
+        // Door events — escalate security-critical states
+        if (eventCode === 0x2200) return 'error';   // Emergency Lock
+        if (eventCode === 0x2201) return 'warning'; // Emergency Unlock
+        if (eventCode === 0x2004) return 'warning'; // Door Forced Open
+        if (eventCode === 0x2006) return 'warning'; // Door Open Alarm
+        if (eventCode === 0x2007) return 'warning'; // Door Open Warning
+
+        // Zone events — scheduled operations are routine; alarms/violations are errors
+        if (eventCode === 0x3300) return 'error';                         // Zone Fire Alarm
+        if (eventCode === 0x3400 || eventCode === 0x3500) return 'info';  // Zone Scheduled Lock/Unlock
+        if (eventCode >= 0x3000 && eventCode < 0x4000) return 'error';   // Other zone violations
+
+        // System events
         if (eventCode === 0x4001) return 'warning'; // Device stopped
-        
-        // Success events are informational
-        if (eventCode === 0x1000 || eventCode === 0x1100) return 'info'; // Auth success
-        if (eventCode >= 0x2000 && eventCode < 0x3000) return 'info'; // Door events
-        if (eventCode >= 0x6000 && eventCode < 0x7000) return 'info'; // Attendance
-        
+        if (eventCode === 0x4300) return 'warning'; // Tamper On
+        if (eventCode === 0x4602) return 'error';   // Firmware Update Failed
+
         return 'info';
     }
 
@@ -779,8 +831,9 @@ class SupremaEventService extends EventEmitter {
         this.emit(`event:${event.eventType}`, event);
         
         // Emit specific authentication events
-        if (event.eventcode === 0x1000) this.emit('auth:success', event);
-        if (event.eventcode === 0x1001) this.emit('auth:failure', event);
+        const AUTH_SUCCESS = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
+        if (AUTH_SUCCESS.includes(event.eventcode)) this.emit('auth:success', event);
+        if (event.eventType === 'authentication' && !AUTH_SUCCESS.includes(event.eventcode)) this.emit('auth:failure', event);
         
         // Emit door events
         if (event.eventcode === 0x2000) this.emit('door:opened', event);
@@ -788,8 +841,14 @@ class SupremaEventService extends EventEmitter {
         if (event.eventcode === 0x2002) this.emit('door:locked', event);
         if (event.eventcode === 0x2003) this.emit('door:unlocked', event);
         
-        // Emit attendance events
-        if (event.eventcode === 0x6000) this.emit('attendance:event', event);
+        // Emit attendance events (explicit T&A + all TNA keys 0x6100-0x610F)
+        if (event.eventType === 'attendance') {
+            this.emit('attendance:event', event);
+            if (event.eventcode === 0x6000) this.emit('attendance:checkin', event);
+            if (event.eventcode === 0x6001) this.emit('attendance:checkout', event);
+            if (event.eventcode === 0x6002) this.emit('attendance:break_start', event);
+            if (event.eventcode === 0x6003) this.emit('attendance:break_end', event);
+        }
         
         // Emit system events
         if (event.eventcode === 0x4000) this.emit('system:started', event);
@@ -830,10 +889,18 @@ class SupremaEventService extends EventEmitter {
                 doorEvents: {
                     total: 0,
                     opened: 0,
-                    closed: 0
+                    closed: 0,
+                    forcedOpen: 0,
+                    alarms: 0,
+                    emergencyLocks: 0
                 },
                 attendanceEvents: {
                     total: 0,
+                    checkIn: 0,
+                    checkOut: 0,
+                    breakStart: 0,
+                    breakEnd: 0,
+                    tnaKeys: 0,
                     uniqueUsers: new Set()
                 },
                 timeRange: timeRange,
@@ -851,7 +918,7 @@ class SupremaEventService extends EventEmitter {
                 // Authentication statistics
                 if (event.eventType === 'authentication') {
                     stats.authenticationEvents.total++;
-                    if (event.eventcode === 0x1000 || event.eventcode === 0x1100) {
+                    if ([0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700].includes(event.eventcode)) {
                         stats.authenticationEvents.successful++;
                     } else {
                         stats.authenticationEvents.failed++;
@@ -861,13 +928,21 @@ class SupremaEventService extends EventEmitter {
                 // Door statistics
                 if (event.eventType === 'door') {
                     stats.doorEvents.total++;
-                    if (event.eventcode === 0x2000) stats.doorEvents.opened++;
-                    if (event.eventcode === 0x2001) stats.doorEvents.closed++;
+                    if (event.eventcode === 0x2000)      stats.doorEvents.opened++;
+                    else if (event.eventcode === 0x2001) stats.doorEvents.closed++;
+                    else if (event.eventcode === 0x2004) stats.doorEvents.forcedOpen++;
+                    else if (event.eventcode === 0x2006 || event.eventcode === 0x2007) stats.doorEvents.alarms++;
+                    else if (event.eventcode === 0x2200) stats.doorEvents.emergencyLocks++;
                 }
                 
                 // Attendance statistics
                 if (event.eventType === 'attendance') {
                     stats.attendanceEvents.total++;
+                    if (event.eventcode === 0x6000)      stats.attendanceEvents.checkIn++;
+                    else if (event.eventcode === 0x6001) stats.attendanceEvents.checkOut++;
+                    else if (event.eventcode === 0x6002) stats.attendanceEvents.breakStart++;
+                    else if (event.eventcode === 0x6003) stats.attendanceEvents.breakEnd++;
+                    else if (event.eventcode >= 0x6100 && event.eventcode <= 0x610F) stats.attendanceEvents.tnaKeys++;
                     if (event.userid) {
                         stats.attendanceEvents.uniqueUsers.add(event.userid);
                     }
@@ -961,3 +1036,5 @@ class SupremaEventService extends EventEmitter {
 }
 
 export default SupremaEventService;
+
+

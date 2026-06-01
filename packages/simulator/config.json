@@ -239,7 +239,7 @@
   ],
 
   "events": {
-    "autoGenerate": true,
+    "autoGenerate": false,
     "intervalMs": 8000,
     "types": [
       { "eventCode": 4608, "subCode": 0, "desc": "Verify Success (Card)", "weight": 5 },

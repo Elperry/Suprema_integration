@@ -6,9 +6,14 @@
 import express from 'express';
 import { validate, schemas } from '../middleware/requestValidator.js';
 import { asyncHandler } from '../core/errors/index.js';
+import { resolveSupremaDeviceId } from '../utils/deviceResolver.js';
+
 const router = express.Router();
 
 export default (services) => {
+    // Helper to resolve device ID
+    const getSupremaDeviceId = (dbDeviceId) => resolveSupremaDeviceId(dbDeviceId, services.connection);
+
     /**
      * Scan card from device
      * POST /api/cards/scan
@@ -25,7 +30,8 @@ export default (services) => {
                 });
             }
 
-            const cardData = await services.card.scanCard(deviceId, format, threshold);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const cardData = await services.card.scanCard(supremaDeviceId, format, threshold);
 
             res.json({
                 success: true,
@@ -47,7 +53,8 @@ export default (services) => {
     router.get('/blacklist/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const blacklist = await services.card.getBlacklist(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const blacklist = await services.card.getBlacklist(supremaDeviceId);
 
             res.json({
                 success: true,
@@ -79,7 +86,8 @@ export default (services) => {
                 });
             }
 
-            await services.card.addToBlacklist(deviceId, cardInfos);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.card.addToBlacklist(supremaDeviceId, cardInfos);
 
             res.json({
                 success: true,
@@ -110,7 +118,8 @@ export default (services) => {
                 });
             }
 
-            await services.card.deleteFromBlacklist(deviceId, cardInfos);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.card.deleteFromBlacklist(supremaDeviceId, cardInfos);
 
             res.json({
                 success: true,
@@ -131,7 +140,8 @@ export default (services) => {
     router.get('/config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const config = await services.card.getConfig(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const config = await services.card.getConfig(supremaDeviceId);
 
             res.json({
                 success: true,
@@ -165,7 +175,8 @@ export default (services) => {
     router.get('/qr-config/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const qrConfig = await services.card.getQRConfig(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const qrConfig = await services.card.getQRConfig(supremaDeviceId);
 
             res.json({
                 success: true,
@@ -196,7 +207,8 @@ export default (services) => {
                 });
             }
 
-            await services.card.setConfig(deviceId, config);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.card.setConfig(supremaDeviceId, config);
 
             res.json({
                 success: true,
@@ -227,7 +239,8 @@ export default (services) => {
                 });
             }
 
-            await services.card.setQRConfig(deviceId, qrConfig);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            await services.card.setQRConfig(supremaDeviceId, qrConfig);
 
             res.json({
                 success: true,
@@ -257,7 +270,8 @@ export default (services) => {
                 });
             }
 
-            const isValid = await services.card.verifyCard(deviceId, cardData);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const isValid = await services.card.verifyCard(supremaDeviceId, cardData);
 
             res.json({
                 success: true,
@@ -279,7 +293,8 @@ export default (services) => {
     router.get('/statistics/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const stats = await services.card.getCardStatistics(deviceId);
+            const supremaDeviceId = await getSupremaDeviceId(deviceId);
+            const stats = await services.card.getCardStatistics(supremaDeviceId);
 
             res.json({
                 success: true,

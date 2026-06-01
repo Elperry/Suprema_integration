@@ -10,6 +10,7 @@
  */
 
 import winston from 'winston';
+import { encodeDecimalToHex, normalizeToHex, validateCardData } from '../core/utils/cardUtils.js';
 
 // PrismaClient is no longer created at module level — it is injected via
 // constructor options to avoid duplicate connections.
@@ -266,14 +267,22 @@ class EnrollmentService {
      */
     async getCardAssignmentByCardData(cardData) {
         try {
-            return await this.prisma.cardAssignment.findUnique({
-                where: { cardData },
+            const assignment = await this.prisma.cardAssignment.findUnique({
+                where: { card_data: cardData },
                 include: {
+                    user: true,
                     enrollments: {
                         include: { device: true }
                     }
                 }
             });
+
+            if (!assignment) {
+                return null;
+            }
+
+            const [enrichedAssignment] = await this.enrichAssignmentsWithEmployeeNames([assignment]);
+            return enrichedAssignment || assignment;
         } catch (error) {
             this.logger.error('Error getting card assignment:', error);
             return null;
@@ -289,14 +298,22 @@ class EnrollmentService {
         try {
             // If numeric, treat as ID
             if (typeof idOrCardData === 'number') {
-                return await this.prisma.cardAssignment.findUnique({
+                const assignment = await this.prisma.cardAssignment.findUnique({
                     where: { id: idOrCardData },
                     include: {
+                        user: true,
                         enrollments: {
                             include: { device: true }
                         }
                     }
                 });
+
+                if (!assignment) {
+                    return null;
+                }
+
+                const [enrichedAssignment] = await this.enrichAssignmentsWithEmployeeNames([assignment]);
+                return enrichedAssignment || assignment;
             }
             // Otherwise treat as card data
             return await this.getCardAssignmentByCardData(idOrCardData);
@@ -314,27 +331,105 @@ class EnrollmentService {
     async getAllCardAssignments(filters = {}) {
         try {
             const where = {};
-            
+
             if (filters.status) {
                 where.status = filters.status;
             }
             if (filters.employeeId) {
-                where.employeeId = filters.employeeId;
+                // Resolve employee -> user, then filter by user_id
+                const user = await this.prisma.user.findFirst({
+                    where: { employee_id: Number(filters.employeeId) },
+                    select: { id: true },
+                });
+                if (user) {
+                    where.user_id = user.id;
+                } else {
+                    return []; // No user for this employee yet
+                }
             }
 
-            return await this.prisma.cardAssignment.findMany({
+            const assignments = await this.prisma.cardAssignment.findMany({
                 where,
                 include: {
+                    user: true,
                     enrollments: {
                         include: { device: true }
                     }
                 },
                 orderBy: { assignedAt: 'desc' }
             });
+
+            return await this.enrichAssignmentsWithEmployeeNames(assignments);
         } catch (error) {
             this.logger.error('Error getting card assignments:', error);
             throw error;
         }
+    }
+
+    resolveEmployeeDisplayName(employee) {
+        return employee?.displayname
+            || employee?.fullname
+            || [employee?.firstname, employee?.lastname].filter(Boolean).join(' ')
+            || null;
+    }
+
+    normalizeManualCardInput({ cardData, cardNumber } = {}) {
+        const rawCardNumber = String(cardNumber ?? '').trim();
+        if (rawCardNumber) {
+            if (!/^\d+$/.test(rawCardNumber)) {
+                throw new Error('Card number must be a decimal value');
+            }
+
+            return encodeDecimalToHex(rawCardNumber);
+        }
+
+        const rawCardData = String(cardData ?? '').trim();
+        if (!rawCardData) {
+            return null;
+        }
+
+        const validation = validateCardData(rawCardData);
+        if (!validation.valid) {
+            throw new Error('Card data must be a 64-character hex or Base64 value. Use cardNumber for decimal input.');
+        }
+
+        return normalizeToHex(rawCardData);
+    }
+
+    async enrichAssignmentsWithEmployeeNames(assignments) {
+        if (!assignments || assignments.length === 0) {
+            return assignments;
+        }
+
+        // Collect user_ids that need hydration (user may already be included via relation)
+        const missingUserIds = [...new Set(
+            assignments
+                .filter((a) => !a.user && a.user_id)
+                .map((a) => a.user_id)
+                .filter(Number.isFinite)
+        )];
+
+        let userById = new Map();
+        if (missingUserIds.length > 0) {
+            try {
+                const users = await this.prisma.user.findMany({
+                    where: { id: { in: missingUserIds } },
+                    select: { id: true, name: true, full_name: true, employee_id: true },
+                });
+                userById = new Map(users.map((u) => [u.id, u]));
+            } catch (error) {
+                this.logger.warn('Failed to enrich card assignments with user data:', error.message);
+            }
+        }
+
+        return assignments.map((assignment) => {
+            const user = assignment.user || userById.get(assignment.user_id);
+            return {
+                ...assignment,
+                employeeName: user?.name || null,
+                employeeId:   user?.employee_id || null,
+            };
+        });
     }
 
     /**
@@ -343,39 +438,50 @@ class EnrollmentService {
      * @returns {Promise<Object>} Created card assignment
      */
     async assignCardToEmployee(data) {
-        const { employeeId, employeeName, cardData, cardType = 'CSN', cardFormat = 0, cardSize = 0, notes } = data;
+        const { employeeId, cardData, cardNumber, notes } = data;
+        const normalizedCardData = this.normalizeManualCardInput({ cardData, cardNumber });
 
-        this.logger.info('assignCardToEmployee called with:', { employeeId, employeeName, cardData, cardType, cardSize });
+        this.logger.info('assignCardToEmployee called with:', {
+            employeeId,
+            hasCardData: Boolean(cardData),
+            hasCardNumber: Boolean(cardNumber)
+        });
 
-        if (!employeeId || !cardData) {
-            throw new Error(`Missing required fields: employeeId=${employeeId}, cardData=${cardData}`);
+        if (!employeeId || !normalizedCardData) {
+            throw new Error(`Missing required fields: employeeId=${employeeId}, cardData=${cardData}, cardNumber=${cardNumber}`);
+        }
+
+        // Resolve the local user row for this employee
+        const user = await this.prisma.user.findFirst({
+            where: { employee_id: Number(employeeId) },
+        });
+        if (!user) {
+            throw new Error(`No local user found for employee ${employeeId}. Ensure a sync cycle has run.`);
         }
 
         try {
             // Check if card is already assigned
-            const existing = await this.getCardAssignment(cardData);
+            const existing = await this.getCardAssignment(normalizedCardData);
             this.logger.info('Existing card assignment check:', existing ? 'found' : 'not found');
-            
+
             if (existing) {
                 if (existing.status === 'active') {
-                    throw new Error(`Card is already assigned to employee ${existing.employeeName || existing.employeeId}`);
+                    throw new Error(`Card is already assigned to employee ${existing.user?.name || existing.user_id}`);
                 }
-                // Reactivate revoked card for new employee
+                // Reactivate revoked card for new user
                 this.logger.info('Reactivating revoked card assignment');
                 const updated = await this.prisma.cardAssignment.update({
                     where: { id: existing.id },
                     data: {
-                        employeeId: String(employeeId),
-                        employeeName: employeeName || null,
-                        status: 'active',
+                        user_id:    user.id,
+                        status:     'active',
                         assignedAt: new Date(),
-                        revokedAt: null,
-                        notes: notes || null
+                        revokedAt:  null,
+                        notes:      notes || null
                     },
                     include: {
-                        enrollments: {
-                            include: { device: true }
-                        }
+                        user: true,
+                        enrollments: { include: { device: true } }
                     }
                 });
                 this.logger.info('Card assignment reactivated:', updated.id);
@@ -386,21 +492,18 @@ class EnrollmentService {
             this.logger.info('Creating new card assignment');
             const assignment = await this.prisma.cardAssignment.create({
                 data: {
-                    employeeId: String(employeeId),
-                    employeeName: employeeName || null,
-                    cardData: String(cardData),
-                    cardType: cardType || 'CSN',
-                    cardFormat: cardFormat || 0,
-                    notes: notes || null
+                    user_id:   user.id,
+                    card_data: normalizedCardData,
+                    card_csn:  '',
+                    notes:     notes || null
                 },
                 include: {
-                    enrollments: {
-                        include: { device: true }
-                    }
+                    user: true,
+                    enrollments: { include: { device: true } }
                 }
             });
 
-            this.logger.info(`Card assigned successfully: ID=${assignment.id}, Employee=${employeeId} (${employeeName})`);
+            this.logger.info(`Card assigned successfully: ID=${assignment.id}, Employee=${employeeId}`);
             return assignment;
         } catch (error) {
             this.logger.error('Error assigning card:', error);
@@ -425,24 +528,94 @@ class EnrollmentService {
                 },
                 include: {
                     enrollments: {
+                        where: { status: 'active' },
                         include: { device: true }
                     }
                 }
             });
 
             // Remove from all devices
+            const failedDevices = [];
             for (const enrollment of assignment.enrollments) {
                 try {
                     await this.removeFromDevice(enrollment.deviceId, assignmentId);
                 } catch (err) {
                     this.logger.warn(`Failed to remove from device ${enrollment.deviceId}:`, err.message);
+                    failedDevices.push({
+                        deviceId: enrollment.deviceId,
+                        deviceName: enrollment.device?.name || null,
+                        message: err.message
+                    });
                 }
+            }
+
+            if (failedDevices.length > 0) {
+                const failureSummary = failedDevices
+                    .map((device) => device.deviceName
+                        ? `${device.deviceName} (${device.deviceId})`
+                        : String(device.deviceId))
+                    .join(', ');
+                const cleanupError = new Error(`Card was revoked in the database but could not be removed from ${failedDevices.length} device(s): ${failureSummary}`);
+                cleanupError.failedDevices = failedDevices;
+                throw cleanupError;
             }
 
             this.logger.info(`Card assignment ${assignmentId} revoked`);
             return assignment;
         } catch (error) {
             this.logger.error('Error revoking card assignment:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Permanently delete an inactive card assignment from the database.
+     * Active or still-enrolled assignments must be revoked/removed first.
+     * @param {number} assignmentId - Card assignment ID
+     * @returns {Promise<Object>} Deleted assignment summary
+     */
+    async deleteCardAssignment(assignmentId) {
+        try {
+            const assignment = await this.prisma.cardAssignment.findUnique({
+                where: { id: assignmentId },
+                include: {
+                    enrollments: {
+                        include: { device: true }
+                    }
+                }
+            });
+
+            if (!assignment) {
+                throw new Error('Card assignment not found');
+            }
+
+            if (assignment.status === 'active') {
+                throw new Error('Cannot permanently delete an active card assignment. Revoke it first.');
+            }
+
+            const activeEnrollments = assignment.enrollments.filter((enrollment) => enrollment.status === 'active' || enrollment.status === 'pending');
+
+            if (activeEnrollments.length > 0) {
+                const deviceSummary = activeEnrollments
+                    .map((enrollment) => enrollment.device?.name || `Device ${enrollment.deviceId}`)
+                    .join(', ');
+                throw new Error(`Cannot delete this card assignment while it is still enrolled on ${activeEnrollments.length} device(s): ${deviceSummary}`);
+            }
+
+            await this.prisma.cardAssignment.delete({
+                where: { id: assignmentId }
+            });
+
+            this.logger.info(`Card assignment ${assignmentId} permanently deleted`);
+
+            return {
+                id: assignment.id,
+                user_id: assignment.user_id,
+                status: assignment.status,
+                deletedEnrollments: assignment.enrollments.length,
+            };
+        } catch (error) {
+            this.logger.error('Error deleting card assignment:', error);
             throw error;
         }
     }
@@ -486,6 +659,7 @@ class EnrollmentService {
         const oldAssignment = await this.prisma.cardAssignment.findUnique({
             where: { id: oldAssignmentId },
             include: {
+                user: true,
                 enrollments: {
                     where: { status: 'active' },
                     include: { device: true }
@@ -506,13 +680,11 @@ class EnrollmentService {
             `Replaced with new card`
         );
 
-        // Create new card assignment for the same employee
+        // Create new card assignment for the same user
         const newAssignment = await this.assignCardToEmployee({
-            employeeId: oldAssignment.employeeId,
-            employeeName: oldAssignment.employeeName,
+            employeeId: String(oldAssignment.user?.employee_id || oldAssignment.user_id),
             cardData: newCardData.cardData,
-            cardType: newCardData.cardType || oldAssignment.cardType,
-            cardFormat: newCardData.cardFormat || oldAssignment.cardFormat || 0,
+            cardNumber: newCardData.cardNumber,
             notes: newCardData.notes || `Replacement for card #${oldAssignmentId}`
         });
 
@@ -527,7 +699,7 @@ class EnrollmentService {
             }
         }
 
-        this.logger.info(`Card replaced: old=#${oldAssignmentId} → new=#${newAssignment.id} for employee ${oldAssignment.employeeId}`);
+        this.logger.info(`Card replaced: old=#${oldAssignmentId} → new=#${newAssignment.id} for user ${oldAssignment.user_id}`);
         return {
             oldAssignment: revokedAssignment,
             newAssignment,
@@ -542,9 +714,19 @@ class EnrollmentService {
      * @returns {Promise<Array>} List of card assignments with enrollment history
      */
     async getCardHistory(employeeId) {
+        // Find the user by employee_id to get their user row, then fetch card assignments
+        const user = await this.prisma.user.findFirst({
+            where: { employee_id: parseInt(employeeId) }
+        });
+
+        const whereClause = user
+            ? { user_id: user.id }
+            : { user_id: -1 }; // no match if user not found
+
         const assignments = await this.prisma.cardAssignment.findMany({
-            where: { employeeId: String(employeeId) },
+            where: whereClause,
             include: {
+                user: true,
                 enrollments: {
                     include: { device: true }
                 }
@@ -554,8 +736,8 @@ class EnrollmentService {
 
         return assignments.map(a => ({
             id: a.id,
-            cardData: a.cardData,
-            cardType: a.cardType,
+            employeeName: a.user?.name || null,
+            card_data: a.card_data,
             status: a.status,
             assignedAt: a.assignedAt,
             revokedAt: a.revokedAt,
@@ -579,9 +761,10 @@ class EnrollmentService {
      */
     async enrollOnDevice(deviceId, assignmentId) {
         try {
-            // Get the card assignment
+            // Get the card assignment including user for employee_id / name
             const assignment = await this.prisma.cardAssignment.findUnique({
-                where: { id: assignmentId }
+                where: { id: assignmentId },
+                include: { user: true }
             });
 
             if (!assignment) {
@@ -591,6 +774,9 @@ class EnrollmentService {
             if (assignment.status !== 'active') {
                 throw new Error('Cannot enroll inactive card assignment');
             }
+
+            // Derive the device user ID from the local user.id (primary key, used as Suprema user ID)
+            const deviceUserId = String(assignment.user?.id ?? assignment.user_id);
 
             // Check if already enrolled on this device (by card assignment)
             const existingEnrollment = await this.prisma.deviceEnrollment.findUnique({
@@ -606,30 +792,23 @@ class EnrollmentService {
                 throw new Error('Already enrolled on this device');
             }
 
-            // Also check if this user (by deviceUserId/employeeId) already has enrollment on this device
-            // This handles the case where employee has a new card but already exists on device
+            // Also check if this user already has enrollment on this device
             const existingUserEnrollment = await this.prisma.deviceEnrollment.findFirst({
                 where: {
                     deviceId,
-                    deviceUserId: assignment.employeeId
+                    deviceUserId
                 }
             });
 
             // Get Suprema device ID
             const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
 
-            // Create user on device with card
-            const deviceUserId = assignment.employeeId;
-            
-            this.logger.info(`Enrolling user ${deviceUserId} (${assignment.employeeName}) on device ${supremaDeviceId}`);
+            const employeeName = assignment.user?.name || `Employee ${deviceUserId}`;
+            this.logger.info(`Enrolling user ${deviceUserId} (${employeeName}) on device ${supremaDeviceId}`);
 
-            // Prepare user data for device
-            // IMPORTANT: Set numOfCard to 0 during initial enrollment
-            // We will add the card separately using setUserCards
-            // Setting numOfCard: 1 without providing card data causes "Invalid card data" error
             const userData = {
                 id: deviceUserId,
-                name: assignment.employeeName || `Employee ${assignment.employeeId}`,
+                name: employeeName,
                 numOfCard: 0  // Start with 0 cards, add card separately
             };
 
@@ -645,17 +824,14 @@ class EnrollmentService {
             this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
 
             // Then set the card for the user
-            // The cardData stored in DB should be the full 32-byte hex from the scan
-            // G-SDK requires size=32 for CSN cards
             const cardData = [{
                 userId: deviceUserId,
-                // Use stored card data directly (should be full 32-byte hex)
                 cardData: (() => {
-                    let hex = String(assignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
-                    if (hex.length % 2 === 1) hex = '0' + hex; // pad to even length
+                    let hex = String(assignment.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
+                    if (hex.length % 2 === 1) hex = '0' + hex;
                     return hex.toUpperCase();
                 })(),
-                cardType: this.getCardTypeCode(assignment.cardType),
+                cardType: this.getCardTypeCode('CSN'),
                 // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
                 cardSize: 32
             }];
@@ -672,6 +848,7 @@ class EnrollmentService {
                 enrollment = await this.prisma.deviceEnrollment.update({
                     where: { id: existingEnrollment.id },
                     data: {
+                        deviceUserId,
                         status: 'active',
                         enrolledAt: new Date(),
                         lastSyncAt: new Date()
@@ -684,6 +861,7 @@ class EnrollmentService {
                     where: { id: existingUserEnrollment.id },
                     data: {
                         cardAssignmentId: assignmentId,
+                        deviceUserId,
                         status: 'active',
                         enrolledAt: new Date(),
                         lastSyncAt: new Date()
@@ -724,7 +902,14 @@ class EnrollmentService {
             failed: []
         };
 
-        for (const deviceId of deviceIds) {
+        for (const rawDeviceId of deviceIds) {
+            const deviceId = parseInt(rawDeviceId, 10);
+
+            if (Number.isNaN(deviceId)) {
+                results.failed.push({ deviceId: rawDeviceId, error: 'Invalid device ID' });
+                continue;
+            }
+
             try {
                 const enrollment = await this.enrollOnDevice(deviceId, assignmentId);
                 results.successful.push({ deviceId, enrollment });
@@ -762,13 +947,61 @@ class EnrollmentService {
             // Get Suprema device ID
             const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
 
-            // Remove from device
-            await this.userService.deleteUsers(supremaDeviceId, [enrollment.deviceUserId]);
+            const rawCardData = String(enrollment.cardAssignment?.card_data || '').trim();
+            const cardValidation = validateCardData(rawCardData);
+            const normalizedCardHex = cardValidation.valid
+                ? normalizeToHex(rawCardData)
+                : '';
+            let removalResult = {
+                removed: false,
+                notFound: false,
+                userId: String(enrollment.deviceUserId)
+            };
+
+            if (rawCardData && !cardValidation.valid) {
+                this.logger.warn(`Enrollment ${enrollment.id} has invalid stored card data and cannot be normalized for device removal`);
+            }
+
+            if (normalizedCardHex) {
+                removalResult = await this.userService.removeUserCard(
+                    supremaDeviceId,
+                    enrollment.deviceUserId,
+                    normalizedCardHex
+                );
+
+                if (!removalResult.removed && removalResult.notFound) {
+                    const resolvedUserId = await this.userService.findUserWithCard(supremaDeviceId, normalizedCardHex);
+
+                    if (resolvedUserId && String(resolvedUserId) !== String(enrollment.deviceUserId)) {
+                        this.logger.warn(`Enrollment ${enrollment.id} used stale device user ${enrollment.deviceUserId}; removing card from device user ${resolvedUserId} instead`);
+                        removalResult = await this.userService.removeUserCard(
+                            supremaDeviceId,
+                            resolvedUserId,
+                            normalizedCardHex
+                        );
+                    } else if (!resolvedUserId) {
+                        this.logger.info(`Card ${normalizedCardHex} is already absent from device ${deviceId}`);
+                        removalResult = {
+                            removed: false,
+                            notFound: false,
+                            alreadyRemoved: true,
+                            userId: String(enrollment.deviceUserId)
+                        };
+                    }
+                }
+            }
+
+            if (!removalResult.removed && !removalResult.alreadyRemoved) {
+                throw new Error(`Card ${assignmentId} could not be removed from device ${deviceId}`);
+            }
 
             // Update enrollment status
             const updated = await this.prisma.deviceEnrollment.update({
                 where: { id: enrollment.id },
-                data: { status: 'removed' },
+                data: {
+                    status: 'removed',
+                    deviceUserId: String(removalResult.userId || enrollment.deviceUserId)
+                },
                 include: { device: true, cardAssignment: true }
             });
 
@@ -849,7 +1082,7 @@ class EnrollmentService {
                     // Setting numOfCard: 1 without providing card data causes "Invalid card data" error
                     const userData = {
                         id: enrollment.deviceUserId,
-                        name: enrollment.cardAssignment.employeeName || `Employee ${enrollment.cardAssignment.employeeId}`,
+                        name: enrollment.cardAssignment.user?.name || `Employee ${enrollment.deviceUserId}`,
                         numOfCard: 0  // Start with 0 cards, add card separately
                     };
 
@@ -857,16 +1090,14 @@ class EnrollmentService {
                     await this.userService.enrollUsers(supremaDeviceId, [userData]);
                     
                     // Then set the card
-                    // The cardData stored in DB should be the full 32-byte hex from the scan
-                    // G-SDK requires size=32 for CSN cards
                     const cardData = [{
                         userId: enrollment.deviceUserId,
                         cardData: (() => {
-                            let hex = String(enrollment.cardAssignment.cardData || '').replace(/[^0-9A-Fa-f]/g, '');
+                            let hex = String(enrollment.cardAssignment.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
                             if (hex.length % 2 === 1) hex = '0' + hex;
                             return hex.toUpperCase();
                         })(),
-                        cardType: this.getCardTypeCode(enrollment.cardAssignment.cardType),
+                        cardType: this.getCardTypeCode('CSN'),
                         // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
                         cardSize: 32
                     }];
@@ -954,57 +1185,49 @@ class EnrollmentService {
      */
     async searchEmployees(searchTerm, limit = 20) {
         try {
-            // Query from the allemployees view
-            // Using correct column names: id, fullname, displayname, jobtitle, ssn
-            const employees = await this.prisma.$queryRaw`
-                SELECT 
-                    id as employee_id,
-                    COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
-                    jobtitle as department,
-                    fullname,
-                    displayname,
-                    firstname,
-                    lastname,
-                    email,
-                    mobile,
-                    ssn,
-                    card
-                FROM allemployees 
-                WHERE id LIKE ${`%${searchTerm}%`}
-                   OR fullname LIKE ${`%${searchTerm}%`}
-                   OR displayname LIKE ${`%${searchTerm}%`}
-                   OR firstname LIKE ${`%${searchTerm}%`}
-                   OR lastname LIKE ${`%${searchTerm}%`}
-                   OR jobtitle LIKE ${`%${searchTerm}%`}
-                   OR ssn LIKE ${`%${searchTerm}%`}
-                LIMIT ${limit}
-            `;
+            const rows = await this.prisma.employee.findMany({
+                where: {
+                    OR: [
+                        { ssn:         { contains: searchTerm } },
+                        { fullname:    { contains: searchTerm } },
+                        { displayname: { contains: searchTerm } },
+                        { firstname:   { contains: searchTerm } },
+                        { lastname:    { contains: searchTerm } },
+                        { jobtitle:    { contains: searchTerm } },
+                    ],
+                },
+                take: limit,
+            });
 
-            // Convert BigInt values for JSON serialization
-            const serializedEmployees = serializeBigInt(employees);
-
-            // For each employee, check if they have a card assignment
-            const enrichedEmployees = await Promise.all(serializedEmployees.map(async (emp) => {
-                const cardAssignment = await this.prisma.cardAssignment.findFirst({
-                    where: { 
-                        employeeId: String(emp.employee_id),
-                        status: 'active'
-                    },
-                    include: {
-                        enrollments: {
-                            include: { device: true }
-                        }
-                    }
-                });
-
-                return {
-                    ...emp,
-                    hasCard: !!cardAssignment,
-                    cardAssignment
-                };
+            const employees = rows.map(emp => ({
+                employee_id: emp.id,
+                name: emp.displayname || emp.fullname || [emp.firstname, emp.lastname].filter(Boolean).join(' '),
+                department:  emp.jobtitle,
+                fullname:    emp.fullname,
+                displayname: emp.displayname,
+                firstname:   emp.firstname,
+                lastname:    emp.lastname,
+                email:       emp.email,
+                mobile:      emp.mobile,
+                ssn:         emp.ssn,
+                card:        emp.card,
             }));
 
-            return enrichedEmployees;
+            // Enrich with card assignment status
+            const enriched = await Promise.all(employees.map(async (emp) => {
+                const localUser = await this.prisma.user.findFirst({
+                    where: { employee_id: parseInt(emp.employee_id) },
+                });
+                const cardAssignment = localUser
+                    ? await this.prisma.cardAssignment.findFirst({
+                        where: { user_id: localUser.id, status: 'active' },
+                        include: { enrollments: { include: { device: true } } },
+                    })
+                    : null;
+                return { ...emp, hasCard: !!cardAssignment, cardAssignment };
+            }));
+
+            return enriched;
         } catch (error) {
             this.logger.error('Error searching employees:', error);
             throw error;
@@ -1020,57 +1243,48 @@ class EnrollmentService {
         try {
             const { limit = 100, offset = 0, enrolled = null } = options;
 
-            // Using correct column names from allemployees table
-            let employees = await this.prisma.$queryRaw`
-                SELECT 
-                    id as employee_id,
-                    COALESCE(displayname, fullname, CONCAT(firstname, ' ', lastname)) as name,
-                    jobtitle as department,
-                    fullname,
-                    displayname,
-                    firstname,
-                    lastname,
-                    email,
-                    mobile,
-                    ssn,
-                    card
-                FROM allemployees 
-                ORDER BY fullname
-                LIMIT ${limit} OFFSET ${offset}
-            `;
+            const rows = await this.prisma.employee.findMany({
+                orderBy: { fullname: 'asc' },
+                take: limit,
+                skip: offset,
+            });
 
-            // Convert BigInt values for JSON serialization
-            employees = serializeBigInt(employees);
+            let employees = rows.map(emp => ({
+                employee_id: emp.id,
+                name: emp.displayname || emp.fullname || [emp.firstname, emp.lastname].filter(Boolean).join(' '),
+                department:  emp.jobtitle,
+                fullname:    emp.fullname,
+                displayname: emp.displayname,
+                firstname:   emp.firstname,
+                lastname:    emp.lastname,
+                email:       emp.email,
+                mobile:      emp.mobile,
+                ssn:         emp.ssn,
+                card:        emp.card,
+            }));
 
-            // Enrich with card assignment info
             employees = await Promise.all(employees.map(async (emp) => {
-                const cardAssignment = await this.prisma.cardAssignment.findFirst({
-                    where: {
-                        employeeId: String(emp.employee_id),
-                        status: 'active'
-                    },
-                    include: {
-                        enrollments: {
-                            where: { status: 'active' },
-                            include: { device: true }
-                        }
-                    }
+                const localUser = await this.prisma.user.findFirst({
+                    where: { employee_id: parseInt(emp.employee_id) },
                 });
-
+                const cardAssignment = localUser
+                    ? await this.prisma.cardAssignment.findFirst({
+                        where: { user_id: localUser.id, status: 'active' },
+                        include: {
+                            enrollments: { where: { status: 'active' }, include: { device: true } },
+                        },
+                    })
+                    : null;
                 return {
                     ...emp,
                     hasCard: !!cardAssignment,
                     cardAssignment,
-                    enrolledDevices: cardAssignment?.enrollments?.map(e => e.device) || []
+                    enrolledDevices: cardAssignment?.enrollments?.map(e => e.device) || [],
                 };
             }));
 
-            // Filter by enrollment status if specified
-            if (enrolled === true) {
-                employees = employees.filter(e => e.hasCard);
-            } else if (enrolled === false) {
-                employees = employees.filter(e => !e.hasCard);
-            }
+            if (enrolled === true)  employees = employees.filter(e => e.hasCard);
+            if (enrolled === false) employees = employees.filter(e => !e.hasCard);
 
             return employees;
         } catch (error) {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { enrollmentAPI, deviceAPI, cardAPI } from '../services/api'
 import './CardAssignments.css'
 
@@ -14,25 +15,83 @@ const decodeHex = (hex) => {
   } catch { return 'N/A' }
 }
 
+const decodeBase64 = (value) => {
+  try {
+    if (!value) return 'N/A'
+    const binary = atob(String(value).trim())
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index)
+    }
+
+    let cardNumber = 0n
+    let firstNonZero = 0
+    while (firstNonZero < bytes.length && bytes[firstNonZero] === 0) {
+      firstNonZero += 1
+    }
+
+    for (const byte of bytes.slice(firstNonZero)) {
+      cardNumber = (cardNumber << 8n) | BigInt(byte)
+    }
+
+    return cardNumber.toString()
+  } catch {
+    return 'N/A'
+  }
+}
+
+const toCardNumberDisplay = (value) => {
+  const rawValue = String(value || '').trim()
+  if (!rawValue) return ''
+  if (/^\d+$/.test(rawValue)) return rawValue
+  if (/^[0-9A-Fa-f]+$/.test(rawValue)) return decodeHex(rawValue)
+  return decodeBase64(rawValue)
+}
+
+const buildCardInputPayload = (value) => {
+  const rawValue = String(value || '').trim()
+  if (!rawValue) return {}
+  return /^\d+$/.test(rawValue)
+    ? { cardNumber: rawValue }
+    : { cardData: rawValue }
+}
+
+const normalizeTab = (tab) => tab === 'blacklist' ? 'blacklist' : 'assignments'
+
+const emptyAssignmentForm = {
+  employeeId: '',
+  employeeName: '',
+  cardData: '',
+  cardType: 'CSN',
+  notes: ''
+}
+
+const parsePageParam = (value) => {
+  const parsed = parseInt(value || '1', 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
 export default function CardAssignments() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [assignments, setAssignments] = useState([])
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false)
   const [devices, setDevices] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(null)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(() => parsePageParam(searchParams.get('page')))
   const [totalCount, setTotalCount] = useState(0)
   const PAGE_SIZE = 25
 
   // Filters
-  const [filterStatus, setFilterStatus] = useState('')
-  const [filterEmployee, setFilterEmployee] = useState('')
-  const [searchText, setSearchText] = useState('')
+  const [filterStatus, setFilterStatus] = useState(() => searchParams.get('status') || '')
+  const [filterEmployee, setFilterEmployee] = useState(() => searchParams.get('employeeId') || '')
+  const [searchText, setSearchText] = useState(() => searchParams.get('query') || '')
 
   // Modal
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState(null)
-  const [form, setForm] = useState({ employeeId: '', employeeName: '', cardData: '', cardType: 'CSN', notes: '' })
+  const [form, setForm] = useState(emptyAssignmentForm)
   const [saving, setSaving] = useState(false)
   const [confirmRevoke, setConfirmRevoke] = useState(null)
 
@@ -59,7 +118,10 @@ export default function CardAssignments() {
   const [rowEnrollments, setRowEnrollments] = useState({})
 
   // Tab
-  const [activeTab, setActiveTab] = useState('assignments')
+  const [activeTab, setActiveTab] = useState(() => {
+    const employeeId = searchParams.get('employeeId') || ''
+    return employeeId ? 'assignments' : normalizeTab(searchParams.get('tab'))
+  })
 
   // Blacklist state
   const [blacklist, setBlacklist] = useState([])
@@ -69,8 +131,53 @@ export default function CardAssignments() {
   const [showBlacklistModal, setShowBlacklistModal] = useState(false)
   const [blacklistSaving, setBlacklistSaving] = useState(false)
 
+  const updateRouteState = useCallback((overrides = {}, options = {}) => {
+    const nextParams = new URLSearchParams(searchParams)
+    const nextEmployeeId = overrides.employeeId ?? filterEmployee
+    const nextStatus = overrides.status ?? filterStatus
+    const nextQuery = overrides.query ?? searchText
+    const nextPage = overrides.page ?? page
+    const nextTab = nextEmployeeId ? 'assignments' : normalizeTab(overrides.tab ?? activeTab)
+
+    if (nextEmployeeId) nextParams.set('employeeId', nextEmployeeId)
+    else nextParams.delete('employeeId')
+
+    if (nextStatus) nextParams.set('status', nextStatus)
+    else nextParams.delete('status')
+
+    if (nextQuery) nextParams.set('query', nextQuery)
+    else nextParams.delete('query')
+
+    if (nextPage > 1) nextParams.set('page', String(nextPage))
+    else nextParams.delete('page')
+
+    if (nextTab === 'blacklist') nextParams.set('tab', 'blacklist')
+    else nextParams.delete('tab')
+
+    const currentValue = searchParams.toString()
+    const nextValue = nextParams.toString()
+    if (currentValue !== nextValue) {
+      setSearchParams(nextParams, options)
+    }
+  }, [activeTab, filterEmployee, filterStatus, page, searchParams, searchText, setSearchParams])
+
+  useEffect(() => {
+    const nextEmployeeId = searchParams.get('employeeId') || ''
+    const nextStatus = searchParams.get('status') || ''
+    const nextQuery = searchParams.get('query') || ''
+    const nextPage = parsePageParam(searchParams.get('page'))
+    const nextTab = nextEmployeeId ? 'assignments' : normalizeTab(searchParams.get('tab'))
+
+    setFilterEmployee(prev => prev === nextEmployeeId ? prev : nextEmployeeId)
+    setFilterStatus(prev => prev === nextStatus ? prev : nextStatus)
+    setSearchText(prev => prev === nextQuery ? prev : nextQuery)
+    setPage(prev => prev === nextPage ? prev : nextPage)
+    setActiveTab(prev => prev === nextTab ? prev : nextTab)
+  }, [searchParams])
+
   const loadAssignments = useCallback(async () => {
     setLoading(true)
+    setAssignmentsLoaded(false)
     setError(null)
     try {
       const params = { page, pageSize: PAGE_SIZE }
@@ -84,6 +191,7 @@ export default function CardAssignments() {
       setError(e.userMessage || 'Failed to load card assignments')
     } finally {
       setLoading(false)
+      setAssignmentsLoaded(true)
     }
   }, [page, filterStatus, filterEmployee])
 
@@ -97,28 +205,79 @@ export default function CardAssignments() {
   useEffect(() => { loadAssignments() }, [loadAssignments])
   useEffect(() => { loadDevices() }, [])
 
-  const applyFilter = (e) => { e.preventDefault(); setPage(1); loadAssignments() }
-  const clearFilter = () => { setFilterStatus(''); setFilterEmployee(''); setSearchText(''); setPage(1) }
+  const applyFilter = (e) => {
+    e.preventDefault()
+    const nextEmployeeId = filterEmployee.trim()
+    const nextStatus = filterStatus
+    const nextQuery = searchText.trim()
+
+    setPage(1)
+    setActiveTab('assignments')
+    updateRouteState({
+      employeeId: nextEmployeeId,
+      status: nextStatus,
+      query: nextQuery,
+      page: 1,
+      tab: 'assignments',
+    })
+  }
+
+  const clearFilter = () => {
+    setFilterStatus('')
+    setFilterEmployee('')
+    setSearchText('')
+    setPage(1)
+    setActiveTab('assignments')
+    updateRouteState({ employeeId: '', status: '', query: '', page: 1, tab: 'assignments' })
+  }
 
   // Create
-  const openCreate = () => {
+  const openCreate = (prefill = {}) => {
     setEditingId(null)
-    setForm({ employeeId: '', employeeName: '', cardData: '', cardType: 'CSN', notes: '' })
+    setForm({ ...emptyAssignmentForm, ...prefill })
     setShowModal(true)
   }
 
+  useEffect(() => {
+    if (searchParams.get('openCreate') !== '1') {
+      return
+    }
+
+    const nextCardType = searchParams.get('prefillCardType') || emptyAssignmentForm.cardType
+    openCreate({
+      employeeId: searchParams.get('prefillEmployeeId') || searchParams.get('employeeId') || '',
+      employeeName: searchParams.get('prefillEmployeeName') || '',
+      cardData: toCardNumberDisplay(searchParams.get('prefillCardData') || ''),
+      cardType: CARD_TYPES.includes(nextCardType) ? nextCardType : emptyAssignmentForm.cardType,
+      notes: searchParams.get('prefillNotes') || '',
+    })
+
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('openCreate')
+    nextParams.delete('prefillEmployeeId')
+    nextParams.delete('prefillEmployeeName')
+    nextParams.delete('prefillCardData')
+    nextParams.delete('prefillCardType')
+    nextParams.delete('prefillNotes')
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
+
   const handleSave = async () => {
     if (!form.employeeId.trim()) { setError('Employee ID is required'); return }
-    if (!form.cardData.trim()) { setError('Card data is required'); return }
+    if (!form.cardData.trim()) { setError('Card number is required'); return }
     setSaving(true)
     setError(null)
     try {
+      const cardInput = form.cardData.trim()
       const payload = {
         employeeId: form.employeeId.trim(),
         employeeName: form.employeeName.trim() || undefined,
-        cardData: form.cardData.trim(),
         cardType: form.cardType,
         notes: form.notes.trim() || undefined,
+        ...buildCardInputPayload(cardInput),
       }
       await enrollmentAPI.assignCard(payload)
       setSuccess('Card assignment created successfully')
@@ -166,8 +325,11 @@ export default function CardAssignments() {
     setEnrolling(true)
     setError(null)
     try {
-      await enrollmentAPI.enrollOnMultipleDevices(selectedDevices, enrollTarget.id)
-      setSuccess(`Enrolled on ${selectedDevices.length} device(s)`)
+      const res = await enrollmentAPI.enrollOnMultipleDevices(selectedDevices.map((deviceId) => parseInt(deviceId, 10)), enrollTarget.id)
+      const enrollmentResult = res.data?.data || {}
+      const successCount = enrollmentResult.successful?.length || 0
+      const failureCount = enrollmentResult.failed?.length || 0
+      setSuccess(`Enrolled on ${successCount}/${selectedDevices.length} device(s)${failureCount > 0 ? ` (${failureCount} failed)` : ''}`)
       setShowEnrollModal(false)
     } catch (e) {
       setError(e.userMessage || 'Enrollment failed')
@@ -179,19 +341,20 @@ export default function CardAssignments() {
   // Card replacement workflow
   const openReplace = (assignment) => {
     setReplaceTarget(assignment)
-    setReplaceForm({ cardData: '', cardType: assignment.cardType || 'CSN', notes: '' })
+    setReplaceForm({ cardData: '', cardType: 'CSN', notes: '' })
     setShowReplaceModal(true)
   }
 
   const handleReplace = async () => {
-    if (!replaceForm.cardData.trim()) { setError('New card data is required'); return }
+    if (!replaceForm.cardData.trim()) { setError('New card number is required'); return }
     setReplacing(true)
     setError(null)
     try {
+      const cardInput = replaceForm.cardData.trim()
       await enrollmentAPI.replaceCard(replaceTarget.id, {
-        cardData: replaceForm.cardData.trim(),
         cardType: replaceForm.cardType,
-        notes: replaceForm.notes.trim() || undefined
+        notes: replaceForm.notes.trim() || undefined,
+        ...buildCardInputPayload(cardInput)
       })
       setSuccess('Card replaced successfully. Old card revoked and new card enrolled on same devices.')
       setShowReplaceModal(false)
@@ -218,6 +381,79 @@ export default function CardAssignments() {
       setHistoryLoading(false)
     }
   }
+
+  useEffect(() => {
+    const openAction = searchParams.get('openAction')
+
+    if (!openAction || !assignmentsLoaded) {
+      return
+    }
+
+    const targetAssignmentId = String(searchParams.get('targetAssignmentId') || '').trim()
+    const targetEmployeeId = String(searchParams.get('targetEmployeeId') || searchParams.get('employeeId') || '').trim()
+    const nextParams = new URLSearchParams(searchParams)
+
+    nextParams.delete('openAction')
+    nextParams.delete('targetAssignmentId')
+    nextParams.delete('targetEmployeeId')
+
+    const clearPendingAction = () => {
+      if (nextParams.toString() !== searchParams.toString()) {
+        setSearchParams(nextParams, { replace: true })
+      }
+    }
+
+    const targetAssignment = (targetAssignmentId
+      ? assignments.find((assignment) => String(assignment.id) === targetAssignmentId)
+      : null) || (targetEmployeeId
+        ? assignments.find((assignment) => String(assignment.employeeId) === targetEmployeeId)
+        : null)
+
+    if (openAction === 'history') {
+      const historyTarget = targetAssignment || (targetEmployeeId ? { employeeId: targetEmployeeId } : null)
+
+      clearPendingAction()
+
+      if (!historyTarget) {
+        setError('Could not locate the requested card history.')
+        return
+      }
+
+      openHistory(historyTarget)
+      return
+    }
+
+    clearPendingAction()
+
+    if (!targetAssignment) {
+      setError('Could not locate the requested card assignment.')
+      return
+    }
+
+    if (openAction === 'enroll') {
+      openEnroll(targetAssignment)
+      return
+    }
+
+    if (openAction === 'replace') {
+      if (targetAssignment.status !== 'active') {
+        setError('Only active card assignments can be replaced.')
+        return
+      }
+
+      openReplace(targetAssignment)
+      return
+    }
+
+    if (openAction === 'revoke') {
+      if (targetAssignment.status === 'revoked') {
+        setError('This card assignment is already revoked.')
+        return
+      }
+
+      setConfirmRevoke(targetAssignment)
+    }
+  }, [assignments, assignmentsLoaded, searchParams, setSearchParams])
 
   // Expand row to see device enrollments
   const toggleExpand = async (a) => {
@@ -251,15 +487,16 @@ export default function CardAssignments() {
   }, [activeTab, blacklistDevice, loadBlacklist])
 
   const handleAddBlacklist = async () => {
-    if (!blacklistForm.cardData.trim()) { setError('Card data is required'); return }
+    if (!blacklistForm.cardData.trim()) { setError('Card number is required'); return }
     if (!blacklistDevice) { setError('Select a device first'); return }
     setBlacklistSaving(true)
     setError(null)
     try {
-      await cardAPI.addToBlacklist(parseInt(blacklistDevice), {
-        cardData: blacklistForm.cardData.trim(),
+      await cardAPI.addToBlacklist(parseInt(blacklistDevice), [{
+        cardId: blacklistForm.cardData.trim(),
+        issueCount: 1,
         reason: blacklistForm.reason.trim() || undefined
-      })
+      }])
       setSuccess('Card added to blacklist')
       setShowBlacklistModal(false)
       setBlacklistForm({ cardData: '', reason: '' })
@@ -274,7 +511,7 @@ export default function CardAssignments() {
   const handleRemoveBlacklist = async (cardData) => {
     if (!window.confirm('Remove this card from the blacklist?')) return
     try {
-      await cardAPI.removeFromBlacklist(parseInt(blacklistDevice), cardData)
+      await cardAPI.removeFromBlacklist(parseInt(blacklistDevice), [{ cardId: cardData, issueCount: 1 }])
       setSuccess('Card removed from blacklist')
       loadBlacklist()
     } catch (e) {
@@ -286,13 +523,19 @@ export default function CardAssignments() {
     setSelectedDevices(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
   }
 
+  const changeAssignmentsPage = (nextPage) => {
+    setPage(nextPage)
+    updateRouteState({ page: nextPage }, { replace: true })
+  }
+
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
   const displayed = searchText
     ? assignments.filter(a =>
         a.employeeId?.toLowerCase().includes(searchText.toLowerCase()) ||
         a.employeeName?.toLowerCase().includes(searchText.toLowerCase()) ||
-        a.cardData?.toLowerCase().includes(searchText.toLowerCase())
+        a.card_data?.toLowerCase().includes(searchText.toLowerCase()) ||
+        decodeHex(a.card_data).includes(searchText)
       )
     : assignments
 
@@ -312,8 +555,25 @@ export default function CardAssignments() {
 
       {/* Tabs */}
       <div className="ca-tabs">
-        <button className={`ca-tab ${activeTab === 'assignments' ? 'active' : ''}`} onClick={() => setActiveTab('assignments')}>💳 Assignments</button>
-        <button className={`ca-tab ${activeTab === 'blacklist' ? 'active' : ''}`} onClick={() => setActiveTab('blacklist')}>🚫 Blacklist</button>
+        <button
+          className={`ca-tab ${activeTab === 'assignments' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('assignments')
+            updateRouteState({ tab: 'assignments' }, { replace: true })
+          }}
+        >
+          💳 Assignments
+        </button>
+        <button
+          className={`ca-tab ${activeTab === 'blacklist' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('blacklist')
+            setPage(1)
+            updateRouteState({ tab: 'blacklist', employeeId: '', status: '', query: '', page: 1 }, { replace: true })
+          }}
+        >
+          🚫 Blacklist
+        </button>
       </div>
 
       {error && (
@@ -356,24 +616,26 @@ export default function CardAssignments() {
             ) : blacklist.length === 0 ? (
               <div className="empty-cell" style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>No blacklisted cards on this device.</div>
             ) : (
-              <table className="data-table">
-                <thead>
-                  <tr><th>Card Data</th><th>Card (Decimal)</th><th>Reason</th><th>Blacklisted At</th><th>Actions</th></tr>
-                </thead>
-                <tbody>
-                  {blacklist.map((b, i) => (
-                    <tr key={b.cardData || i}>
-                      <td><code className="card-hex">{b.cardData?.substring(0, 20)}{b.cardData?.length > 20 ? '…' : ''}</code></td>
-                      <td><code>{decodeHex(b.cardData)}</code></td>
-                      <td>{b.reason || '—'}</td>
-                      <td>{b.blacklistedAt ? new Date(b.blacklistedAt).toLocaleDateString() : b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '—'}</td>
-                      <td>
-                        <button className="btn btn-sm btn-warning" onClick={() => handleRemoveBlacklist(b.cardData)}>Remove</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="data-table-wrapper">
+                <table className="data-table">
+                  <thead>
+                    <tr><th>Stored Value</th><th>Card Number</th><th>Reason</th><th>Blacklisted At</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody>
+                    {blacklist.map((b, i) => (
+                      <tr key={b.cardData || i}>
+                        <td data-label="Stored Value"><code className="card-hex">{b.cardData?.substring(0, 20)}{b.cardData?.length > 20 ? '…' : ''}</code></td>
+                        <td data-label="Card Number"><code>{decodeHex(b.cardData)}</code></td>
+                        <td data-label="Reason">{b.reason || '—'}</td>
+                        <td data-label="Blacklisted At">{b.blacklistedAt ? new Date(b.blacklistedAt).toLocaleDateString() : b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '—'}</td>
+                        <td data-label="Actions">
+                          <button className="btn btn-sm btn-warning" onClick={() => handleRemoveBlacklist(b.cardData)}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
 
@@ -387,8 +649,8 @@ export default function CardAssignments() {
                 </div>
                 <div className="modal-body">
                   <div className="form-field">
-                    <label>Card Data (hex) *</label>
-                    <input className="search-input" value={blacklistForm.cardData} onChange={e => setBlacklistForm(p => ({ ...p, cardData: e.target.value }))} placeholder="Enter card hex data to blacklist" />
+                    <label>Card Number (Decimal) *</label>
+                    <input className="search-input" value={blacklistForm.cardData} onChange={e => setBlacklistForm(p => ({ ...p, cardData: e.target.value }))} placeholder="Enter the card number to blacklist" />
                   </div>
                   <div className="form-field">
                     <label>Reason</label>
@@ -424,7 +686,7 @@ export default function CardAssignments() {
           </div>
           <div className="toolbar-field">
             <label>Quick search</label>
-            <input className="search-input" placeholder="Name / card data…" value={searchText} onChange={e => setSearchText(e.target.value)} />
+            <input className="search-input" placeholder="Name / card number…" value={searchText} onChange={e => setSearchText(e.target.value)} />
           </div>
           <div className="toolbar-actions">
             <button type="submit" className="btn btn-primary">Filter</button>
@@ -441,99 +703,113 @@ export default function CardAssignments() {
           <div className="loading-row"><div className="spinner" /><span>Loading…</span></div>
         ) : (
           <>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>ID</th>
-                  <th>Employee ID</th>
-                  <th>Employee Name</th>
-                  <th>Card Type</th>
-                  <th>Card (Decimal)</th>
-                  <th>Card Data (Hex)</th>
-                  <th>Status</th>
-                  <th>Assigned At</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayed.length === 0 ? (
-                  <tr><td colSpan={10} className="empty-cell">No card assignments found.</td></tr>
-                ) : displayed.map(a => (
-                  <React.Fragment key={a.id}>
-                    <tr>
-                      <td>
-                        <button className="btn btn-sm btn-link" onClick={() => toggleExpand(a)} title="Expand enrollments">
-                          {expandedRow === a.id ? '▾' : '▸'}
-                        </button>
-                      </td>
-                      <td><code>{a.id}</code></td>
-                      <td><a href={`/employee/${a.employeeId}`} className="employee-link"><strong>{a.employeeId}</strong></a></td>
-                      <td>{a.employeeName ? <a href={`/employee/${a.employeeId}`} className="employee-link">{a.employeeName}</a> : '—'}</td>
-                      <td>{a.cardType}</td>
-                      <td><code>{decodeHex(a.cardData)}</code></td>
-                      <td title={a.cardData || ''}><code className="card-hex">{a.cardData?.substring(0, 16)}{a.cardData?.length > 16 ? '…' : ''}</code></td>
-                      <td>
-                        <select
-                          className="select-input compact"
-                          value={a.status}
-                          onChange={e => handleStatusChange(a.id, e.target.value)}
-                        >
-                          {STATUS_OPTIONS.map(s => <option key={s}>{s}</option>)}
-                        </select>
-                      </td>
-                      <td>{a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
-                      <td className="actions-cell">
-                        <button className="btn btn-sm btn-primary" onClick={() => openEnroll(a)} title="Enroll on devices">📟 Enroll</button>
-                        {a.status === 'active' && (
-                          <button className="btn btn-sm btn-warning" onClick={() => openReplace(a)} title="Replace with new card">🔄 Replace</button>
-                        )}
-                        <button className="btn btn-sm btn-secondary" onClick={() => openHistory(a)} title="Card history for this employee">📜 History</button>
-                        {a.status !== 'revoked' && (
-                          <button className="btn btn-sm btn-danger" onClick={() => setConfirmRevoke(a)}>Revoke</button>
-                        )}
-                      </td>
-                    </tr>
-                    {expandedRow === a.id && (
-                      <tr key={`exp-${a.id}`} className="expanded-row">
-                        <td colSpan={10}>
-                          <div className="enrollment-detail">
-                            <strong>Device Enrollments:</strong>
-                            {!rowEnrollments[a.id] ? (
-                              <span className="dim"> Loading…</span>
-                            ) : rowEnrollments[a.id].length === 0 ? (
-                              <span className="dim"> Not enrolled on any device.</span>
-                            ) : (
-                              <table className="data-table compact inner-table">
-                                <thead><tr><th>Enrollment ID</th><th>Device ID</th><th>Device User ID</th><th>Status</th><th>Enrolled At</th></tr></thead>
-                                <tbody>
-                                  {rowEnrollments[a.id].map(e => (
-                                    <tr key={e.id}>
-                                      <td><code>{e.id}</code></td>
-                                      <td><code>{e.deviceId}</code></td>
-                                      <td><code>{e.deviceUserId}</code></td>
-                                      <td>{statusBadge(e.status)}</td>
-                                      <td>{e.enrolledAt ? new Date(e.enrolledAt).toLocaleDateString() : '—'}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            )}
-                          </div>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th></th>
+                    <th>ID</th>
+                    <th>Employee ID</th>
+                    <th>Employee Name</th>
+                    <th>Card Number</th>
+                    <th>Stored Hex</th>
+                    <th>Status</th>
+                    <th>Assigned At</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayed.length === 0 ? (
+                    <tr><td colSpan={9} className="empty-cell">No card assignments found.</td></tr>
+                  ) : displayed.map(a => (
+                    <React.Fragment key={a.id}>
+                      <tr>
+                        <td data-label="Details">
+                          <button className="btn btn-sm btn-link" onClick={() => toggleExpand(a)} title="Expand enrollments">
+                            {expandedRow === a.id ? '▾' : '▸'}
+                          </button>
+                        </td>
+                        <td data-label="ID"><code>{a.id}</code></td>
+                        <td data-label="Employee ID">
+                          {a.employeeName ? (
+                            <a href={`/employee/${a.employeeId}`} className="employee-link"><strong>{a.employeeId}</strong></a>
+                          ) : (
+                            <strong>{a.employeeId}</strong>
+                          )}
+                        </td>
+                        <td data-label="Employee Name">
+                          {a.employeeName ? (
+                            <a href={`/employee/${a.employeeId}`} className="employee-link">{a.employeeName}</a>
+                          ) : (
+                            <span className="badge badge-missing-employee">Employee record missing</span>
+                          )}
+                        </td>
+                        <td data-label="Card Number"><code>{decodeHex(a.card_data)}</code></td>
+                          <td data-label="Stored Hex" title={a.card_data || ''}><code className="card-hex">{a.card_data?.substring(0, 16)}{a.card_data?.length > 16 ? '…' : ''}</code></td>
+                        <td data-label="Status">
+                          <select
+                            className="select-input compact"
+                            value={a.status}
+                            onChange={e => handleStatusChange(a.id, e.target.value)}
+                          >
+                            {STATUS_OPTIONS.map(s => <option key={s}>{s}</option>)}
+                          </select>
+                        </td>
+                        <td data-label="Assigned At">{a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
+                        <td data-label="Actions" className="actions-cell">
+                          <button className="btn btn-sm btn-primary" onClick={() => openEnroll(a)} title="Enroll on devices">📟 Enroll</button>
+                          {a.status === 'active' && (
+                            <button className="btn btn-sm btn-warning" onClick={() => openReplace(a)} title="Replace with new card">🔄 Replace</button>
+                          )}
+                          <button className="btn btn-sm btn-secondary" onClick={() => openHistory(a)} title="Card history for this employee">📜 History</button>
+                          {a.status !== 'revoked' && (
+                            <button className="btn btn-sm btn-danger" onClick={() => setConfirmRevoke(a)}>Revoke</button>
+                          )}
                         </td>
                       </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
+                      {expandedRow === a.id && (
+                        <tr key={`exp-${a.id}`} className="expanded-row">
+                          <td colSpan={9}>
+                            <div className="enrollment-detail">
+                              <strong>Device Enrollments:</strong>
+                              {!rowEnrollments[a.id] ? (
+                                <span className="dim"> Loading…</span>
+                              ) : rowEnrollments[a.id].length === 0 ? (
+                                <span className="dim"> Not enrolled on any device.</span>
+                              ) : (
+                                <div className="data-table-wrapper inner-table-wrapper">
+                                  <table className="data-table compact inner-table">
+                                    <thead><tr><th>Enrollment ID</th><th>Device ID</th><th>Device User ID</th><th>Status</th><th>Enrolled At</th></tr></thead>
+                                    <tbody>
+                                      {rowEnrollments[a.id].map(e => (
+                                        <tr key={e.id}>
+                                          <td data-label="Enrollment ID"><code>{e.id}</code></td>
+                                          <td data-label="Device ID"><code>{e.deviceId}</code></td>
+                                          <td data-label="Device User ID"><code>{e.deviceUserId}</code></td>
+                                          <td data-label="Status">{statusBadge(e.status)}</td>
+                                          <td data-label="Enrolled At">{e.enrolledAt ? new Date(e.enrolledAt).toLocaleDateString() : '—'}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (
               <div className="pagination">
-                <button className="btn btn-sm btn-secondary" disabled={page === 1} onClick={() => setPage(p => p - 1)}>‹ Prev</button>
+                <button className="btn btn-sm btn-secondary" disabled={page === 1} onClick={() => changeAssignmentsPage(page - 1)}>‹ Prev</button>
                 <span>Page {page} / {totalPages} ({totalCount} assignments)</span>
-                <button className="btn btn-sm btn-secondary" disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next ›</button>
+                <button className="btn btn-sm btn-secondary" disabled={page === totalPages} onClick={() => changeAssignmentsPage(page + 1)}>Next ›</button>
               </div>
             )}
           </>
@@ -561,8 +837,8 @@ export default function CardAssignments() {
               </div>
               <div className="form-row">
                 <div className="form-field">
-                  <label>Card Data (hex) *</label>
-                  <input className="search-input" value={form.cardData} onChange={e => setForm(p => ({ ...p, cardData: e.target.value }))} placeholder="32-byte hex string" />
+                  <label>Card Number (Decimal) *</label>
+                  <input className="search-input" value={form.cardData} onChange={e => setForm(p => ({ ...p, cardData: e.target.value }))} placeholder="e.g. 30069273892" />
                 </div>
                 <div className="form-field">
                   <label>Card Type</label>
@@ -593,7 +869,7 @@ export default function CardAssignments() {
               <button className="btn-close" onClick={() => setShowEnrollModal(false)}>✕</button>
             </div>
             <div className="modal-body">
-              <p className="hint-text">Assignment for <strong>{enrollTarget.employeeId}</strong> · {enrollTarget.cardType}</p>
+              <p className="hint-text">Assignment for <strong>{enrollTarget.employeeId}</strong> · CSN</p>
               <p className="hint-text mb">Select devices to enroll this card assignment on:</p>
               <div className="device-checklist">
                 {devices.map(d => (
@@ -651,12 +927,12 @@ export default function CardAssignments() {
                 The old card will be revoked and the new card will be enrolled on the same devices.
               </p>
               <div className="detail-grid" style={{ marginBottom: '1rem' }}>
-                <div className="detail-item"><span className="label">Old Card</span><span><code>{replaceTarget.cardData?.substring(0, 16)}…</code></span></div>
+                <div className="detail-item"><span className="label">Old Card Number</span><span><code title={replaceTarget.card_data || ''}>{decodeHex(replaceTarget.card_data)}</code></span></div>
                 <div className="detail-item"><span className="label">Old Status</span><span className="badge badge-active">{replaceTarget.status}</span></div>
               </div>
               <div className="form-field">
-                <label>New Card Data (hex) *</label>
-                <input className="search-input" value={replaceForm.cardData} onChange={e => setReplaceForm(p => ({ ...p, cardData: e.target.value }))} placeholder="Scan or paste new card hex data" />
+                <label>New Card Number (Decimal) *</label>
+                <input className="search-input" value={replaceForm.cardData} onChange={e => setReplaceForm(p => ({ ...p, cardData: e.target.value }))} placeholder="Enter the replacement card number" />
               </div>
               <div className="form-row">
                 <div className="form-field">
@@ -695,24 +971,25 @@ export default function CardAssignments() {
               ) : cardHistory.length === 0 ? (
                 <p className="hint-text">No card history found for this employee.</p>
               ) : (
-                <table className="data-table compact">
-                  <thead>
-                    <tr><th>ID</th><th>Card Type</th><th>Card Data</th><th>Status</th><th>Assigned</th><th>Revoked</th><th>Notes</th></tr>
-                  </thead>
-                  <tbody>
-                    {cardHistory.map(h => (
-                      <tr key={h.id}>
-                        <td><code>{h.id}</code></td>
-                        <td>{h.cardType}</td>
-                        <td><code className="card-hex">{h.cardData?.substring(0, 16)}{h.cardData?.length > 16 ? '…' : ''}</code></td>
-                        <td>{statusBadge(h.status)}</td>
-                        <td>{h.assignedAt ? new Date(h.assignedAt).toLocaleDateString() : '—'}</td>
-                        <td>{h.revokedAt ? new Date(h.revokedAt).toLocaleDateString() : '—'}</td>
-                        <td className="hint">{h.notes || '—'}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <div className="data-table-wrapper">
+                  <table className="data-table compact">
+                    <thead>
+                      <tr><th>ID</th><th>Card Number</th><th>Status</th><th>Assigned</th><th>Revoked</th><th>Notes</th></tr>
+                    </thead>
+                    <tbody>
+                      {cardHistory.map(h => (
+                        <tr key={h.id}>
+                          <td data-label="ID"><code>{h.id}</code></td>
+                          <td data-label="Card Number"><code title={h.card_data || ''}>{decodeHex(h.card_data)}</code></td>
+                          <td data-label="Status">{statusBadge(h.status)}</td>
+                          <td data-label="Assigned">{h.assignedAt ? new Date(h.assignedAt).toLocaleDateString() : '—'}</td>
+                          <td data-label="Revoked">{h.revokedAt ? new Date(h.revokedAt).toLocaleDateString() : '—'}</td>
+                          <td data-label="Notes" className="hint">{h.notes || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           </div>

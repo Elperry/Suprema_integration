@@ -277,15 +277,19 @@
 }
 
 .form-group input[type="text"],
-.form-group input[type="number"] {
+.form-group input[type="number"],
+.form-group select {
   padding: 0.75rem;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   font-size: 0.95rem;
   transition: border-color 0.2s;
+  background: var(--card-bg);
+  color: var(--text-primary);
 }
 
-.form-group input:focus {
+.form-group input:focus,
+.form-group select:focus {
   outline: none;
   border-color: var(--primary-color);
 }
@@ -294,6 +298,66 @@
   width: 18px;
   height: 18px;
   cursor: pointer;
+}
+
+.settings-subsection {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  background: var(--bg-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.settings-subsection h4 {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.settings-help {
+  margin: -0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.settings-grid.two-col {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+
+.runtime-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem;
+  border-radius: 6px;
+  background: var(--bg-color);
+}
+
+.runtime-item span {
+  color: var(--text-secondary);
+}
+
+.runtime-item strong {
+  color: var(--text-primary);
 }
 
 /* Sync Status Grid */

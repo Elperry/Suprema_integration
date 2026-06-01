@@ -44,6 +44,7 @@ export default function Events() {
     { key: 'device', label: 'Device', default: true },
     { key: 'type', label: 'Type', default: true },
     { key: 'userId', label: 'User ID', default: true },
+    { key: 'userName', label: 'User Name', default: true },
     { key: 'eventCode', label: 'Event Code', default: false },
     { key: 'description', label: 'Description', default: true },
     { key: 'result', label: 'Result', default: true },
@@ -434,7 +435,7 @@ export default function Events() {
   }
 
   return (
-    <div className="page">
+    <div className="page events-page">
       <h2>📋 Events</h2>
       
       {/* Sync Controls */}
@@ -744,12 +745,13 @@ export default function Events() {
         </div>
         
         <div className="table-responsive">
-          <table className="table">
+          <table className="table events-table main-events-table">
             <thead>
               <tr>
                 {isColVisible('device') && <th>Device</th>}
                 {isColVisible('type') && <th>Type</th>}
                 {isColVisible('userId') && <th>User ID</th>}
+                {isColVisible('userName') && <th>User Name</th>}
                 {isColVisible('eventCode') && <th>Event Code</th>}
                 {isColVisible('description') && <th>Description</th>}
                 {isColVisible('result') && <th>Result</th>}
@@ -763,7 +765,7 @@ export default function Events() {
                   <SkeletonTable rows={10} cols={visibleCols.length} />
                 ) : (
                   <tr>
-                    <td colSpan={visibleCols.length} className="text-center">
+                    <td colSpan={visibleCols.length} className="text-center empty-table-cell">
                       📭 No events found. Click "Sync All Devices" to fetch events.
                     </td>
                   </tr>
@@ -771,14 +773,15 @@ export default function Events() {
               ) : (
                 events.map((e, i) => (
                   <tr key={e.id || i}>
-                    {isColVisible('device') && <td><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>}
-                    {isColVisible('type') && <td>{getEventTypeBadge(e.eventType)}</td>}
-                    {isColVisible('userId') && <td>{e.userId || 'N/A'}</td>}
-                    {isColVisible('eventCode') && <td><code>0x{(e.eventCode || 0).toString(16).toUpperCase().padStart(4, '0')}</code></td>}
-                    {isColVisible('description') && <td className="desc-cell">{e.description || '-'}</td>}
-                    {isColVisible('result') && <td>{getAuthResultBadge(e.authResult)}</td>}
-                    {isColVisible('door') && <td>{e.doorId !== null ? e.doorId : '-'}</td>}
-                    {isColVisible('timestamp') && <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>}
+                    {isColVisible('device') && <td data-label="Device"><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>}
+                    {isColVisible('type') && <td data-label="Type">{getEventTypeBadge(e.eventType)}</td>}
+                    {isColVisible('userId') && <td data-label="User ID">{e.userId || 'N/A'}</td>}
+                    {isColVisible('userName') && <td data-label="User Name">{e.userName || '-'}</td>}
+                    {isColVisible('eventCode') && <td data-label="Event Code"><code>0x{(e.eventCode || 0).toString(16).toUpperCase().padStart(4, '0')}</code></td>}
+                    {isColVisible('description') && <td data-label="Description" className="desc-cell">{e.description || '-'}</td>}
+                    {isColVisible('result') && <td data-label="Result">{getAuthResultBadge(e.authResult)}</td>}
+                    {isColVisible('door') && <td data-label="Door">{e.doorId !== null ? e.doorId : '-'}</td>}
+                    {isColVisible('timestamp') && <td data-label="Timestamp" className="ts-cell">{formatTimestamp(e.timestamp)}</td>}
                   </tr>
                 ))
               )}
@@ -835,7 +838,7 @@ export default function Events() {
             </div>
           </div>
           <div className="table-responsive" style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            <table className="table">
+            <table className="table events-table live-events-table">
               <thead>
                 <tr>
                   <th>Device</th>
@@ -848,16 +851,16 @@ export default function Events() {
               </thead>
               <tbody>
                 {liveEvents.length === 0 ? (
-                  <tr><td colSpan="6" className="text-center">Waiting for events...</td></tr>
+                  <tr><td colSpan="6" className="text-center empty-table-cell">Waiting for events...</td></tr>
                 ) : (
                   liveEvents.map((e, i) => (
                     <tr key={`live-${i}`} style={{ animation: 'fadeIn 0.3s' }}>
-                      <td><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>
-                      <td>{getEventTypeBadge(e.eventType)}</td>
-                      <td>{e.userId || 'N/A'}</td>
-                      <td className="desc-cell">{e.description || '-'}</td>
-                      <td>{getAuthResultBadge(e.authResult)}</td>
-                      <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>
+                      <td data-label="Device"><span className="device-badge">{getDeviceName(e.deviceId)}</span></td>
+                      <td data-label="Type">{getEventTypeBadge(e.eventType)}</td>
+                      <td data-label="User">{e.userId || 'N/A'}</td>
+                      <td data-label="Description" className="desc-cell">{e.description || '-'}</td>
+                      <td data-label="Result">{getAuthResultBadge(e.authResult)}</td>
+                      <td data-label="Time" className="ts-cell">{formatTimestamp(e.timestamp)}</td>
                     </tr>
                   ))
                 )}
@@ -1056,6 +1059,12 @@ export default function Events() {
           width: 100%;
           border-collapse: collapse;
         }
+        .events-page .events-table.main-events-table {
+          min-width: 860px;
+        }
+        .events-page .events-table.live-events-table {
+          min-width: 720px;
+        }
         .table th {
           padding: 12px;
           text-align: left;
@@ -1079,6 +1088,61 @@ export default function Events() {
         }
         .table-responsive {
           overflow-x: auto;
+        }
+        @media (max-width: 640px) {
+          .events-page .table-responsive {
+            overflow-x: visible !important;
+          }
+          .events-page .events-table {
+            min-width: 0;
+          }
+          .events-page .events-table thead {
+            display: none;
+          }
+          .events-page .events-table tbody {
+            display: grid;
+            gap: 12px;
+          }
+          .events-page .events-table tbody tr {
+            display: block;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            background: #fff !important;
+            padding: 12px;
+          }
+          .events-page .events-table tbody td {
+            display: grid;
+            grid-template-columns: minmax(88px, 110px) minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f5f9;
+            white-space: normal;
+            word-break: break-word;
+          }
+          .events-page .events-table tbody td::before {
+            content: attr(data-label);
+            font-weight: 600;
+            color: #666;
+          }
+          .events-page .events-table tbody td:last-child {
+            border-bottom: none;
+          }
+          .events-page .events-table td[colspan] {
+            display: block;
+          }
+          .events-page .events-table td[colspan]::before {
+            display: none;
+          }
+          .events-page .desc-cell,
+          .events-page .ts-cell {
+            max-width: none;
+            white-space: normal;
+          }
+          .events-page code {
+            white-space: normal;
+            word-break: break-all;
+          }
         }
         @keyframes fadeIn {
           from { opacity: 0; background: #fffde7; }

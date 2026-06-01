@@ -156,59 +156,61 @@ export default function AuditLog() {
         <div className="loading-row"><div className="spinner" /><span>Loading audit logs…</span></div>
       ) : (
         <div className="card">
-          <table className="data-table audit-table">
-            <thead>
-              <tr>
-                <th>Timestamp</th>
-                <th>Action</th>
-                <th>Category</th>
-                <th>Target</th>
-                <th>Status</th>
-                <th>Duration</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 ? (
-                <tr><td colSpan={7} className="empty-cell">
-                  <div style={{ padding: '2rem', textAlign: 'center' }}>
-                    <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📋</div>
-                    <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>No audit log entries found</div>
-                    <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                      Audit entries are created automatically when sync, enrollment, export, or device operations are performed.
-                      Try adjusting your filters or perform an operation to generate log entries.
-                    </div>
-                  </div>
-                </td></tr>
-              ) : logs.map((entry) => (
-                <tr key={entry.id}>
-                  <td className="nowrap">{formatDateTime(entry.createdAt)}</td>
-                  <td><code>{entry.action}</code></td>
-                  <td><span className="category-badge">{entry.category}</span></td>
-                  <td>
-                    {entry.targetType ? (
-                      <span>{entry.targetType}{entry.targetId ? ` #${entry.targetId}` : ''}</span>
-                    ) : '—'}
-                  </td>
-                  <td>
-                    <span className={`status-pill ${entry.status === 'success' ? 'online' : entry.status === 'failure' ? 'offline' : 'warning'}`}>
-                      {entry.status}
-                    </span>
-                  </td>
-                  <td>{entry.duration != null ? `${entry.duration}ms` : '—'}</td>
-                  <td className="detail-cell">
-                    {entry.errorMessage ? (
-                      <span className="error-text" title={entry.errorMessage}>{entry.errorMessage.slice(0, 80)}{entry.errorMessage.length > 80 ? '…' : ''}</span>
-                    ) : entry.details ? (
-                      <span className="detail-text" title={JSON.stringify(entry.details, null, 2)}>
-                        {JSON.stringify(entry.details).slice(0, 60)}{JSON.stringify(entry.details).length > 60 ? '…' : ''}
-                      </span>
-                    ) : '—'}
-                  </td>
+          <div className="audit-table-wrapper">
+            <table className="data-table audit-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Action</th>
+                  <th>Category</th>
+                  <th>Target</th>
+                  <th>Status</th>
+                  <th>Duration</th>
+                  <th>Details</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {logs.length === 0 ? (
+                  <tr><td colSpan={7} className="empty-cell">
+                    <div style={{ padding: '2rem', textAlign: 'center' }}>
+                      <div style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>📋</div>
+                      <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>No audit log entries found</div>
+                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                        Audit entries are created automatically when sync, enrollment, export, or device operations are performed.
+                        Try adjusting your filters or perform an operation to generate log entries.
+                      </div>
+                    </div>
+                  </td></tr>
+                ) : logs.map((entry) => (
+                  <tr key={entry.id}>
+                    <td data-label="Timestamp" className="nowrap">{formatDateTime(entry.createdAt)}</td>
+                    <td data-label="Action"><code>{entry.action}</code></td>
+                    <td data-label="Category"><span className="category-badge">{entry.category}</span></td>
+                    <td data-label="Target">
+                      {entry.targetType ? (
+                        <span>{entry.targetType}{entry.targetId ? ` #${entry.targetId}` : ''}</span>
+                      ) : '—'}
+                    </td>
+                    <td data-label="Status">
+                      <span className={`status-pill ${entry.status === 'success' ? 'online' : entry.status === 'failure' ? 'offline' : 'warning'}`}>
+                        {entry.status}
+                      </span>
+                    </td>
+                    <td data-label="Duration">{entry.duration != null ? `${entry.duration}ms` : '—'}</td>
+                    <td data-label="Details" className="detail-cell">
+                      {entry.errorMessage ? (
+                        <span className="error-text" title={entry.errorMessage}>{entry.errorMessage.slice(0, 80)}{entry.errorMessage.length > 80 ? '…' : ''}</span>
+                      ) : entry.details ? (
+                        <span className="detail-text" title={JSON.stringify(entry.details, null, 2)}>
+                          {JSON.stringify(entry.details).slice(0, 60)}{JSON.stringify(entry.details).length > 60 ? '…' : ''}
+                        </span>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           {pagination.totalPages > 1 && (
             <div className="pagination-row">

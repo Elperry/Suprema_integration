@@ -44,6 +44,8 @@ export default (services) => {
                 );
             }
 
+            const withCards = employees.filter((employee) => Boolean(employee.has_card || employee.card)).length;
+
             // Pagination
             const total = employees.length;
             const page = parseInt(req.query.page) || 0;
@@ -58,6 +60,7 @@ export default (services) => {
                 success: true,
                 count: employees.length,
                 total,
+                withCards,
                 page: page || 1,
                 totalPages: limit > 0 ? Math.ceil(total / limit) : 1,
                 data: employees

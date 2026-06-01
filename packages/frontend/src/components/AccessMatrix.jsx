@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { deviceAPI, doorAPI, userAPI, employeeAPI, enrollmentAPI } from '../services/api'
 import { ErrorBanner } from './shared'
+import { formatDeviceOptionLabel, getDeviceSelectGroups, isDeviceOnline } from '../utils/deviceOptions'
 import './AccessMatrix.css'
 
 export default function AccessMatrix() {
@@ -26,6 +27,8 @@ export default function AccessMatrix() {
   useEffect(() => {
     loadDevices()
   }, [])
+
+  const { onlineDevices, offlineDevices, hasOnlineDevices } = getDeviceSelectGroups(devices)
 
   const loadDevices = async () => {
     try {
@@ -87,6 +90,12 @@ export default function AccessMatrix() {
       setLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (selectedDevice && !onlineDevices.some((device) => String(device.id) === String(selectedDevice))) {
+      setSelectedDevice('')
+    }
+  }, [onlineDevices, selectedDevice])
 
   useEffect(() => {
     if (selectedDevice) {
@@ -204,7 +213,6 @@ export default function AccessMatrix() {
     )
   })
 
-  const connectedDevices = devices.filter(d => d.status === 'connected')
   const selectedDeviceObj = devices.find(d => String(d.id) === String(selectedDevice))
 
   return (
@@ -222,12 +230,26 @@ export default function AccessMatrix() {
               onChange={e => setSelectedDevice(e.target.value)}
               className="form-control"
             >
-              <option value="">-- Select device --</option>
-              {devices.map(d => (
-                <option key={d.id} value={d.id} disabled={d.status !== 'connected'}>
-                  {d.status === 'connected' ? '🟢' : '🔴'} {d.name} ({d.ip})
-                </option>
-              ))}
+              <option value="">-- Select an online device --</option>
+              {!hasOnlineDevices && <option value="" disabled>No online devices available</option>}
+              {hasOnlineDevices && (
+                <optgroup label="Online Devices">
+                  {onlineDevices.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {formatDeviceOptionLabel(d)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {offlineDevices.length > 0 && (
+                <optgroup label="Registered but Offline">
+                  {offlineDevices.map(d => (
+                    <option key={d.id} value={d.id} disabled>
+                      {formatDeviceOptionLabel(d)}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           </div>
 
@@ -274,7 +296,7 @@ export default function AccessMatrix() {
         <div className="matrix-empty">
           <div className="matrix-empty-icon">🔐</div>
           <h3>Select a Device</h3>
-          <p>Choose a connected device to view and manage employee access permissions.</p>
+          <p>{hasOnlineDevices ? 'Choose an online device to view and manage employee access permissions.' : 'No online devices available. Registered offline devices are shown in the selector for reference.'}</p>
         </div>
       ) : loading ? (
         <div className="loading-state">

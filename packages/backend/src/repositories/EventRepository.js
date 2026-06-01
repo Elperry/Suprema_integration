@@ -100,6 +100,36 @@ export class EventRepository extends BaseRepository {
     }
 
     /**
+     * Find the latest persisted event for every device in a single query.
+     * Returns a Map<deviceId, { supremaEventId, timestamp }> for O(1) lookup
+     * in health-status reporting — avoids N per-device round-trips.
+     *
+     * @param {number[]} [deviceIds] - Optional whitelist; omit to fetch all devices.
+     * @returns {Promise<Map<number, { supremaEventId: BigInt, timestamp: Date }>>}
+     */
+    async findLatestPerDevice(deviceIds = null) {
+        // GROUP BY deviceId, pick the row with the highest supremaEventId.
+        // Prisma doesn't support window functions natively, so we use a raw
+        // aggregate + a second targeted lookup only for the matched IDs.
+        const where = deviceIds?.length ? { deviceId: { in: deviceIds } } : undefined;
+
+        const maxRows = await this.prisma.event.groupBy({
+            by: ['deviceId'],
+            ...(where ? { where } : {}),
+            _max: { supremaEventId: true, timestamp: true },
+        });
+
+        const result = new Map();
+        for (const row of maxRows) {
+            result.set(row.deviceId, {
+                supremaEventId: row._max.supremaEventId,
+                timestamp: row._max.timestamp,
+            });
+        }
+        return result;
+    }
+
+    /**
      * Find authentication events
      * 
      * @param {Object} [options] - Query options

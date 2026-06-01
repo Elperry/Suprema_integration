@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import api, { deviceAPI } from '../services/api';
+import api, { deviceAPI, healthAPI } from '../services/api';
 import ErrorBanner from './ErrorBanner';
+import { deriveHealthSummary } from '../utils/healthStatus';
+import { DEVICE_OFFLINE_MESSAGE, GATEWAY_OFFLINE_MESSAGE, isGatewayUnavailableMessage } from '../utils/gatewayErrors';
 import './DeviceUsers.css';
 
 const normalizeDevice = (device) => ({
@@ -64,16 +66,74 @@ const base64ToBytes = (value) => {
     return Array.from(decoded, (char) => char.charCodeAt(0));
 };
 
-const parseCardNumber = (cardData) => {
+const bytesToHex = (bytes) => bytes
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+
+const normalizeCardHex = (cardData) => {
     if (!cardData) {
+        return '';
+    }
+
+    if (typeof cardData === 'string') {
+        const rawValue = String(cardData).trim();
+
+        if (!rawValue) {
+            return '';
+        }
+
+        const compact = rawValue.replace(/\s+/g, '');
+
+        if (/^[0-9A-Fa-f]+$/.test(compact) && compact.length % 2 === 0) {
+            return compact.toUpperCase();
+        }
+
+        try {
+            return bytesToHex(base64ToBytes(rawValue));
+        } catch (_) {
+            return compact;
+        }
+    }
+
+    if (Array.isArray(cardData)) {
+        return bytesToHex(cardData);
+    }
+
+    if (Array.isArray(cardData?.data)) {
+        return bytesToHex(cardData.data);
+    }
+
+    return '';
+};
+
+const extractCardDetails = (card) => {
+    const directCard = card || {};
+    const csnData = directCard.csncarddata
+        || directCard.csnCardData
+        || directCard.csnCarddata
+        || directCard.cardData?.csnCardData
+        || directCard.cardData?.CSNCardData
+        || directCard;
+
+    return {
+        hex: normalizeCardHex(csnData.data ?? directCard.data ?? directCard.cardData ?? ''),
+        size: csnData.size ?? directCard.size ?? null,
+        type: csnData.type ?? directCard.cardType ?? directCard.type ?? 'CSN',
+    };
+};
+
+const getUserCards = (user) => user.cards || user.cardsList || [];
+
+const parseCardNumber = (cardData) => {
+    const rawValue = normalizeCardHex(cardData);
+
+    if (!rawValue) {
         return 'N/A';
     }
 
-    const rawValue = String(cardData).trim();
-
     try {
-        const isHex = /^[0-9A-Fa-f]+$/.test(rawValue) && rawValue.length % 2 === 0;
-        const bytes = isHex ? hexToBytes(rawValue) : base64ToBytes(rawValue);
+        const bytes = hexToBytes(rawValue);
         let cardNumber = 0n;
         let started = false;
 
@@ -110,6 +170,10 @@ const buildDeviceQuery = (device) => {
 const describeRequestError = (error, fallbackPrefix) => {
     const rawMessage = error?.response?.data?.message || error?.message || 'Unknown error';
 
+    if (isGatewayUnavailableMessage(rawMessage)) {
+        return GATEWAY_OFFLINE_MESSAGE;
+    }
+
     if (/timeout/i.test(rawMessage)) {
         return `${fallbackPrefix}: the device gateway timed out while talking to the device.`;
     }
@@ -131,6 +195,8 @@ const DeviceUsers = () => {
     const [error, setError] = useState(null);
     const [expandedUser, setExpandedUser] = useState(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [showCardsOnly, setShowCardsOnly] = useState(false);
+    const [copiedCardKey, setCopiedCardKey] = useState(null);
 
     useEffect(() => {
         loadDevices();
@@ -141,16 +207,23 @@ const DeviceUsers = () => {
         setError(null);
 
         try {
-            const [deviceResponse, connectedResponse] = await Promise.all([
+            const [deviceResponse, healthResponse] = await Promise.all([
                 deviceAPI.getAll(),
-                api.get('/devices/direct/connected').catch(() => null),
+                healthAPI.check(),
             ]);
 
             const dbDevices = (deviceResponse.data?.data || []).map(normalizeDevice);
+            const healthSummary = deriveHealthSummary(healthResponse);
+            const connectedResponse = healthSummary.isGatewayConnected
+                ? await api.get('/devices/direct/connected').catch(() => null)
+                : null;
             const connectedDevices = (connectedResponse?.data?.data || []).map(normalizeDevice);
             const mergedDevices = mergeDevices(dbDevices, connectedDevices);
 
             setDevices(mergedDevices);
+            if (!healthSummary.isGatewayConnected) {
+                setError(GATEWAY_OFFLINE_MESSAGE);
+            }
 
             if (selectedDevice) {
                 const refreshedSelection = mergedDevices.find((device) => device.id === selectedDevice.id)
@@ -173,6 +246,13 @@ const DeviceUsers = () => {
         setUsers([]);
         setExpandedUser(null);
 
+        if (device.status !== 'connected') {
+            setUserLoadFailed(true);
+            setError(`${device.name || 'Selected device'} is offline. ${DEVICE_OFFLINE_MESSAGE}`);
+            setLoadingUsers(false);
+            return;
+        }
+
         try {
             const response = await api.get('/devices/direct/users-cards', {
                 params: buildDeviceQuery(device),
@@ -194,11 +274,38 @@ const DeviceUsers = () => {
         setExpandedUser(expandedUser === userId ? null : userId);
     };
 
+    const handleCopyValue = async (value, cardKey, label) => {
+        if (!value || value === 'N/A') {
+            return;
+        }
+
+        try {
+            if (!navigator?.clipboard?.writeText) {
+                throw new Error('Clipboard is not available in this browser');
+            }
+
+            await navigator.clipboard.writeText(String(value));
+            setCopiedCardKey(cardKey);
+            window.setTimeout(() => {
+                setCopiedCardKey((currentKey) => (currentKey === cardKey ? null : currentKey));
+            }, 1600);
+        } catch (copyError) {
+            setError(`Failed to copy ${label}: ${copyError.message}`);
+        }
+    };
+
     const filteredUsers = users.filter((user) => {
+        const userCards = getUserCards(user);
+
+        if (showCardsOnly && userCards.length === 0) {
+            return false;
+        }
+
         const term = searchTerm.toLowerCase();
-        const matchesCard = (user.cards || []).some((card) => {
-            const rawCard = String(card.data || '').toLowerCase();
-            const decimalCard = parseCardNumber(card.data).toLowerCase();
+        const matchesCard = userCards.some((card) => {
+            const cardDetails = extractCardDetails(card);
+            const rawCard = cardDetails.hex.toLowerCase();
+            const decimalCard = parseCardNumber(cardDetails.hex).toLowerCase();
             return rawCard.includes(term) || decimalCard.includes(term);
         });
 
@@ -208,6 +315,9 @@ const DeviceUsers = () => {
             || matchesCard
         );
     });
+
+    const usersWithCardsCount = users.filter((user) => getUserCards(user).length > 0).length;
+    const totalCardsCount = users.reduce((sum, user) => sum + getUserCards(user).length, 0);
 
     return (
         <div className="device-users-container">
@@ -235,7 +345,7 @@ const DeviceUsers = () => {
                         {devices.map((device) => (
                             <div
                                 key={`${device.id ?? 'gateway'}-${endpointKey(device)}`}
-                                className={`device-card ${selectedDevice?.id === device.id && endpointKey(selectedDevice) === endpointKey(device) ? 'selected' : ''}`}
+                                className={`device-card ${selectedDevice?.id === device.id && endpointKey(selectedDevice) === endpointKey(device) ? 'selected' : ''} ${device.status !== 'connected' ? 'disabled' : ''}`}
                                 onClick={() => loadUsersFromDevice(device)}
                             >
                                 <div className="device-card-header">
@@ -257,14 +367,41 @@ const DeviceUsers = () => {
                     {selectedDevice ? (
                         <>
                             <div className="users-panel-header">
-                                <h3>Users on {selectedDevice.name}</h3>
-                                <div className="users-search">
-                                    <input
-                                        type="text"
-                                        placeholder="Search users or cards..."
-                                        value={searchTerm}
-                                        onChange={(event) => setSearchTerm(event.target.value)}
-                                    />
+                                <div>
+                                    <h3>Users on {selectedDevice.name}</h3>
+                                    <div className="users-device-meta">
+                                        <span className={`device-status-pill ${selectedDevice.status || 'disconnected'}`}>
+                                            {selectedDevice.status || 'disconnected'}
+                                        </span>
+                                        <span>{selectedDevice.ip}:{selectedDevice.port}</span>
+                                        <span>{filteredUsers.length} shown</span>
+                                    </div>
+                                </div>
+                                <div className="users-tools">
+                                    <label className={`users-filter-toggle ${showCardsOnly ? 'active' : ''}`}>
+                                        <input
+                                            type="checkbox"
+                                            checked={showCardsOnly}
+                                            onChange={(event) => setShowCardsOnly(event.target.checked)}
+                                        />
+                                        Cards only
+                                    </label>
+                                    <button
+                                        type="button"
+                                        className="btn-refresh-secondary"
+                                        onClick={() => loadUsersFromDevice(selectedDevice)}
+                                        disabled={loadingUsers}
+                                    >
+                                        {loadingUsers ? 'Refreshing...' : 'Refresh Selected'}
+                                    </button>
+                                    <div className="users-search">
+                                        <input
+                                            type="text"
+                                            placeholder="Search users or cards..."
+                                            value={searchTerm}
+                                            onChange={(event) => setSearchTerm(event.target.value)}
+                                        />
+                                    </div>
                                 </div>
                             </div>
 
@@ -285,15 +422,11 @@ const DeviceUsers = () => {
                                             <span className="summary-label">Total Users</span>
                                         </div>
                                         <div className="summary-item">
-                                            <span className="summary-value">
-                                                {users.filter((user) => user.cards && user.cards.length > 0).length}
-                                            </span>
+                                            <span className="summary-value">{usersWithCardsCount}</span>
                                             <span className="summary-label">With Cards</span>
                                         </div>
                                         <div className="summary-item">
-                                            <span className="summary-value">
-                                                {users.reduce((sum, user) => sum + (user.cards?.length || 0), 0)}
-                                            </span>
+                                            <span className="summary-value">{totalCardsCount}</span>
                                             <span className="summary-label">Total Cards</span>
                                         </div>
                                     </div>
@@ -307,92 +440,122 @@ const DeviceUsers = () => {
                                             </div>
                                         )}
 
-                                        {filteredUsers.map((user) => (
-                                            <div
-                                                key={user.id}
-                                                className={`user-card ${expandedUser === user.id ? 'expanded' : ''}`}
-                                            >
+                                        {filteredUsers.map((user) => {
+                                            const userCards = getUserCards(user);
+                                            const displayedCardCount = user.numOfCard || userCards.length;
+
+                                            return (
                                                 <div
-                                                    className="user-card-header"
-                                                    onClick={() => toggleUserExpand(user.id)}
+                                                    key={user.id}
+                                                    className={`user-card ${expandedUser === user.id ? 'expanded' : ''}`}
                                                 >
-                                                    <div className="user-info">
-                                                        <span className="user-icon">USER</span>
-                                                        <div className="user-details">
-                                                            <span className="user-name">
-                                                                {user.name || 'Unknown'}
-                                                            </span>
-                                                            <span className="user-id">ID: {user.id}</span>
+                                                    <div
+                                                        className="user-card-header"
+                                                        onClick={() => toggleUserExpand(user.id)}
+                                                    >
+                                                        <div className="user-info">
+                                                            <span className="user-icon">USER</span>
+                                                            <div className="user-details">
+                                                                <span className="user-name">
+                                                                    {user.name || 'Unknown'}
+                                                                </span>
+                                                                <span className="user-id">ID: {user.id}</span>
+                                                            </div>
                                                         </div>
-                                                    </div>
-                                                    <div className="user-badges">
-                                                        {user.numOfCard > 0 && (
-                                                            <span className="badge badge-card" title="Cards">
-                                                                Card {user.numOfCard}
-                                                            </span>
-                                                        )}
-                                                        {user.numOfFinger > 0 && (
-                                                            <span className="badge badge-finger" title="Fingerprints">
-                                                                Finger {user.numOfFinger}
-                                                            </span>
-                                                        )}
-                                                        {user.numOfFace > 0 && (
-                                                            <span className="badge badge-face" title="Faces">
-                                                                Face {user.numOfFace}
-                                                            </span>
-                                                        )}
-                                                        <span className="expand-icon">
-                                                            {expandedUser === user.id ? 'v' : '>'}
-                                                        </span>
-                                                    </div>
-                                                </div>
-
-                                                {expandedUser === user.id && (
-                                                    <div className="user-card-body">
-                                                        <div className="credentials-section">
-                                                            <h4>Cards ({user.cards?.length || 0})</h4>
-                                                            {(!user.cards || user.cards.length === 0) ? (
-                                                                <div className="no-credentials">No cards assigned</div>
-                                                            ) : (
-                                                                <div className="cards-list">
-                                                                    {user.cards.map((card, index) => (
-                                                                        <div key={index} className="card-item">
-                                                                            <div className="card-icon">CARD</div>
-                                                                            <div className="card-details">
-                                                                                <div className="card-data">
-                                                                                    <span className="label">CSN</span>
-                                                                                    <code>{parseCardNumber(card.data)}</code>
-                                                                                </div>
-                                                                                <div className="card-meta">
-                                                                                    <span>Hex: {card.data || 'N/A'}</span>
-                                                                                    <span>Type: {card.cardType ?? card.type ?? 'CSN'}</span>
-                                                                                    <span>Size: {card.size ?? 'N/A'} bytes</span>
-                                                                                </div>
-                                                                            </div>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
+                                                        <div className="user-badges">
+                                                            {displayedCardCount > 0 && (
+                                                                <span className="badge badge-card" title="Cards">
+                                                                    Card {displayedCardCount}
+                                                                </span>
                                                             )}
+                                                            {user.numOfFinger > 0 && (
+                                                                <span className="badge badge-finger" title="Fingerprints">
+                                                                    Finger {user.numOfFinger}
+                                                                </span>
+                                                            )}
+                                                            {user.numOfFace > 0 && (
+                                                                <span className="badge badge-face" title="Faces">
+                                                                    Face {user.numOfFace}
+                                                                </span>
+                                                            )}
+                                                            <span className="expand-icon">
+                                                                {expandedUser === user.id ? 'v' : '>'}
+                                                            </span>
                                                         </div>
+                                                    </div>
 
-                                                        {(user.numOfFinger > 0 || user.numOfFace > 0) && (
-                                                            <div className="other-credentials">
-                                                                {user.numOfFinger > 0 && (
-                                                                    <div className="credential-info">
-                                                                        <span>{user.numOfFinger} fingerprint(s) enrolled</span>
-                                                                    </div>
-                                                                )}
-                                                                {user.numOfFace > 0 && (
-                                                                    <div className="credential-info">
-                                                                        <span>{user.numOfFace} face(s) enrolled</span>
+                                                    {expandedUser === user.id && (
+                                                        <div className="user-card-body">
+                                                            <div className="credentials-section">
+                                                                <h4>Cards ({userCards.length})</h4>
+                                                                {userCards.length === 0 ? (
+                                                                    <div className="no-credentials">No cards assigned</div>
+                                                                ) : (
+                                                                    <div className="cards-list">
+                                                                        {userCards.map((card, index) => {
+                                                                            const cardDetails = extractCardDetails(card);
+                                                                            const cardNumber = parseCardNumber(cardDetails.hex);
+                                                                            const numberCopyKey = `${user.id}-${index}-number`;
+                                                                            const hexCopyKey = `${user.id}-${index}-hex`;
+
+                                                                            return (
+                                                                                <div key={index} className="card-item">
+                                                                                    <div className="card-icon">CARD</div>
+                                                                                    <div className="card-details">
+                                                                                        <div className="card-data">
+                                                                                            <span className="label">CSN</span>
+                                                                                            <code>{cardNumber}</code>
+                                                                                        </div>
+                                                                                        <div className="card-meta">
+                                                                                            <span>Hex: {cardDetails.hex || 'N/A'}</span>
+                                                                                            <span>Type: {cardDetails.type ?? 'CSN'}</span>
+                                                                                            <span>Size: {cardDetails.size ?? 'N/A'} bytes</span>
+                                                                                        </div>
+                                                                                        <div className="card-actions">
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                className="card-action-btn"
+                                                                                                onClick={() => handleCopyValue(cardNumber, numberCopyKey, 'card number')}
+                                                                                                disabled={cardNumber === 'N/A'}
+                                                                                            >
+                                                                                                {copiedCardKey === numberCopyKey ? 'Copied' : 'Copy Number'}
+                                                                                            </button>
+                                                                                            <button
+                                                                                                type="button"
+                                                                                                className="card-action-btn"
+                                                                                                onClick={() => handleCopyValue(cardDetails.hex, hexCopyKey, 'card hex')}
+                                                                                                disabled={!cardDetails.hex}
+                                                                                            >
+                                                                                                {copiedCardKey === hexCopyKey ? 'Copied' : 'Copy Hex'}
+                                                                                            </button>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        })}
                                                                     </div>
                                                                 )}
                                                             </div>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
+
+                                                            {(user.numOfFinger > 0 || user.numOfFace > 0) && (
+                                                                <div className="other-credentials">
+                                                                    {user.numOfFinger > 0 && (
+                                                                        <div className="credential-info">
+                                                                            <span>{user.numOfFinger} fingerprint(s) enrolled</span>
+                                                                        </div>
+                                                                    )}
+                                                                    {user.numOfFace > 0 && (
+                                                                        <div className="credential-info">
+                                                                            <span>{user.numOfFace} face(s) enrolled</span>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 </>
                             )}

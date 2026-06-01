@@ -81,26 +81,43 @@
   margin: 0;
 }
 
-/* TNA Table */
-.tna-table {
+.tna-table-wrapper {
   width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* TNA Table */
+.tna-table,
+.summary-table,
+.report-table {
+  width: 100%;
+  min-width: 700px;
   border-collapse: collapse;
 }
 
 .tna-table th,
-.tna-table td {
+.tna-table td,
+.summary-table th,
+.summary-table td,
+.report-table th,
+.report-table td {
   padding: 12px 15px;
   text-align: left;
   border-bottom: 1px solid #eee;
 }
 
-.tna-table th {
+.tna-table th,
+.summary-table th,
+.report-table th {
   background: #f8f9fa;
   font-weight: 600;
   color: #555;
 }
 
-.tna-table tbody tr:hover {
+.tna-table tbody tr:hover,
+.summary-table tbody tr:hover,
+.report-table tbody tr:hover {
   background: #f8f9fa;
 }
 
@@ -194,25 +211,6 @@
   font-size: 0.9rem;
   color: #666;
   margin-top: 5px;
-}
-
-/* Summary Table */
-.summary-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.summary-table th,
-.summary-table td {
-  padding: 12px 15px;
-  text-align: left;
-  border-bottom: 1px solid #eee;
-}
-
-.summary-table th {
-  background: #f8f9fa;
-  font-weight: 600;
-  color: #555;
 }
 
 .text-warning {
@@ -406,9 +404,81 @@
     justify-content: center;
   }
 
+  .pagination {
+    flex-wrap: wrap;
+  }
+
+  .filter-actions {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 640px) {
+  .tna-page {
+    padding: 12px;
+  }
+
+  .tna-table-wrapper {
+    overflow: visible;
+  }
+
   .tna-table,
-  .summary-table {
+  .summary-table,
+  .report-table {
+    min-width: 0;
+  }
+
+  .tna-table thead,
+  .summary-table thead,
+  .report-table thead {
+    display: none;
+  }
+
+  .tna-table tbody,
+  .summary-table tbody,
+  .report-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .tna-table tbody tr,
+  .summary-table tbody tr,
+  .report-table tbody tr {
     display: block;
-    overflow-x: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #fff !important;
+    padding: 12px;
+  }
+
+  .tna-table tbody td,
+  .summary-table tbody td,
+  .report-table tbody td {
+    display: grid;
+    grid-template-columns: minmax(88px, 110px) minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+    padding: 8px 0;
+    border-bottom: 1px solid #f1f5f9;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .tna-table tbody td::before,
+  .summary-table tbody td::before,
+  .report-table tbody td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #555;
+  }
+
+  .tna-table tbody td:last-child,
+  .summary-table tbody td:last-child,
+  .report-table tbody td:last-child {
+    border-bottom: none;
+  }
+
+  .employee-cell {
+    align-items: flex-start;
   }
 }

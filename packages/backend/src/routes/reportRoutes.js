@@ -47,17 +47,16 @@ export default (services) => {
 
             const enrollments = await db.deviceEnrollment.findMany({
                 where,
-                include: { cardAssignment: true, device: true },
+                include: { cardAssignment: { include: { user: true } }, device: true },
                 orderBy: { enrolledAt: 'desc' },
             });
 
             const rows = enrollments.map(e => ({
-                employeeId: e.cardAssignment.employeeId,
-                employeeName: e.cardAssignment.employeeName,
+                employeeId: e.cardAssignment.user?.employee_id || e.cardAssignment.user_id,
+                employeeName: e.cardAssignment.user?.name || null,
                 deviceUserId: e.deviceUserId,
                 deviceName: e.device?.name || `Device ${e.deviceId}`,
                 deviceIp: e.device?.ip,
-                cardType: e.cardAssignment.cardType,
                 cardStatus: e.cardAssignment.status,
                 enrollmentStatus: e.status,
                 enrolledAt: e.enrolledAt,
@@ -71,7 +70,6 @@ export default (services) => {
                     ['Device User ID', r => r.deviceUserId],
                     ['Device', r => r.deviceName],
                     ['Device IP', r => r.deviceIp],
-                    ['Card Type', r => r.cardType],
                     ['Card Status', r => r.cardStatus],
                     ['Enrollment Status', r => r.enrollmentStatus],
                     ['Enrolled At', r => r.enrolledAt],
@@ -98,15 +96,14 @@ export default (services) => {
 
             const enrollments = await db.deviceEnrollment.findMany({
                 where: { deviceId: parseInt(deviceId), status: 'active' },
-                include: { cardAssignment: true, device: true },
+                include: { cardAssignment: { include: { user: true } }, device: true },
                 orderBy: { enrolledAt: 'desc' },
             });
 
             const rows = enrollments.map(e => ({
                 deviceUserId: e.deviceUserId,
-                employeeId: e.cardAssignment.employeeId,
-                employeeName: e.cardAssignment.employeeName,
-                cardType: e.cardAssignment.cardType,
+                employeeId: e.cardAssignment.user?.employee_id || e.cardAssignment.user_id,
+                employeeName: e.cardAssignment.user?.name || null,
                 cardStatus: e.cardAssignment.status,
                 enrolledAt: e.enrolledAt,
                 lastSyncAt: e.lastSyncAt,
@@ -117,7 +114,6 @@ export default (services) => {
                     ['Device User ID', r => r.deviceUserId],
                     ['Employee ID', r => r.employeeId],
                     ['Employee Name', r => r.employeeName],
-                    ['Card Type', r => r.cardType],
                     ['Card Status', r => r.cardStatus],
                     ['Enrolled At', r => r.enrolledAt],
                     ['Last Sync', r => r.lastSyncAt],
@@ -145,9 +141,8 @@ export default (services) => {
 
             const noEnrollment = allCards.filter(c => c.enrollments.length === 0);
             const rows = noEnrollment.map(c => ({
-                employeeId: c.employeeId,
-                employeeName: c.employeeName,
-                cardType: c.cardType,
+                user_id: c.user_id,
+                card_data: c.card_data,
                 cardStatus: c.status,
                 assignedAt: c.assignedAt,
                 notes: c.notes,
@@ -155,9 +150,8 @@ export default (services) => {
 
             if (format) {
                 return sendReport(res, rows, cols([
-                    ['Employee ID', r => r.employeeId],
-                    ['Employee Name', r => r.employeeName],
-                    ['Card Type', r => r.cardType],
+                    ['User ID', r => r.user_id],
+                    ['Card Data', r => r.card_data],
                     ['Card Status', r => r.cardStatus],
                     ['Assigned At', r => r.assignedAt],
                     ['Notes', r => r.notes],
@@ -182,16 +176,15 @@ export default (services) => {
 
             const cards = await db.cardAssignment.findMany({
                 where,
-                include: { enrollments: { include: { device: true } } },
+                include: { user: true, enrollments: { include: { device: true } } },
                 orderBy: { assignedAt: 'desc' },
             });
 
             const rows = cards.map(c => ({
                 id: c.id,
-                employeeId: c.employeeId,
-                employeeName: c.employeeName,
-                cardType: c.cardType,
-                cardData: c.cardData.substring(0, 16) + '...', // truncate for display
+                employeeId: c.user?.employee_id || c.user_id,
+                employeeName: c.user?.name || null,
+                card_data: c.card_data.substring(0, 16) + '...', // truncate for display
                 status: c.status,
                 assignedAt: c.assignedAt,
                 revokedAt: c.revokedAt,
@@ -204,7 +197,6 @@ export default (services) => {
                     ['ID', r => r.id],
                     ['Employee ID', r => r.employeeId],
                     ['Employee Name', r => r.employeeName],
-                    ['Card Type', r => r.cardType],
                     ['Status', r => r.status],
                     ['Assigned At', r => r.assignedAt],
                     ['Revoked At', r => r.revokedAt],
@@ -228,14 +220,14 @@ export default (services) => {
 
             const cards = await db.cardAssignment.findMany({
                 where: { status: { not: 'active' } },
+                include: { user: true },
                 orderBy: { revokedAt: 'desc' },
             });
 
             const rows = cards.map(c => ({
                 id: c.id,
-                employeeId: c.employeeId,
-                employeeName: c.employeeName,
-                cardType: c.cardType,
+                employeeId: c.user?.employee_id || c.user_id,
+                employeeName: c.user?.name || null,
                 status: c.status,
                 assignedAt: c.assignedAt,
                 revokedAt: c.revokedAt,
@@ -247,7 +239,6 @@ export default (services) => {
                     ['ID', r => r.id],
                     ['Employee ID', r => r.employeeId],
                     ['Employee Name', r => r.employeeName],
-                    ['Card Type', r => r.cardType],
                     ['Status', r => r.status],
                     ['Assigned At', r => r.assignedAt],
                     ['Revoked At', r => r.revokedAt],

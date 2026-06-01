@@ -4,7 +4,7 @@
  * Used across services for card encoding/decoding
  */
 
-import { createServiceLogger } from '../utils/createLogger.js';
+import { createServiceLogger } from '../../utils/createLogger.js';
 const logger = createServiceLogger('cardUtils');
 
 /**

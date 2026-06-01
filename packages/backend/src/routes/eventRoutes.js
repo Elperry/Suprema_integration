@@ -150,8 +150,24 @@ export default (services) => {
                 take: parseInt(pageSize)
             });
 
+            // Enrich events with employee names
+            const uniqueUserIds = [...new Set(events.map(e => e.userId).filter(id => id && /^\d+$/.test(id)))];
+            const employeeMap = {};
+            if (uniqueUserIds.length > 0) {
+                const employees = await prisma.employee.findMany({
+                    where: { id: { in: uniqueUserIds.map(id => parseInt(id)) } },
+                    select: { id: true, fullname: true, firstname: true, lastname: true }
+                });
+                employees.forEach(emp => {
+                    employeeMap[String(emp.id)] = emp.fullname || [emp.firstname, emp.lastname].filter(Boolean).join(' ') || null;
+                });
+            }
+
             // Convert BigInt to string for JSON serialization
-            const serializedEvents = events.map((event) => serializeDbEvent(event));
+            const serializedEvents = events.map((event) => ({
+                ...serializeDbEvent(event),
+                userName: employeeMap[event.userId] || null
+            }));
 
             res.json({
                 success: true,
@@ -253,23 +269,45 @@ export default (services) => {
      * POST /api/events/sync-all-to-db
      */
     router.post('/sync-all-to-db', asyncHandler(async (req, res) => {
-        try {
-            const { batchSize = 500 } = req.body;
-            const prisma = services.database.getPrisma();
-            
-            // Get all devices from database
-            const devices = await prisma.device.findMany({
-                where: { isActive: true }
-            });
-            
+        const { batchSize = 500 } = req.body;
+        const ps = services.processService;
+        const prisma = services.database.getPrisma();
+
+        // Count active devices for metadata
+        const deviceCount = await prisma.device.count({ where: { isActive: true } });
+
+        if (!ps) {
+            // Fallback: original synchronous path (condensed)
+            return res.status(503).json({ error: 'ProcessService unavailable', message: 'Restart the server and try again.' });
+        }
+
+        const processId = ps.create('event-sync-all-to-db', {
+            description: 'Sync events from all devices → database',
+            deviceCount,
+            batchSize,
+        });
+        ps.update(processId, { total: deviceCount });
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `Event sync started for ${deviceCount} device(s). Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(async () => {
+          try {
+            ps.update(processId, { status: 'running' });
+            ps.log(processId, 'Fetching active devices from DB…');
+
+            const devices = await prisma.device.findMany({ where: { isActive: true } });
+            const connectedDevices = await services.connection.getConnectedDevices();
             const results = [];
-            
+
             for (const device of devices) {
+                if (ps.isCancelled(processId)) { ps.log(processId, 'Cancelled by user', 'warning'); break; }
                 try {
                     // Get Suprema device ID
-                    const connectedDevices = await services.connection.getConnectedDevices();
                     let supremaDeviceId = null;
-                    
                     for (const connected of connectedDevices) {
                         const info = connected.toObject ? connected.toObject() : connected;
                         if (info.ipaddr === device.ip && info.port === device.port) {
@@ -277,24 +315,22 @@ export default (services) => {
                             break;
                         }
                     }
-                    
+
                     if (!supremaDeviceId) {
-                        results.push({
-                            deviceId: device.id,
-                            deviceName: device.name,
-                            success: false,
-                            error: 'Device not connected'
-                        });
+                        ps.addResult(processId, { deviceName: device.name, success: false, error: 'Device not connected' });
+                        results.push({ deviceId: device.id, deviceName: device.name, success: false, error: 'Device not connected' });
                         continue;
                     }
-                    
+
+                    ps.log(processId, `Syncing events from ${device.name}…`);
+
                     // Get last synced event ID
                     const lastEvent = await prisma.event.findFirst({
                         where: { deviceId: device.id },
                         orderBy: { supremaEventId: 'desc' }
                     });
                     const startEventId = lastEvent ? Number(lastEvent.supremaEventId) : 0;
-                    
+
                     // Get events from device
                     const events = await services.event.getEventLogs(
                         supremaDeviceId,
@@ -357,37 +393,26 @@ export default (services) => {
                         data: { last_event_sync: new Date() }
                     });
                     
-                    results.push({
-                        deviceId: device.id,
-                        deviceName: device.name,
-                        success: true,
-                        synced: syncedCount,
-                        total: events.length
-                    });
+                    ps.addResult(processId, { deviceName: device.name, success: true, synced: syncedCount, total: events.length });
+                    results.push({ deviceId: device.id, deviceName: device.name, success: true, synced: syncedCount, total: events.length });
                 } catch (err) {
-                    results.push({
-                        deviceId: device.id,
-                        deviceName: device.name,
-                        success: false,
-                        error: err.message
-                    });
+                    ps.addResult(processId, { deviceName: device.name, success: false, error: err.message });
+                    results.push({ deviceId: device.id, deviceName: device.name, success: false, error: err.message });
                 }
             }
-            
+
             const totalSynced = results.reduce((sum, r) => sum + (r.synced || 0), 0);
-            
-            res.json({
-                success: true,
-                message: 'All devices synced',
-                totalSynced,
-                results
+            ps.update(processId, {
+                status: ps.isCancelled(processId) ? 'cancelled' : 'completed',
+                progress: results.filter(r => r.success).length,
             });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
+            ps.log(processId, `Event sync done — ${totalSynced} events stored across ${results.filter(r => r.success).length}/${results.length} devices`);
+          } catch (error) {
+            services.logger.error('[API] event sync-all-to-db error:', { error: error.message });
+            ps.update(processId, { status: 'failed' });
+            ps.log(processId, `Fatal error: ${error.message}`, 'error');
+          }
+        });
     }));
 
     /**
@@ -1116,48 +1141,52 @@ export default (services) => {
      * Body: { batchSize }
      */
     router.post('/sync-all', asyncHandler(async (req, res) => {
-        try {
-            const { batchSize = 1000 } = req.body;
+        const { batchSize = 1000 } = req.body;
+        const ps = services.processService;
 
-            // Get all connected devices and sync events from each
-            const connectedDevices = await services.connection.getConnectedDevices();
-            const results = [];
-
-            for (const device of connectedDevices) {
-                const info = device.toObject ? device.toObject() : device;
-                try {
-                    const events = await services.event.getEventLogs(
-                        info.deviceid,
-                        0,
-                        parseInt(batchSize)
-                    );
-                    results.push({
-                        deviceId: info.deviceid,
-                        ip: info.ipaddr,
-                        synced: events.length,
-                        success: true
-                    });
-                } catch (err) {
-                    results.push({
-                        deviceId: info.deviceid,
-                        ip: info.ipaddr,
-                        success: false,
-                        error: err.message
-                    });
-                }
-            }
-
-            res.json({
-                success: true,
-                message: 'All devices events synchronized',
-                results: results
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
+        if (!ps) {
+            return res.status(503).json({ error: 'ProcessService unavailable', message: 'Restart the server and try again.' });
         }
+
+        const connectedDevices = await services.connection.getConnectedDevices();
+        const processId = ps.create('event-sync-all', {
+            description: 'Fetch & store events from all connected devices',
+            deviceCount: connectedDevices.length,
+            batchSize,
+        });
+        ps.update(processId, { total: connectedDevices.length });
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `Event sync started for ${connectedDevices.length} device(s). Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(async () => {
+            try {
+                ps.update(processId, { status: 'running' });
+                ps.log(processId, `Syncing events from ${connectedDevices.length} connected device(s)…`);
+
+                for (const device of connectedDevices) {
+                    if (ps.isCancelled(processId)) { ps.log(processId, 'Cancelled by user', 'warning'); break; }
+                    const info = device.toObject ? device.toObject() : device;
+                    try {
+                        const events = await services.event.getEventLogs(info.deviceid, 0, parseInt(batchSize));
+                        ps.addResult(processId, { deviceId: info.deviceid, ip: info.ipaddr, synced: events.length, success: true });
+                    } catch (err) {
+                        ps.addResult(processId, { deviceId: info.deviceid, ip: info.ipaddr, success: false, error: err.message });
+                    }
+                }
+
+                const ok = ps.get(processId)?.results.filter(r => r.success).length ?? 0;
+                ps.update(processId, { status: ps.isCancelled(processId) ? 'cancelled' : 'completed', progress: ok });
+                ps.log(processId, `Event sync done — ${ok}/${connectedDevices.length} devices OK`);
+            } catch (error) {
+                services.logger.error('[API] event sync-all error:', { error: error.message });
+                ps.update(processId, { status: 'failed' });
+                ps.log(processId, `Fatal error: ${error.message}`, 'error');
+            }
+        });
     }));
 
     /**

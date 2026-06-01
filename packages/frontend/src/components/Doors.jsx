@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { doorAPI, deviceAPI } from '../services/api'
 import ErrorBanner from './ErrorBanner'
 import { useNotification } from './Notifications'
+import { GATEWAY_OFFLINE_MESSAGE } from '../utils/gatewayErrors'
 import './Doors.css'
 
 const NEW_DOOR_TEMPLATE = {
@@ -61,8 +62,15 @@ export default function Doors() {
       const res = await deviceAPI.getAll()
       const list = res.data?.data || res.data || []
       setDevices(list)
-      if (list.length > 0 && !selectedDeviceId) {
-        setSelectedDeviceId(String(list[0].id))
+      const firstConnectedDevice = list.find(device => device.status === 'connected')
+      setSelectedDeviceId((current) => {
+        const currentConnected = list.find(device => String(device.id) === String(current) && device.status === 'connected')
+        if (currentConnected) return String(currentConnected.id)
+        return firstConnectedDevice ? String(firstConnectedDevice.id) : ''
+      })
+      if (!firstConnectedDevice) {
+        setDoors([])
+        setError(GATEWAY_OFFLINE_MESSAGE)
       }
     } catch (e) {
       setError(e.userMessage || 'Failed to load devices')
@@ -71,6 +79,12 @@ export default function Doors() {
 
   const loadDoors = useCallback(async () => {
     if (!selectedDeviceId) return
+    const selectedDevice = devices.find(device => String(device.id) === String(selectedDeviceId))
+    if (selectedDevice && selectedDevice.status !== 'connected') {
+      setDoors([])
+      setError(GATEWAY_OFFLINE_MESSAGE)
+      return
+    }
     setLoading(true)
     setError(null)
     try {
@@ -82,7 +96,7 @@ export default function Doors() {
     } finally {
       setLoading(false)
     }
-  }, [selectedDeviceId])
+  }, [devices, selectedDeviceId])
 
   useEffect(() => {
     if (selectedDeviceId) loadDoors()
@@ -345,7 +359,7 @@ export default function Doors() {
             <select className="select-input wide" value={selectedDeviceId} onChange={e => setSelectedDeviceId(e.target.value)}>
               <option value="">— Select Device —</option>
               {devices.map(d => (
-                <option key={d.id} value={d.id}>
+                <option key={d.id} value={d.id} disabled={d.status !== 'connected'}>
                   {d.name || d.ip} ({d.ip}:{d.port || 51211}) — {d.status || 'unknown'}
                 </option>
               ))}
@@ -400,64 +414,66 @@ export default function Doors() {
         ) : !selectedDeviceId ? (
           <div className="empty-cell">Select a device to view its doors.</div>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Door ID</th>
-                <th>Name</th>
-                <th>Auto-Lock (s)</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {doors.length === 0 ? (
-                <tr><td colSpan={5} className="empty-cell">No doors found on this device.</td></tr>
-              ) : doors.map((door, idx) => {
-                const doorId = door.doorId ?? door.id ?? idx
-                const status = doorStatus[doorId]
-                return (
-                  <tr key={doorId}>
-                    <td><code>{doorId}</code></td>
-                    <td><strong>{door.name || '—'}</strong></td>
-                    <td>{door.autoLockTimeout ?? '—'}s</td>
-                    <td>
-                      {status ? (
-                        status.error
-                          ? <span className="badge badge-neutral">Error</span>
-                          : <span className="badge badge-in">
-                              {status.isOpen ? 'Open' : 'Closed'} · {status.isLocked ? 'Locked' : 'Unlocked'}
-                            </span>
-                      ) : (
-                        <button className="btn btn-sm btn-secondary" disabled={actionLoading[`status-${doorId}`]} onClick={() => handleGetStatus(door)}>
-                          {actionLoading[`status-${doorId}`] ? '…' : 'Check'}
+          <div className="data-table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Door ID</th>
+                  <th>Name</th>
+                  <th>Auto-Lock (s)</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {doors.length === 0 ? (
+                  <tr><td colSpan={5} className="empty-cell">No doors found on this device.</td></tr>
+                ) : doors.map((door, idx) => {
+                  const doorId = door.doorId ?? door.id ?? idx
+                  const status = doorStatus[doorId]
+                  return (
+                    <tr key={doorId}>
+                      <td data-label="Door ID"><code>{doorId}</code></td>
+                      <td data-label="Name"><strong>{door.name || '—'}</strong></td>
+                      <td data-label="Auto-Lock (s)">{door.autoLockTimeout ?? '—'}s</td>
+                      <td data-label="Status">
+                        {status ? (
+                          status.error
+                            ? <span className="badge badge-neutral">Error</span>
+                            : <span className="badge badge-in">
+                                {status.isOpen ? 'Open' : 'Closed'} · {status.isLocked ? 'Locked' : 'Unlocked'}
+                              </span>
+                        ) : (
+                          <button className="btn btn-sm btn-secondary" disabled={actionLoading[`status-${doorId}`]} onClick={() => handleGetStatus(door)}>
+                            {actionLoading[`status-${doorId}`] ? '…' : 'Check'}
+                          </button>
+                        )}
+                      </td>
+                      <td data-label="Actions" className="actions-cell">
+                        <button
+                          className="btn btn-sm btn-success"
+                          disabled={actionLoading[`unlock-${doorId}`]}
+                          onClick={() => handleUnlock(door)}
+                          title={`Unlock for ${unlockDuration}s`}
+                        >
+                          {actionLoading[`unlock-${doorId}`] ? '…' : '🔓 Unlock'}
                         </button>
-                      )}
-                    </td>
-                    <td className="actions-cell">
-                      <button
-                        className="btn btn-sm btn-success"
-                        disabled={actionLoading[`unlock-${doorId}`]}
-                        onClick={() => handleUnlock(door)}
-                        title={`Unlock for ${unlockDuration}s`}
-                      >
-                        {actionLoading[`unlock-${doorId}`] ? '…' : '🔓 Unlock'}
-                      </button>
-                      <button
-                        className="btn btn-sm btn-warning"
-                        disabled={actionLoading[`lock-${doorId}`]}
-                        onClick={() => handleLock(door)}
-                      >
-                        {actionLoading[`lock-${doorId}`] ? '…' : '🔒 Lock'}
-                      </button>
-                      <button className="btn btn-sm btn-secondary" onClick={() => openEdit(door)}>✏️ Edit</button>
-                      <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(door)}>🗑</button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                        <button
+                          className="btn btn-sm btn-warning"
+                          disabled={actionLoading[`lock-${doorId}`]}
+                          onClick={() => handleLock(door)}
+                        >
+                          {actionLoading[`lock-${doorId}`] ? '…' : '🔒 Lock'}
+                        </button>
+                        <button className="btn btn-sm btn-secondary" onClick={() => openEdit(door)}>✏️ Edit</button>
+                        <button className="btn btn-sm btn-danger" onClick={() => setConfirmDelete(door)}>🗑</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
       )}
@@ -475,25 +491,27 @@ export default function Doors() {
           {acLoading ? (
             <div className="loading-row"><div className="spinner" /><span>Loading…</span></div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th>ID</th><th>Name</th><th>Door Schedules</th><th>Actions</th></tr>
-              </thead>
-              <tbody>
-                {accessLevels.length === 0 ? (
-                  <tr><td colSpan={4} className="empty-cell">No access levels configured.</td></tr>
-                ) : accessLevels.map(al => (
-                  <tr key={al.id}>
-                    <td><code>{al.id}</code></td>
-                    <td><strong>{al.name || '—'}</strong></td>
-                    <td>{al.doorschedulesList?.length || al.doorSchedules?.length || 0} door-schedule pairs</td>
-                    <td>
-                      <button className="btn btn-sm btn-danger" onClick={() => handleDeleteAccessLevel(al.id)}>🗑 Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr><th>ID</th><th>Name</th><th>Door Schedules</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {accessLevels.length === 0 ? (
+                    <tr><td colSpan={4} className="empty-cell">No access levels configured.</td></tr>
+                  ) : accessLevels.map(al => (
+                    <tr key={al.id}>
+                      <td data-label="ID"><code>{al.id}</code></td>
+                      <td data-label="Name"><strong>{al.name || '—'}</strong></td>
+                      <td data-label="Door Schedules">{al.doorschedulesList?.length || al.doorSchedules?.length || 0} door-schedule pairs</td>
+                      <td data-label="Actions" className="actions-cell">
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDeleteAccessLevel(al.id)}>🗑 Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -511,25 +529,27 @@ export default function Doors() {
           {acLoading ? (
             <div className="loading-row"><div className="spinner" /><span>Loading…</span></div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th>ID</th><th>Name</th><th>Daily Schedules</th><th>Actions</th></tr>
-              </thead>
-              <tbody>
-                {schedules.length === 0 ? (
-                  <tr><td colSpan={4} className="empty-cell">No schedules configured.</td></tr>
-                ) : schedules.map(s => (
-                  <tr key={s.id}>
-                    <td><code>{s.id}</code></td>
-                    <td><strong>{s.name || '—'}</strong></td>
-                    <td>{s.dailyschedulesList?.length || s.dailySchedules?.length || 0} day(s)</td>
-                    <td>
-                      <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSchedule(s.id)}>🗑 Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr><th>ID</th><th>Name</th><th>Daily Schedules</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {schedules.length === 0 ? (
+                    <tr><td colSpan={4} className="empty-cell">No schedules configured.</td></tr>
+                  ) : schedules.map(s => (
+                    <tr key={s.id}>
+                      <td data-label="ID"><code>{s.id}</code></td>
+                      <td data-label="Name"><strong>{s.name || '—'}</strong></td>
+                      <td data-label="Daily Schedules">{s.dailyschedulesList?.length || s.dailySchedules?.length || 0} day(s)</td>
+                      <td data-label="Actions" className="actions-cell">
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDeleteSchedule(s.id)}>🗑 Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -547,25 +567,27 @@ export default function Doors() {
           {acLoading ? (
             <div className="loading-row"><div className="spinner" /><span>Loading…</span></div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th>ID</th><th>Name</th><th>Access Levels</th><th>Actions</th></tr>
-              </thead>
-              <tbody>
-                {accessGroups.length === 0 ? (
-                  <tr><td colSpan={4} className="empty-cell">No access groups configured.</td></tr>
-                ) : accessGroups.map(g => (
-                  <tr key={g.id}>
-                    <td><code>{g.id}</code></td>
-                    <td><strong>{g.name || '—'}</strong></td>
-                    <td>{g.levelidsList?.length || g.levelIds?.length || 0} level(s)</td>
-                    <td>
-                      <button className="btn btn-sm btn-danger" onClick={() => handleDeleteAccessGroup(g.id)}>🗑 Delete</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr><th>ID</th><th>Name</th><th>Access Levels</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                  {accessGroups.length === 0 ? (
+                    <tr><td colSpan={4} className="empty-cell">No access groups configured.</td></tr>
+                  ) : accessGroups.map(g => (
+                    <tr key={g.id}>
+                      <td data-label="ID"><code>{g.id}</code></td>
+                      <td data-label="Name"><strong>{g.name || '—'}</strong></td>
+                      <td data-label="Access Levels">{g.levelidsList?.length || g.levelIds?.length || 0} level(s)</td>
+                      <td data-label="Actions" className="actions-cell">
+                        <button className="btn btn-sm btn-danger" onClick={() => handleDeleteAccessGroup(g.id)}>🗑 Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

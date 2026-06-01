@@ -6,6 +6,7 @@
 import { EventEmitter } from 'events';
 import winston from 'winston';
 import { createRequire } from 'module';
+import { normalizeToHex } from '../core/utils/cardUtils.js';
 
 // PrismaClient is injected via constructor options to avoid duplicate connections.
 
@@ -233,7 +234,7 @@ class SupremaUserService extends EventEmitter {
      */
     async findUserWithCard(deviceId, cardHex) {
         try {
-            const normalizedCardHex = cardHex.toUpperCase();
+            const normalizedCardHex = this.normalizeComparableCardHex(cardHex);
             this.logger.info(`[findUserWithCard] Searching for card ${normalizedCardHex} on device ${deviceId}`);
 
             // Get list of all users on device
@@ -269,15 +270,7 @@ class SupremaUserService extends EventEmitter {
                     for (const userCard of userCards) {
                         if (userCard.cardsList && userCard.cardsList.length > 0) {
                             for (const card of userCard.cardsList) {
-                                let existingCardHex = '';
-                                if (card.data) {
-                                    if (typeof card.data === 'string') {
-                                        // Base64 encoded
-                                        existingCardHex = Buffer.from(card.data, 'base64').toString('hex').toUpperCase();
-                                    } else if (card.data instanceof Uint8Array || Buffer.isBuffer(card.data)) {
-                                        existingCardHex = Buffer.from(card.data).toString('hex').toUpperCase();
-                                    }
-                                }
+                                const existingCardHex = this.normalizeComparableCardHex(this.normalizeDeviceCardHex(card));
                                 
                                 if (existingCardHex === normalizedCardHex) {
                                     this.logger.info(`[findUserWithCard] Found matching card on user ${userCard.userid}`);
@@ -310,31 +303,153 @@ class SupremaUserService extends EventEmitter {
         try {
             this.logger.info(`[clearUserCards] Clearing all cards from user ${userId} on device ${deviceId}`);
 
-            // Create an empty card list to clear all cards
+            await this.setCardsForUser(deviceId, userId, []);
+            this.logger.info(`[clearUserCards] Successfully cleared cards from user ${userId}`);
+            return true;
+        } catch (error) {
+            this.logger.error('Error clearing user cards:', error);
+            throw error;
+        }
+    }
+
+    normalizeDeviceCardHex(card) {
+        if (!card?.data) {
+            return '';
+        }
+
+        let rawHex = '';
+
+        if (typeof card.data === 'string') {
+            rawHex = Buffer.from(card.data, 'base64').toString('hex').toUpperCase();
+        } else if (card.data instanceof Uint8Array || Buffer.isBuffer(card.data)) {
+            rawHex = Buffer.from(card.data).toString('hex').toUpperCase();
+        }
+
+        return rawHex ? normalizeToHex(rawHex) : '';
+    }
+
+    normalizeComparableCardHex(cardHex) {
+        const normalized = normalizeToHex(String(cardHex || '')).toUpperCase();
+        const significant = normalized.replace(/^0+/, '');
+        return significant || '0';
+    }
+
+    async setCardsForUser(deviceId, userId, cards = []) {
+        try {
+            const normalizedDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
             const userCard = new userMessage.UserCard();
             userCard.setUserid(String(userId));
-            // Don't add any cards - this clears them
 
-            const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;
+            for (const card of cards) {
+                let normalizedCardHex = String(card.cardData || '').replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+
+                if (!normalizedCardHex) {
+                    throw new Error(`Invalid card data for user ${userId}`);
+                }
+
+                if (normalizedCardHex.length % 2 === 1) {
+                    normalizedCardHex = `0${normalizedCardHex}`;
+                }
+
+                const sourceBuffer = Buffer.from(normalizedCardHex, 'hex');
+                const cardSize = Number(card.cardSize) > 0 ? Number(card.cardSize) : 32;
+                let finalBuffer = sourceBuffer;
+
+                if (sourceBuffer.length < cardSize) {
+                    finalBuffer = Buffer.alloc(cardSize, 0);
+                    sourceBuffer.copy(finalBuffer, cardSize - sourceBuffer.length);
+                }
+
+                const csnCardData = new cardMessage.CSNCardData();
+                csnCardData.setData(finalBuffer);
+                csnCardData.setSize(cardSize);
+                csnCardData.setType(card.cardType !== undefined ? card.cardType : 0x01);
+                userCard.addCards(csnCardData);
+            }
 
             const req = new userMessage.SetCardRequest();
-            req.setDeviceid(numericDeviceId);
+            req.setDeviceid(normalizedDeviceId);
             req.setUsercardsList([userCard]);
 
-            return new Promise((resolve, reject) => {
-                this.userClient.setCard(req, (err, response) => {
+            return await new Promise((resolve, reject) => {
+                this.userClient.setCard(req, (err) => {
                     if (err) {
-                        this.logger.error(`[clearUserCards] FAILED for user ${userId} on device ${deviceId}:`, err);
+                        this.logger.error(`[setCardsForUser] FAILED for user ${userId} on device ${deviceId}:`, err);
                         reject(err);
                         return;
                     }
 
-                    this.logger.info(`[clearUserCards] Successfully cleared cards from user ${userId}`);
+                    this.logger.info(`[setCardsForUser] Updated ${cards.length} card(s) for user ${userId} on device ${deviceId}`);
                     resolve(true);
                 });
             });
         } catch (error) {
-            this.logger.error('Error clearing user cards:', error);
+            this.logger.error('Error setting cards for user:', error);
+            throw error;
+        }
+    }
+
+    async removeUserCard(deviceId, userId, cardHex) {
+        try {
+            const normalizedTargetHex = this.normalizeComparableCardHex(cardHex);
+
+            if (!normalizedTargetHex || normalizedTargetHex === '0') {
+                throw new Error('Card hex is required to remove a user card');
+            }
+
+            const userCards = await this.getCards(deviceId, [String(userId)]);
+            const userCard = userCards.find((entry) => String(entry.userid) === String(userId));
+            const currentCards = Array.isArray(userCard?.cardsList) ? userCard.cardsList : [];
+
+            if (currentCards.length === 0) {
+                this.logger.warn(`[removeUserCard] No cards found for user ${userId} on device ${deviceId}`);
+                return { removed: false, notFound: true, remainingCards: 0, userId: String(userId) };
+            }
+
+            const remainingCards = [];
+            let removedCount = 0;
+
+            for (const currentCard of currentCards) {
+                const currentCardHex = this.normalizeDeviceCardHex(currentCard);
+                const comparableCardHex = this.normalizeComparableCardHex(currentCardHex);
+
+                if (!currentCardHex) {
+                    continue;
+                }
+
+                if (comparableCardHex === normalizedTargetHex) {
+                    removedCount += 1;
+                    continue;
+                }
+
+                remainingCards.push({
+                    cardData: currentCardHex,
+                    cardType: currentCard.type !== undefined ? currentCard.type : 0x01,
+                    cardSize: currentCard.size || 32
+                });
+            }
+
+            if (removedCount === 0) {
+                this.logger.warn(`[removeUserCard] Card ${normalizedTargetHex} not found for user ${userId} on device ${deviceId}`);
+                return {
+                    removed: false,
+                    notFound: true,
+                    remainingCards: currentCards.length,
+                    userId: String(userId)
+                };
+            }
+
+            await this.setCardsForUser(deviceId, userId, remainingCards);
+
+            this.logger.info(`[removeUserCard] Removed ${removedCount} matching card(s) from user ${userId} on device ${deviceId}`);
+            return {
+                removed: true,
+                notFound: false,
+                remainingCards: remainingCards.length,
+                userId: String(userId)
+            };
+        } catch (error) {
+            this.logger.error('Error removing user card:', error);
             throw error;
         }
     }
@@ -696,7 +811,8 @@ class SupremaUserService extends EventEmitter {
      * - CSNCardData.size is ALWAYS 32 for CSN cards
      * - CSNCardData.data is the full 32-byte card data
      */
-    async setUserCards(deviceId, userCardData) {
+    async setUserCards(deviceId, userCardData, options = {}) {
+        const { skipDuplicateCheck = false } = options;
         // Prepare logging data for each card
         const logEntries = [];
 
@@ -706,21 +822,24 @@ class SupremaUserService extends EventEmitter {
 
         try {
             // STEP 1: Remove any existing duplicate card assignments
-            for (const data of userCardData) {
-                let cardHex = '';
-                if (data.cardData) {
-                    if (typeof data.cardData === 'string') {
-                        cardHex = data.cardData.toUpperCase();
-                    } else if (Buffer.isBuffer(data.cardData)) {
-                        cardHex = data.cardData.toString('hex').toUpperCase();
-                    } else if (data.cardData.data) {
-                        cardHex = Buffer.from(data.cardData.data).toString('hex').toUpperCase();
+            // Skipped when the caller already handled conflict detection (e.g. bulk enrollment)
+            if (!skipDuplicateCheck) {
+                for (const data of userCardData) {
+                    let cardHex = '';
+                    if (data.cardData) {
+                        if (typeof data.cardData === 'string') {
+                            cardHex = data.cardData.toUpperCase();
+                        } else if (Buffer.isBuffer(data.cardData)) {
+                            cardHex = data.cardData.toString('hex').toUpperCase();
+                        } else if (data.cardData.data) {
+                            cardHex = Buffer.from(data.cardData.data).toString('hex').toUpperCase();
+                        }
                     }
-                }
-                
-                if (cardHex) {
-                    this.logger.info(`[setUserCards] Checking for duplicate card assignment: ${cardHex}`);
-                    await this.removeDuplicateCardAssignment(deviceId, cardHex, data.userId);
+                    
+                    if (cardHex) {
+                        this.logger.info(`[setUserCards] Checking for duplicate card assignment: ${cardHex}`);
+                        await this.removeDuplicateCardAssignment(deviceId, cardHex, data.userId);
+                    }
                 }
             }
 
@@ -742,19 +861,27 @@ class SupremaUserService extends EventEmitter {
                 if (data.cardData) {
                     // If cardData is a string (hex card number), convert to bytes
                     if (typeof data.cardData === 'string') {
-                        cardHex = data.cardData;
-                        cardBuffer = Buffer.from(data.cardData, 'hex');
-                        bufferLength = cardBuffer.length;
+                        // Strip non-hex chars and uppercase.
+                        let hex = data.cardData.replace(/[^0-9A-Fa-f]/g, '').toUpperCase();
+                        // CRITICAL: Buffer.from(hex, 'hex') silently DROPS a
+                        // trailing nibble when the hex string has odd length,
+                        // which truncates the CSN (e.g. "0700446A9D" → 4 bytes
+                        // "700446A9", losing the trailing "D"). Pad odd-length
+                        // hex with a leading "0" so the full CSN is preserved
+                        // when right-aligned in the 32-byte buffer.
+                        if (hex.length % 2 === 1) {
+                            hex = `0${hex}`;
+                        }
+                        cardHex = hex;
+                        cardBuffer = Buffer.from(hex, 'hex');
                         this.logger.info(`[setUserCards] Card buffer (first 20 bytes): ${cardBuffer.slice(0, 20).toString('hex')}`);
                     } else if (Buffer.isBuffer(data.cardData)) {
                         cardBuffer = data.cardData;
                         cardHex = data.cardData.toString('hex').toUpperCase();
-                        bufferLength = data.cardData.length;
                     } else if (data.cardData.data) {
                         // If it's already a structured object with data property
                         cardBuffer = Buffer.from(data.cardData.data);
                         cardHex = cardBuffer.toString('hex').toUpperCase();
-                        bufferLength = cardBuffer.length;
                     }
                     
                     if (cardBuffer && cardBuffer.length > 0) {

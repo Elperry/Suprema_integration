@@ -804,12 +804,13 @@ class SupremaTNAService extends EventEmitter {
                     start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                     end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
                     break;
-                case 'week':
+                case 'week': {
                     const weekStart = new Date(now);
                     weekStart.setDate(now.getDate() - now.getDay());
                     start = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate());
                     end = now;
                     break;
+                }
                 case 'month':
                     start = new Date(now.getFullYear(), now.getMonth(), 1);
                     end = now;

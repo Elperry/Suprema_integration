@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { API_CONFIG, API_ENDPOINTS } from '../config/constants';
+import { DEVICE_OFFLINE_MESSAGE, GATEWAY_OFFLINE_MESSAGE, isDeviceUnavailableMessage, isGatewayUnavailableMessage } from '../utils/gatewayErrors';
 
 /**
  * Parse API error and return user-friendly message
@@ -9,6 +10,15 @@ const parseApiError = (error) => {
     // Server responded with error
     const status = error.response.status;
     const data = error.response.data;
+    const rawMessage = data?.message || '';
+
+    if (isGatewayUnavailableMessage(rawMessage)) {
+      return GATEWAY_OFFLINE_MESSAGE;
+    }
+
+    if (isDeviceUnavailableMessage(rawMessage)) {
+      return DEVICE_OFFLINE_MESSAGE;
+    }
     
     // Handle specific status codes
     switch (status) {
@@ -170,7 +180,38 @@ export const userAPI = {
   updateMulti: (deviceIds, users) => api.put('/users/update-multi', { deviceIds, users }),
   delete: (deviceId, userIds) => api.delete(`/users/${deviceId}`, { data: { userIds } }),
   deleteMulti: (deviceIds, userIds) => api.delete('/users/delete-multi', { data: { deviceIds, userIds } }),
-  deleteFromAll: (userId, revokeCard = false) => api.delete(`/users/delete-all/${userId}?revokeCard=${revokeCard}`),
+  deleteFromAll: async (userIds, revokeCard = false) => {
+    const ids = Array.isArray(userIds) ? userIds : [userIds]
+
+    if (ids.length === 1) {
+      return api.delete(`/users/delete-all/${ids[0]}?revokeCard=${revokeCard}`)
+    }
+
+    const results = await Promise.all(ids.map(async (userId) => {
+      try {
+        const response = await api.delete(`/users/delete-all/${userId}?revokeCard=${revokeCard}`)
+        return {
+          userId,
+          success: true,
+          data: response.data,
+        }
+      } catch (error) {
+        return {
+          userId,
+          success: false,
+          error: error.response?.data?.message || error.message,
+        }
+      }
+    }))
+
+    return {
+      data: {
+        success: results.every((result) => result.success),
+        message: `Deleted ${results.filter((result) => result.success).length}/${ids.length} user(s) from all devices`,
+        results,
+      },
+    }
+  },
   
   // Import users from device to database
   importFromDevice: (deviceId) => api.post(`/users/import/${deviceId}`),
@@ -194,11 +235,12 @@ export const userAPI = {
   
   // Sync
   sync: (deviceId) => api.post(`/users/${deviceId}/sync`),
-  syncAll: () => api.post('/users/sync-all'),
+  syncAll: () => syncApi.post('/users/sync-all'),
   getSyncStatusOverview: () => api.get('/users/sync-status'),
-  getReconciliation: (params = {}) => api.get('/users/reconciliation', { params }),
-  exportReconciliation: (params = {}) => api.get('/users/reconciliation', { params, responseType: 'blob' }),
-  getDeviceReconciliation: (deviceId) => api.get(`/users/reconciliation/${deviceId}`),
+  getReconciliation: (params = {}) => syncApi.get('/users/reconciliation', { params }),
+  exportReconciliation: (params = {}) => syncApi.get('/users/reconciliation', { params, responseType: 'blob' }),
+  getDeviceReconciliation: (deviceId) => syncApi.get(`/users/reconciliation/${deviceId}`),
+  checkUserOnDevice: (deviceId, userId) => syncApi.get(`/users/reconciliation/${deviceId}/check-user/${encodeURIComponent(userId)}`),
   repairDevice: (deviceId) => syncApi.post(`/users/reconciliation/${deviceId}/repair`),
   repairUser: (deviceId, userId) => syncApi.post(`/users/reconciliation/${deviceId}/repair-user/${userId}`),
   repairAllDevices: () => syncApi.post('/users/reconciliation/repair-all'),
@@ -424,6 +466,8 @@ export const enrollmentAPI = {
     api.post('/enrollment/cards', data),
   revokeCard: (id, reason = '') => 
     api.delete(`/enrollment/cards/${id}`, { data: { reason } }),
+  deleteCard: (id) => 
+    api.delete(`/enrollment/cards/${id}/permanent`),
   updateCardStatus: (id, status) => 
     api.patch(`/enrollment/cards/${id}/status`, { status }),
   replaceCard: (id, newCardData) =>
@@ -503,6 +547,16 @@ export const presetAPI = {
   delete: (id) => api.delete(`/presets/${id}`),
 };
 
+// ==================== SETTINGS ENDPOINTS ====================
+
+export const settingsAPI = {
+  getSync: () => api.get('/settings/sync'),
+  updateSync: (settings, applyImmediately = true) =>
+    api.put('/settings/sync', { settings, applyImmediately }),
+  resetSync: (applyImmediately = true) =>
+    api.post('/settings/sync/reset', { applyImmediately }),
+};
+
 // ==================== TNA / ATTENDANCE ENDPOINTS ====================
 
 export const attendanceAPI = {
@@ -525,6 +579,17 @@ export const reportAPI = {
   events: (params = {}) => api.get('/reports/events', { params }),
   enrollments: (params = {}) => api.get('/reports/enrollments', { params }),
   replicationLag: (params = {}) => api.get('/reports/replication-lag', { params }),
+};
+
+// ==================== PROCESS ENDPOINTS ====================
+
+export const processAPI = {
+  getAll:             ()                              => api.get('/processes'),
+  get:                (id)                            => api.get(`/processes/${id}`),
+  cancel:             (id)                            => api.post(`/processes/${id}/cancel`),
+  resolveConflict:    (id, conflictId, action)        => api.post(`/processes/${id}/conflicts/${conflictId}/resolve`, { action }),
+  overrideAll:        (id)                            => api.post(`/processes/${id}/override-all`),
+  cancelAllConflicts: (id)                            => api.post(`/processes/${id}/cancel-all-conflicts`),
 };
 
 export default api;

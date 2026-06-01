@@ -76,6 +76,52 @@ export default (services) => {
         return { deviceId, alreadyConnected: false };
     };
 
+    const normalizeCardHex = (rawData) => {
+        if (!rawData) {
+            return '';
+        }
+
+        if (Buffer.isBuffer(rawData) || rawData instanceof Uint8Array) {
+            return Buffer.from(rawData).toString('hex').toUpperCase();
+        }
+
+        if (typeof rawData === 'string') {
+            const compact = rawData.replace(/\s+/g, '');
+
+            if (/^[0-9A-Fa-f]+$/.test(compact) && compact.length % 2 === 0) {
+                return compact.toUpperCase();
+            }
+
+            try {
+                return Buffer.from(rawData, 'base64').toString('hex').toUpperCase();
+            } catch (_) {
+                return compact;
+            }
+        }
+
+        return '';
+    };
+
+    const extractCardSummary = (card) => {
+        const directCard = card || {};
+        const csnData = directCard.csncarddata
+            || directCard.csnCardData
+            || directCard.csnCarddata
+            || directCard.cardData?.csnCardData
+            || directCard.cardData?.CSNCardData
+            || directCard;
+
+        const cardType = csnData.type ?? directCard.cardType ?? directCard.type ?? null;
+
+        return {
+            type: cardType,
+            cardType,
+            size: csnData.size ?? directCard.size ?? null,
+            data: normalizeCardHex(csnData.data ?? directCard.data ?? directCard.cardData ?? ''),
+            raw: card,
+        };
+    };
+
     /**
      * Helper function to resolve device ID (DB ID or Suprema ID) to Suprema device ID
      * @param {string|number} paramDeviceId - The device ID from request params
@@ -621,35 +667,7 @@ export default (services) => {
             // Format response with card info
             const usersWithCards = users.map(user => {
                 const cards = user.cardsList || user.cards || [];
-                
-                // Format cards for display
-                const formattedCards = cards.map(card => {
-                    // Handle CSN card data
-                    const csnData = card.csncarddata || card.csnCardData || card.csnCarddata || {};
-                    let cardHex = '';
-                    
-                    if (csnData.data) {
-                        if (typeof csnData.data === 'string') {
-                            // Base64 encoded from protobuf
-                            try {
-                                const buffer = Buffer.from(csnData.data, 'base64');
-                                cardHex = buffer.toString('hex').toUpperCase();
-                            } catch (e) {
-                                cardHex = csnData.data;
-                            }
-                        } else if (Buffer.isBuffer(csnData.data)) {
-                            cardHex = csnData.data.toString('hex').toUpperCase();
-                        }
-                    }
-
-                    return {
-                        type: card.type,
-                        cardType: csnData.type,
-                        size: csnData.size,
-                        data: cardHex,
-                        raw: card
-                    };
-                });
+                const formattedCards = cards.map(extractCardSummary);
 
                 return {
                     id: user.hdr?.id || user.id,
@@ -661,6 +679,31 @@ export default (services) => {
                     raw: user
                 };
             });
+
+            // Enrich users whose name is missing on the device by looking up the local DB.
+            // Device user IDs correspond to user.id (local DB primary key).
+            const missingNameIds = usersWithCards
+                .filter(u => !u.name)
+                .map(u => parseInt(u.id, 10))
+                .filter(id => !isNaN(id));
+
+            if (missingNameIds.length > 0) {
+                const prisma = services.database.getPrisma();
+                if (prisma) {
+                    const localUsers = await prisma.user.findMany({
+                        where: { id: { in: missingNameIds } },
+                        select: { id: true, name: true },
+                    });
+                    const nameById = new Map(localUsers.map(u => [u.id, u.name]));
+                    for (const u of usersWithCards) {
+                        if (!u.name) {
+                            const userId = parseInt(u.id, 10);
+                            const localName = nameById.get(userId);
+                            if (localName) u.name = localName;
+                        }
+                    }
+                }
+            }
 
             res.json({
                 success: true,

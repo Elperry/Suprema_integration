@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Suprema Gateway Connection Service
  * Handles connection to Suprema device gateway and device management
  */
@@ -113,6 +113,9 @@ class SupremaConnectionService extends EventEmitter {
                 readyTimeoutMs,
             });
             this.emit('gateway:connected', { address: gatewayAddress });
+            
+            // Start monitoring device status changes immediately
+            this.startStatusMonitoring();
             
             return true;
         } catch (error) {
@@ -756,6 +759,93 @@ class SupremaConnectionService extends EventEmitter {
     }
 
     /**
+     * Start real-time status monitoring to handle unexpected disconnections
+     */
+    startStatusMonitoring() {
+        if (!this.connClient || this._statusMonitorActive) return;
+        
+        try {
+            const stream = this.subscribeStatus(100);
+            this._statusMonitorActive = true;
+            this.logger.info('Started real-time device status monitoring stream');
+            
+            stream.on('data', async (statusData) => {
+                try {
+                    const statusObj = statusData.toObject();
+                    const deviceId = statusObj.deviceid || statusObj.deviceId; // handle case mismatch
+                    const status = statusObj.status; // connectMessage.Status
+                    
+                    // 0x00 DISCONNECTED, 0x100 TCP_CANNOT_CONNECT, 0x101 TCP_NOT_ALLOWED, 0x200 TLS_CANNOT_CONNECT, 0x201 TLS_NOT_ALLOWED
+                    const isDisconnected = status === 0 || status === 256 || status === 257 || status === 512 || status === 513;
+                    
+                    this.logger.info(`Real-time device status change: Device ${deviceId} -> status code ${status}`);
+                    
+                    if (isDisconnected) {
+                        this.connectedDevices.delete(deviceId.toString());
+                        
+                        if (this.database && this.deviceDbIdMap) {
+                            const dbId = this.deviceDbIdMap.get(deviceId.toString());
+                            if (dbId) {
+                                await this.database.updateDevice(dbId, { status: 'disconnected' });
+                                this.logger.info(`Device ${deviceId} state marked as disconnected in database`);
+                            }
+                        }
+                        this.emit('device:disconnected', { deviceId });
+                    } else if (status === 1 || status === 2) {
+                        // 1 TCP_CONNECTED, 2 TLS_CONNECTED
+                        let deviceConfig = null;
+                        if (this.database && this.deviceDbIdMap) {
+                            const dbId = this.deviceDbIdMap.get(deviceId.toString());
+                            if (dbId) {
+                                await this.database.updateDevice(dbId, { status: 'connected' });
+                                this.logger.info(`Device ${deviceId} state marked as connected in database`);
+                                const allDevices = await this.database.getAllDevices();
+                                const rec = allDevices.find((d) => d.id === dbId);
+                                if (rec) deviceConfig = { ip: rec.ip, port: rec.port };
+                            }
+                        }
+                        this.connectedDevices.set(
+                            deviceId.toString(),
+                            deviceConfig
+                                ? { id: deviceId, ip: deviceConfig.ip, port: deviceConfig.port, connectedAt: new Date(), status: 'connected' }
+                                : true
+                        );
+                        this.emit('device:connected', { deviceId, ...(deviceConfig && { config: deviceConfig }) });
+                    }
+                } catch (err) {
+                    this.logger.error('Error processing status stream data:', err);
+                }
+            });
+            
+            const handleStreamDropped = () => {
+                this._statusMonitorActive = false;
+                this.logger.info('Scheduling auto-reconnect of device status stream in 5 seconds...');
+                setTimeout(() => {
+                    if (!this._statusMonitorActive) {
+                        this.startStatusMonitoring();
+                    }
+                }, 5000);
+            };
+
+            stream.on('error', (err) => {
+                this.logger.warn(`Device status stream error: ${err.message}`);
+                handleStreamDropped();
+            });
+            
+            stream.on('end', () => {
+                this.logger.info('Device status stream ended.');
+                handleStreamDropped();
+            });
+            
+            this._statusStream = stream;
+        } catch (error) {
+            this.logger.error(`Failed to start status monitoring: ${error.message}`);
+            this._statusMonitorActive = false;
+            setTimeout(() => this.startStatusMonitoring(), 10000);
+        }
+    }
+
+    /**
      * Test device connection
      * @param {string} deviceId - Device ID
      * @returns {Promise<boolean>} Connection status
@@ -1235,3 +1325,7 @@ class SupremaConnectionService extends EventEmitter {
 }
 
 export default SupremaConnectionService;
+
+
+
+

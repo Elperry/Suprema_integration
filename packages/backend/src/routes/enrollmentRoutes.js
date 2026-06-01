@@ -39,7 +39,8 @@ export default (services) => {
         } catch (error) {
             res.status(500).json({
                 error: 'Internal Server Error',
-                message: error.message
+                message: error.message,
+                failedDevices: error.failedDevices || undefined
             });
         }
     }));
@@ -100,29 +101,30 @@ export default (services) => {
     /**
      * Assign a card to an employee
      * POST /api/enrollment/cards
-     * Body: { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes }
+     * Body: { employeeId, cardNumber, cardData, notes }
      */
     router.post('/cards', asyncHandler(async (req, res) => {
         try {
-            const { employeeId, employeeName, cardData, cardType, cardFormat, cardSize, notes } = req.body;
+            const { employeeId, cardNumber, cardData, notes } = req.body;
 
             services.logger.debug('POST /enrollment/cards - Request body:', JSON.stringify(req.body, null, 2));
 
-            if (!employeeId || !cardData) {
-                services.logger.warn('Missing required fields:', { employeeId: !!employeeId, cardData: !!cardData });
+            if (!employeeId || (!cardData && !cardNumber)) {
+                services.logger.warn('Missing required fields:', {
+                    employeeId: !!employeeId,
+                    cardData: !!cardData,
+                    cardNumber: !!cardNumber
+                });
                 return res.status(400).json({
                     error: 'Bad Request',
-                    message: 'employeeId and cardData are required'
+                    message: 'employeeId and either cardNumber or cardData are required'
                 });
             }
 
             const assignment = await enrollment.assignCardToEmployee({
                 employeeId: String(employeeId),
-                employeeName: employeeName || null,
-                cardData: String(cardData),
-                cardType: cardType || 'CSN',
-                cardFormat: cardFormat || 0,
-                cardSize: cardSize || 0,
+                cardData: cardData ? String(cardData) : undefined,
+                cardNumber: cardNumber == null ? null : String(cardNumber),
                 notes: notes || null
             });
 
@@ -133,7 +135,7 @@ export default (services) => {
                 category: 'enrollment',
                 targetType: 'employee',
                 targetId: String(employeeId),
-                details: { assignmentId: assignment.id, cardType: cardType || 'CSN' },
+                details: { assignmentId: assignment.id },
                 status: 'success',
                 ipAddress: req.ip,
                 requestId: req.requestId,
@@ -190,6 +192,41 @@ export default (services) => {
     }));
 
     /**
+     * Permanently delete an inactive card assignment
+     * DELETE /api/enrollment/cards/:id/permanent
+     */
+    router.delete('/cards/:id/permanent', asyncHandler(async (req, res) => {
+        try {
+            const { id } = req.params;
+
+            const result = await enrollment.deleteCardAssignment(parseInt(id));
+
+            audit?.log({
+                action: 'delete-card',
+                category: 'enrollment',
+                targetType: 'card_assignment',
+                targetId: id,
+                details: { deletedEnrollments: result.deletedEnrollments },
+                status: 'success',
+                ipAddress: req.ip,
+                requestId: req.requestId,
+            });
+
+            res.json({
+                success: true,
+                data: result,
+                message: 'Card assignment deleted permanently'
+            });
+        } catch (error) {
+            const isConflict = /^Cannot /.test(error.message || '');
+            res.status(isConflict ? 409 : 500).json({
+                error: isConflict ? 'Conflict' : 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
+
+    /**
      * Update card assignment status
      * PATCH /api/enrollment/cards/:id/status
      * Body: { status, reason }
@@ -240,7 +277,7 @@ export default (services) => {
     /**
      * Replace a card with a new one
      * POST /api/enrollment/cards/:id/replace
-     * Body: { cardData, cardType, cardFormat, notes }
+     * Body: { cardNumber, cardData, cardType, cardFormat, notes }
      * 
      * Revokes old card, creates new assignment for the same employee,
      * and re-enrolls on the same devices.
@@ -248,16 +285,17 @@ export default (services) => {
     router.post('/cards/:id/replace', asyncHandler(async (req, res) => {
         try {
             const { id } = req.params;
-            const { cardData, cardType, cardFormat, notes } = req.body;
+            const { cardNumber, cardData, cardType, cardFormat, notes } = req.body;
 
-            if (!cardData) {
+            if (!cardData && !cardNumber) {
                 return res.status(400).json({
                     error: 'Bad Request',
-                    message: 'cardData for the new card is required'
+                    message: 'cardNumber or cardData for the new card is required'
                 });
             }
 
             const result = await enrollment.replaceCard(parseInt(id), {
+                cardNumber,
                 cardData,
                 cardType,
                 cardFormat,
@@ -351,11 +389,32 @@ export default (services) => {
             }
 
             const result = await enrollment.enrollOnMultipleDevices(deviceIds, parseInt(assignmentId));
+            const successCount = result.successful.length;
+            const failureCount = result.failed.length;
+            const results = [
+                ...result.successful.map((entry) => ({ deviceId: entry.deviceId, success: true, enrollment: entry.enrollment })),
+                ...result.failed.map((entry) => ({ deviceId: entry.deviceId, success: false, error: entry.error })),
+            ];
 
-            res.json({
-                success: true,
+            if (successCount === 0) {
+                return res.status(500).json({
+                    success: false,
+                    data: result,
+                    results,
+                    message: failureCount > 0
+                        ? `Failed to enroll on all ${deviceIds.length} device(s)`
+                        : 'Enrollment failed'
+                });
+            }
+
+            res.status(failureCount > 0 ? 207 : 200).json({
+                success: failureCount === 0,
+                partial: failureCount > 0,
                 data: result,
-                message: `Enrolled on ${result.successful.length}/${deviceIds.length} devices`
+                results,
+                message: failureCount > 0
+                    ? `Enrolled on ${successCount}/${deviceIds.length} devices (${failureCount} failed)`
+                    : `Enrolled on ${successCount}/${deviceIds.length} devices`
             });
         } catch (error) {
             res.status(500).json({
@@ -546,26 +605,25 @@ export default (services) => {
      * 1. Assign card to employee
      * 2. Enroll on specified devices
      * POST /api/enrollment/quick
-     * Body: { employeeId, employeeName, cardData, cardType, cardSize, deviceIds }
+     * Body: { employeeId, cardData, cardNumber, deviceIds, notes }
      */
     router.post('/quick', asyncHandler(async (req, res) => {
         try {
-            const { employeeId, employeeName, cardData, cardType, cardSize, deviceIds = [] } = req.body;
+            const { employeeId, cardData, cardNumber, deviceIds = [], notes } = req.body;
 
-            if (!employeeId || !cardData) {
+            if (!employeeId || (!cardData && !cardNumber)) {
                 return res.status(400).json({
                     error: 'Bad Request',
-                    message: 'employeeId and cardData are required'
+                    message: 'employeeId and either cardData or cardNumber are required'
                 });
             }
 
             // Step 1: Assign card
             const assignment = await enrollment.assignCardToEmployee({
                 employeeId,
-                employeeName,
                 cardData,
-                cardType,
-                cardSize: cardSize || 0
+                cardNumber,
+                notes: notes || null
             });
 
             // Step 2: Enroll on devices

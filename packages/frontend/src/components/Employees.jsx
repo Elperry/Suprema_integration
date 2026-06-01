@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { employeeAPI, enrollmentAPI, hrAPI } from '../services/api'
 import { useNotification } from './Notifications'
 import { SkeletonTable } from './Skeleton'
@@ -20,9 +20,10 @@ const decodeHexCardData = (hexData) => {
 
 export default function Employees() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const notify = useNotification()
   const [employees, setEmployees] = useState([])
-  const [searchQuery, setSearchQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('search') || '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [success, _setSuccess] = useState(null)
@@ -64,6 +65,11 @@ export default function Employees() {
     loadEmployees()
   }, [loadEmployees])
 
+  useEffect(() => {
+    const nextSearch = searchParams.get('search') || ''
+    setSearchQuery(prev => prev === nextSearch ? prev : nextSearch)
+  }, [searchParams])
+
   const handleSearch = async (e) => {
     e.preventDefault()
     if (searchQuery.trim() && searchQuery.trim().length < 2) {
@@ -71,12 +77,19 @@ export default function Employees() {
       return
     }
     setPage(1)
+    const nextParams = new URLSearchParams(searchParams)
+    if (searchQuery.trim()) nextParams.set('search', searchQuery.trim())
+    else nextParams.delete('search')
+    setSearchParams(nextParams, { replace: true })
     // loadEmployees will fire via useEffect since page changed
   }
 
   const clearSearch = () => {
     setSearchQuery('')
     setPage(1)
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete('search')
+    setSearchParams(nextParams, { replace: true })
   }
 
   const handleTerminate = async () => {
@@ -157,7 +170,8 @@ export default function Employees() {
       case 'id': av = a.id || a.employee_id || 0; bv = b.id || b.employee_id || 0; break
       case 'name': av = (a.displayname || a.name || a.full_name || '').toLowerCase(); bv = (b.displayname || b.name || b.full_name || '').toLowerCase(); break
       case 'card': av = a.card || ''; bv = b.card || ''; break
-      case 'ssn': av = a.ssn || ''; bv = b.ssn || ''; break
+      case 'code': av = a.code || ''; bv = b.code || ''; break
+      case 'email': av = a.email || ''; bv = b.email || ''; break
       case 'status': av = a.suspend == 1 ? 1 : 0; bv = b.suspend == 1 ? 1 : 0; break
       default: av = a.id || 0; bv = b.id || 0
     }
@@ -186,12 +200,13 @@ export default function Employees() {
   const handleExportSelected = () => {
     const selected = sortedEmployees.filter(e => selectedIds.has(e.id || e.employee_id))
     if (selected.length === 0) return
-    const headers = ['ID', 'Name', 'Card', 'SSN', 'Status']
+    const headers = ['ID', 'Code', 'Name', 'Card', 'Email', 'Status']
     const rows = selected.map(e => [
       e.id || e.employee_id,
+      e.code || '',
       e.displayname || e.name || e.full_name || e.employee_name || '',
       e.card ? decodeHexCardData(e.card).decimal : '',
-      e.ssn || '',
+      e.email || '',
       e.suspend == 1 ? 'Suspended' : 'Active'
     ])
     const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
@@ -266,65 +281,71 @@ export default function Employees() {
       {/* Table */}
       <div className="card">
         {loading ? (
-          <table className="data-table">
-            <thead>
-              <tr><th style={{ width: 36 }}></th><th>ID</th><th>Name</th><th>Card</th><th>SSN</th><th>Status</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              <SkeletonTable rows={8} cols={7} />
-            </tbody>
-          </table>
-        ) : (
-          <>
+          <div className="data-table-wrapper">
             <table className="data-table">
               <thead>
-                <tr>
-                  <th style={{ width: 36 }}><input type="checkbox" checked={selectedIds.size === sortedEmployees.length && sortedEmployees.length > 0} onChange={toggleSelectAll} /></th>
-                  <th className="sortable-th" onClick={() => handleSort('id')}>ID {sortIndicator('id')}</th>
-                  <th className="sortable-th" onClick={() => handleSort('name')}>Name {sortIndicator('name')}</th>
-                  <th className="sortable-th" onClick={() => handleSort('card')}>Card {sortIndicator('card')}</th>
-                  <th className="sortable-th" onClick={() => handleSort('ssn')}>SSN {sortIndicator('ssn')}</th>
-                  <th className="sortable-th" onClick={() => handleSort('status')}>Status {sortIndicator('status')}</th>
-                  <th>Actions</th>
-                </tr>
+                <tr><th style={{ width: 36 }}></th><th>ID</th><th>Code</th><th>Name</th><th>Card</th><th>Email</th><th>Status</th><th>Actions</th></tr>
               </thead>
               <tbody>
-                {sortedEmployees.length === 0 ? (
-                  <tr><td colSpan={7} className="empty-cell">No employees found.</td></tr>
-                ) : sortedEmployees.map((emp, idx) => (
-                  <tr key={emp.id || emp.employee_id || idx} className={selectedIds.has(emp.id || emp.employee_id) ? 'selected-row' : ''}>
-                    <td><input type="checkbox" checked={selectedIds.has(emp.id || emp.employee_id)} onChange={() => toggleSelect(emp.id || emp.employee_id)} /></td>
-                    <td><code>{emp.id || emp.employee_id}</code></td>
-                    <td className="name-cell">
-                      {emp.profile_photo && (
-                        <img src={emp.profile_photo} alt="" className="avatar" onError={e => e.target.style.display='none'} />
-                      )}
-                      <span>{emp.displayname || emp.name || emp.full_name || emp.employee_name || '—'}</span>
-                    </td>
-                    <td><code>{emp.card ? decodeHexCardData(emp.card).decimal : '—'}</code></td>
-                    <td>{emp.ssn || '—'}</td>
-                    <td>
-                      <span className={`badge ${statusColor(emp)}`}>
-                        {emp.suspend == 1 || emp.suspend === true ? 'Suspended' : 'Active'}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="btn btn-sm btn-primary" onClick={() => navigate(`/employee/${emp.id || emp.employee_id}`)}>
-                        Profile
-                      </button>
-                      <button className="btn btn-sm btn-secondary" style={{ marginLeft: '0.25rem' }} onClick={() => openDetail(emp)}>
-                        Quick View
-                      </button>
-                      {!(emp.suspend == 1 || emp.suspend === true) && (
-                        <button className="btn btn-sm btn-danger" style={{ marginLeft: '0.25rem' }} onClick={() => setConfirmTerminate(emp)}>
-                          Terminate
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                <SkeletonTable rows={8} cols={7} />
               </tbody>
             </table>
+          </div>
+        ) : (
+          <>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 36 }}><input type="checkbox" checked={selectedIds.size === sortedEmployees.length && sortedEmployees.length > 0} onChange={toggleSelectAll} /></th>
+                    <th className="sortable-th" onClick={() => handleSort('id')}>ID {sortIndicator('id')}</th>
+                    <th className="sortable-th" onClick={() => handleSort('code')}>Code {sortIndicator('code')}</th>
+                    <th className="sortable-th" onClick={() => handleSort('name')}>Name {sortIndicator('name')}</th>
+                    <th className="sortable-th" onClick={() => handleSort('card')}>Card {sortIndicator('card')}</th>
+                    <th className="sortable-th" onClick={() => handleSort('email')}>Email {sortIndicator('email')}</th>
+                    <th className="sortable-th" onClick={() => handleSort('status')}>Status {sortIndicator('status')}</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedEmployees.length === 0 ? (
+                    <tr><td colSpan={8} className="empty-cell">No employees found.</td></tr>
+                  ) : sortedEmployees.map((emp, idx) => (
+                    <tr key={emp.id || emp.employee_id || idx} className={selectedIds.has(emp.id || emp.employee_id) ? 'selected-row' : ''}>
+                      <td data-label="Select"><input type="checkbox" checked={selectedIds.has(emp.id || emp.employee_id)} onChange={() => toggleSelect(emp.id || emp.employee_id)} /></td>
+                      <td data-label="ID"><code>{emp.id || emp.employee_id}</code></td>
+                      <td data-label="Code">{emp.code || '—'}</td>
+                      <td data-label="Name" className="name-cell">
+                        {emp.profile_photo && (
+                          <img src={emp.profile_photo} alt="" className="avatar" onError={e => e.target.style.display='none'} />
+                        )}
+                        <span>{emp.displayname || emp.name || emp.full_name || emp.employee_name || '—'}</span>
+                      </td>
+                      <td data-label="Card"><code>{emp.card ? decodeHexCardData(emp.card).decimal : '—'}</code></td>
+                      <td data-label="Email">{emp.email || '—'}</td>
+                      <td data-label="Status">
+                        <span className={`badge ${statusColor(emp)}`}>
+                          {emp.suspend == 1 || emp.suspend === true ? 'Suspended' : 'Active'}
+                        </span>
+                      </td>
+                      <td data-label="Actions" className="actions-cell">
+                        <button className="btn btn-sm btn-primary" onClick={() => navigate(`/employee/${emp.id || emp.employee_id}`)}>
+                          Profile
+                        </button>
+                        <button className="btn btn-sm btn-secondary" onClick={() => openDetail(emp)}>
+                          Quick View
+                        </button>
+                        {!(emp.suspend == 1 || emp.suspend === true) && (
+                          <button className="btn btn-sm btn-danger" onClick={() => setConfirmTerminate(emp)}>
+                            Terminate
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (
@@ -386,22 +407,24 @@ export default function Employees() {
                 {employeeDetail.assignments && employeeDetail.assignments.length > 0 && (
                   <div className="detail-section">
                     <h4>💳 Card Assignments ({employeeDetail.assignments.length})</h4>
-                    <table className="data-table compact">
-                      <thead>
-                        <tr><th>ID</th><th>Card Data</th><th>Type</th><th>Status</th><th>Assigned At</th></tr>
-                      </thead>
-                      <tbody>
-                        {employeeDetail.assignments.map(a => (
-                          <tr key={a.id}>
-                            <td><code>{a.id}</code></td>
-                            <td><code>{a.cardData ? decodeHexCardData(a.cardData).decimal : '—'}</code></td>
-                            <td>{a.cardType}</td>
-                            <td><span className={`badge badge-${a.status}`}>{a.status}</span></td>
-                            <td>{a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <div className="data-table-wrapper">
+                      <table className="data-table compact">
+                        <thead>
+                          <tr><th>ID</th><th>Card Number</th><th>Type</th><th>Status</th><th>Assigned At</th></tr>
+                        </thead>
+                        <tbody>
+                          {employeeDetail.assignments.map(a => (
+                            <tr key={a.id}>
+                              <td data-label="ID"><code>{a.id}</code></td>
+                              <td data-label="Card Number"><code>{a.cardData ? decodeHexCardData(a.cardData).decimal : '—'}</code></td>
+                              <td data-label="Type">{a.cardType}</td>
+                              <td data-label="Status"><span className={`badge badge-${a.status}`}>{a.status}</span></td>
+                              <td data-label="Assigned At">{a.assignedAt ? new Date(a.assignedAt).toLocaleDateString() : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
 

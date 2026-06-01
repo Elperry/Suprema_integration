@@ -24,6 +24,7 @@ export default function DeviceDetail() {
   const [eventsLoading, setEventsLoading] = useState(false)
   const [replicationHealth, setReplicationHealth] = useState(null)
   const [reconciliation, setReconciliation] = useState(null)
+  const isConnected = device?.status === 'connected'
 
   const loadDevice = useCallback(async () => {
     try {
@@ -94,6 +95,12 @@ export default function DeviceDetail() {
   }, [activeTab, loadUsers, loadEvents])
 
   const handleAction = async (action) => {
+    const requiresConnectedDevice = ['disconnect', 'syncUsers', 'syncEvents', 'repair']
+    if (requiresConnectedDevice.includes(action) && !isConnected) {
+      setError('Connect this device to enable sync and repair actions.')
+      return
+    }
+
     setActionLoading(action)
     setError(null)
     setSuccess(null)
@@ -160,8 +167,6 @@ export default function DeviceDetail() {
     )
   }
 
-  const isConnected = device.status === 'connected'
-
   return (
     <div className="device-detail-page">
       {/* Breadcrumb */}
@@ -188,16 +193,17 @@ export default function DeviceDetail() {
               {actionLoading === 'connect' ? '⏳' : '🔗'} Connect
             </button>
           )}
-          <button className="btn btn-primary btn-sm" onClick={() => handleAction('syncUsers')} disabled={!!actionLoading}>
+          <button className="btn btn-primary btn-sm" onClick={() => handleAction('syncUsers')} disabled={!isConnected || !!actionLoading} title={!isConnected ? 'Connect device to enable sync' : undefined}>
             {actionLoading === 'syncUsers' ? '⏳' : '👥'} Sync Users
           </button>
-          <button className="btn btn-primary btn-sm" onClick={() => handleAction('syncEvents')} disabled={!!actionLoading}>
+          <button className="btn btn-primary btn-sm" onClick={() => handleAction('syncEvents')} disabled={!isConnected || !!actionLoading} title={!isConnected ? 'Connect device to enable event sync' : undefined}>
             {actionLoading === 'syncEvents' ? '⏳' : '📋'} Sync Events
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={() => handleAction('repair')} disabled={!!actionLoading}>
+          <button className="btn btn-secondary btn-sm" onClick={() => handleAction('repair')} disabled={!isConnected || !!actionLoading} title={!isConnected ? 'Connect device to enable repair' : undefined}>
             {actionLoading === 'repair' ? '⏳' : '🔧'} Repair
           </button>
         </div>
+        {!isConnected && <p className="device-action-hint">Connect this device to enable sync and repair actions.</p>}
       </div>
 
       {/* Alerts */}
@@ -285,25 +291,29 @@ export default function DeviceDetail() {
             <button className="btn btn-sm btn-secondary" onClick={loadUsers} disabled={usersLoading}>↻ Refresh</button>
           </div>
           {usersLoading ? (
-            <table className="data-table"><thead><tr><th>ID</th><th>Name</th><th>Card</th><th>Status</th></tr></thead><tbody><SkeletonTable rows={6} cols={4} /></tbody></table>
+            <div className="detail-table-wrapper">
+              <table className="data-table"><thead><tr><th>ID</th><th>Name</th><th>Card</th><th>Status</th></tr></thead><tbody><SkeletonTable rows={6} cols={4} /></tbody></table>
+            </div>
           ) : enrolledUsers.length === 0 ? (
             <div className="empty-hint">No users enrolled on this device. Use "Sync Users" to push users from the database.</div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th>User ID</th><th>Name</th><th>Card</th><th>Status</th></tr>
-              </thead>
-              <tbody>
-                {enrolledUsers.map((u, i) => (
-                  <tr key={u.userID || u.id || i}>
-                    <td><code>{u.userID || u.id}</code></td>
-                    <td>{u.name || u.userName || '—'}</td>
-                    <td><code>{u.cardData ? u.cardData.substring(0, 16) + '…' : '—'}</code></td>
-                    <td><span className={`badge ${u.status === 'active' ? 'badge-success' : 'badge-secondary'}`}>{u.status || 'enrolled'}</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="detail-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr><th>User ID</th><th>Name</th><th>Card</th><th>Status</th></tr>
+                </thead>
+                <tbody>
+                  {enrolledUsers.map((u, i) => (
+                    <tr key={u.userID || u.id || i}>
+                      <td data-label="User ID"><code>{u.userID || u.id}</code></td>
+                      <td data-label="Name">{u.name || u.userName || '—'}</td>
+                      <td data-label="Card"><code>{u.cardData ? u.cardData.substring(0, 16) + '…' : '—'}</code></td>
+                      <td data-label="Status"><span className={`badge ${u.status === 'active' ? 'badge-success' : 'badge-secondary'}`}>{u.status || 'enrolled'}</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}
@@ -315,26 +325,30 @@ export default function DeviceDetail() {
             <button className="btn btn-sm btn-secondary" onClick={loadEvents} disabled={eventsLoading}>↻ Refresh</button>
           </div>
           {eventsLoading ? (
-            <table className="data-table"><thead><tr><th>Type</th><th>User</th><th>Description</th><th>Result</th><th>Time</th></tr></thead><tbody><SkeletonTable rows={8} cols={5} /></tbody></table>
+            <div className="detail-table-wrapper">
+              <table className="data-table"><thead><tr><th>Type</th><th>User</th><th>Description</th><th>Result</th><th>Time</th></tr></thead><tbody><SkeletonTable rows={8} cols={5} /></tbody></table>
+            </div>
           ) : recentEvents.length === 0 ? (
             <div className="empty-hint">No events recorded for this device. Sync events to populate.</div>
           ) : (
-            <table className="data-table">
-              <thead>
-                <tr><th>Type</th><th>User</th><th>Description</th><th>Result</th><th>Time</th></tr>
-              </thead>
-              <tbody>
-                {recentEvents.map((e, i) => (
-                  <tr key={e.id || i}>
-                    <td><span className={`badge badge-${e.eventType || 'other'}`}>{e.eventType || 'other'}</span></td>
-                    <td>{e.userId || 'N/A'}</td>
-                    <td className="desc-cell">{e.description || '—'}</td>
-                    <td>{e.authResult === 'success' ? '✅' : e.authResult === 'fail' ? '❌' : '—'}</td>
-                    <td className="ts-cell">{formatTimestamp(e.timestamp)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div className="detail-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr><th>Type</th><th>User</th><th>Description</th><th>Result</th><th>Time</th></tr>
+                </thead>
+                <tbody>
+                  {recentEvents.map((e, i) => (
+                    <tr key={e.id || i}>
+                      <td data-label="Type"><span className={`badge badge-${e.eventType || 'other'}`}>{e.eventType || 'other'}</span></td>
+                      <td data-label="User">{e.userId || 'N/A'}</td>
+                      <td data-label="Description" className="desc-cell">{e.description || '—'}</td>
+                      <td data-label="Result">{e.authResult === 'success' ? '✅' : e.authResult === 'fail' ? '❌' : '—'}</td>
+                      <td data-label="Time" className="ts-cell">{formatTimestamp(e.timestamp)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       )}

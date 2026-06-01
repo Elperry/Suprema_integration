@@ -76,6 +76,9 @@ export default function TNA() {
           page: filters.page,
           pageSize: filters.pageSize
         })
+        if (res.data?.message && (res.data.message === 'Gateway not available' || res.data.message === 'No devices connected')) {
+          throw new Error(res.data.message)
+        }
       } catch (grpcErr) {
         // Fallback to DB-based daily attendance report
         res = await tnaAPI.getDailyReport({
@@ -123,6 +126,9 @@ export default function TNA() {
           startDate: filters.startDate,
           endDate: filters.endDate
         })
+        if (res.data?.message && (res.data.message === 'Gateway not available' || res.data.message === 'No devices connected')) {
+          throw new Error(res.data.message)
+        }
       } catch (grpcErr) {
         // Fallback: build summary from monthly report data
         try {
@@ -374,35 +380,37 @@ export default function TNA() {
             </div>
           ) : (
             <>
-              <table className="table tna-table">
-                <thead>
-                  <tr>
-                    <th>Employee</th>
-                    <th>Event Type</th>
-                    <th>Device</th>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th>Location</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {logs.map((log, index) => (
-                    <tr key={log.id || index}>
-                      <td>
-                        <div className="employee-cell">
-                          <span className="employee-name">{log.employeeName || 'Unknown'}</span>
-                          <span className="employee-id">{log.employeeId}</span>
-                        </div>
-                      </td>
-                      <td>{getEventTypeBadge(log.eventType)}</td>
-                      <td>{log.deviceName || log.deviceId}</td>
-                      <td>{formatDate(log.timestamp)}</td>
-                      <td><strong>{formatTime(log.timestamp)}</strong></td>
-                      <td>{log.location || '-'}</td>
+              <div className="tna-table-wrapper">
+                <table className="table tna-table">
+                  <thead>
+                    <tr>
+                      <th>Employee</th>
+                      <th>Event Type</th>
+                      <th>Device</th>
+                      <th>Date</th>
+                      <th>Time</th>
+                      <th>Location</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {logs.map((log, index) => (
+                      <tr key={log.id || index}>
+                        <td data-label="Employee">
+                          <div className="employee-cell">
+                            <span className="employee-name">{log.employeeName || 'Unknown'}</span>
+                            <span className="employee-id">{log.employeeId}</span>
+                          </div>
+                        </td>
+                        <td data-label="Event Type">{getEventTypeBadge(log.eventType)}</td>
+                        <td data-label="Device">{log.deviceName || log.deviceId}</td>
+                        <td data-label="Date">{formatDate(log.timestamp)}</td>
+                        <td data-label="Time"><strong>{formatTime(log.timestamp)}</strong></td>
+                        <td data-label="Location">{log.location || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
 
               {/* Pagination */}
               {pagination.totalPages > 1 && (
@@ -474,43 +482,45 @@ export default function TNA() {
 
               {/* Employee Summary Table */}
               {summary.employees && summary.employees.length > 0 && (
-                <table className="table summary-table">
-                  <thead>
-                    <tr>
-                      <th>Employee</th>
-                      <th>Days Present</th>
-                      <th>Total Hours</th>
-                      <th>Avg Hours/Day</th>
-                      <th>Late Arrivals</th>
-                      <th>Early Leaves</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.employees.map((emp, index) => (
-                      <tr key={emp.employeeId || index}>
-                        <td>
-                          <div className="employee-cell">
-                            <span className="employee-name">{emp.employeeName || 'Unknown'}</span>
-                            <span className="employee-id">{emp.employeeId}</span>
-                          </div>
-                        </td>
-                        <td>{emp.daysPresent || 0}</td>
-                        <td>{formatDuration(emp.totalMinutes)}</td>
-                        <td>{formatDuration(emp.avgMinutesPerDay)}</td>
-                        <td>
-                          <span className={emp.lateArrivals > 0 ? 'text-warning' : ''}>
-                            {emp.lateArrivals || 0}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={emp.earlyLeaves > 0 ? 'text-warning' : ''}>
-                            {emp.earlyLeaves || 0}
-                          </span>
-                        </td>
+                <div className="tna-table-wrapper">
+                  <table className="table summary-table">
+                    <thead>
+                      <tr>
+                        <th>Employee</th>
+                        <th>Days Present</th>
+                        <th>Total Hours</th>
+                        <th>Avg Hours/Day</th>
+                        <th>Late Arrivals</th>
+                        <th>Early Leaves</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {summary.employees.map((emp, index) => (
+                        <tr key={emp.employeeId || index}>
+                          <td data-label="Employee">
+                            <div className="employee-cell">
+                              <span className="employee-name">{emp.employeeName || 'Unknown'}</span>
+                              <span className="employee-id">{emp.employeeId}</span>
+                            </div>
+                          </td>
+                          <td data-label="Days Present">{emp.daysPresent || 0}</td>
+                          <td data-label="Total Hours">{formatDuration(emp.totalMinutes)}</td>
+                          <td data-label="Avg Hours/Day">{formatDuration(emp.avgMinutesPerDay)}</td>
+                          <td data-label="Late Arrivals">
+                            <span className={emp.lateArrivals > 0 ? 'text-warning' : ''}>
+                              {emp.lateArrivals || 0}
+                            </span>
+                          </td>
+                          <td data-label="Early Leaves">
+                            <span className={emp.earlyLeaves > 0 ? 'text-warning' : ''}>
+                              {emp.earlyLeaves || 0}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </>
           )}
@@ -571,49 +581,53 @@ export default function TNA() {
               {reportData.rows.length === 0 ? (
                 <div className="empty-state"><p>No attendance data found for this period.</p></div>
               ) : reportData.type === 'daily' ? (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>User ID</th>
-                      <th>First In</th>
-                      <th>Last Out</th>
-                      <th>Total Hours</th>
-                      <th>Events</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportData.rows.map((r, i) => (
-                      <tr key={i}>
-                        <td><strong>{r.userId}</strong></td>
-                        <td>{r.firstEvent ? new Date(r.firstEvent).toLocaleTimeString() : '—'}</td>
-                        <td>{r.lastEvent ? new Date(r.lastEvent).toLocaleTimeString() : '—'}</td>
-                        <td>{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
-                        <td>{r.eventCount || 0}</td>
+                <div className="tna-table-wrapper">
+                  <table className="table report-table">
+                    <thead>
+                      <tr>
+                        <th>User ID</th>
+                        <th>First In</th>
+                        <th>Last Out</th>
+                        <th>Total Hours</th>
+                        <th>Events</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {reportData.rows.map((r, i) => (
+                        <tr key={i}>
+                          <td data-label="User ID"><strong>{r.userId}</strong></td>
+                          <td data-label="First In">{r.firstEvent ? new Date(r.firstEvent).toLocaleTimeString() : '—'}</td>
+                          <td data-label="Last Out">{r.lastEvent ? new Date(r.lastEvent).toLocaleTimeString() : '—'}</td>
+                          <td data-label="Total Hours">{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
+                          <td data-label="Events">{r.eventCount || 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               ) : (
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>User ID</th>
-                      <th>Days Present</th>
-                      <th>Total Hours</th>
-                      <th>Avg Hours/Day</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportData.rows.map((r, i) => (
-                      <tr key={i}>
-                        <td><strong>{r.userId}</strong></td>
-                        <td>{r.daysPresent || 0}</td>
-                        <td>{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
-                        <td>{r.avgHoursPerDay != null ? `${r.avgHoursPerDay}h` : '—'}</td>
+                <div className="tna-table-wrapper">
+                  <table className="table report-table">
+                    <thead>
+                      <tr>
+                        <th>User ID</th>
+                        <th>Days Present</th>
+                        <th>Total Hours</th>
+                        <th>Avg Hours/Day</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {reportData.rows.map((r, i) => (
+                        <tr key={i}>
+                          <td data-label="User ID"><strong>{r.userId}</strong></td>
+                          <td data-label="Days Present">{r.daysPresent || 0}</td>
+                          <td data-label="Total Hours">{r.totalHours != null ? `${r.totalHours}h` : '—'}</td>
+                          <td data-label="Avg Hours/Day">{r.avgHoursPerDay != null ? `${r.avgHoursPerDay}h` : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}

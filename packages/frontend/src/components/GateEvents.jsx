@@ -22,7 +22,7 @@ export default function GateEvents() {
   const [filterGateId, setFilterGateId] = useState('')
   const [filterStartDate, setFilterStartDate] = useState('')
   const [filterEndDate, setFilterEndDate] = useState('')
-  const [filterDir, setFilterDir] = useState('')
+  const [filterResult, setFilterResult] = useState('')
   const [totalCount, setTotalCount] = useState(0)
 
   // Employee autocomplete
@@ -65,7 +65,7 @@ export default function GateEvents() {
       if (filterGateId) params.gate_id = filterGateId
       if (filterStartDate) params.startDate = filterStartDate
       if (filterEndDate) params.endDate = filterEndDate
-      if (filterDir) params.dir = filterDir
+      if (filterResult) params.authResult = filterResult
 
       const res = await gateEventAPI.getAll(params)
       const data = res.data?.data || res.data || []
@@ -77,7 +77,7 @@ export default function GateEvents() {
     } finally {
       setLoading(false)
     }
-  }, [page, filterEmployeeId, filterGateId, filterStartDate, filterEndDate, filterDir])
+  }, [page, filterEmployeeId, filterGateId, filterStartDate, filterEndDate, filterResult])
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true)
@@ -110,18 +110,18 @@ export default function GateEvents() {
     setFilterGateId('')
     setFilterStartDate('')
     setFilterEndDate('')
-    setFilterDir('')
+    setFilterResult('')
     setPage(1)
   }
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
-  const dirBadge = (dir) => {
-    if (!dir) return <span className="badge badge-neutral">—</span>
-    const d = String(dir).toLowerCase()
-    if (d === 'in') return <span className="badge badge-in">↓ In</span>
-    if (d === 'out') return <span className="badge badge-out">↑ Out</span>
-    return <span className="badge badge-neutral">{dir}</span>
+  const resultBadge = (result) => {
+    if (!result) return <span className="badge badge-neutral">—</span>
+    const r = String(result).toLowerCase()
+    if (r === 'success') return <span className="badge badge-in">✓ Success</span>
+    if (r === 'fail' || r === 'failure') return <span className="badge badge-out">✗ Fail</span>
+    return <span className="badge badge-neutral">{result}</span>
   }
 
   return (
@@ -143,12 +143,12 @@ export default function GateEvents() {
             <div className="stat-label">Today's Events</div>
           </div>
           <div className="stat-card">
-            <div className="stat-value">{stats.entries ?? stats.todayIn ?? '—'}</div>
-            <div className="stat-label">Entries (In)</div>
+            <div className="stat-value">{stats.successes ?? '—'}</div>
+            <div className="stat-label">Successes</div>
           </div>
           <div className="stat-card">
-            <div className="stat-value">{stats.exits ?? stats.todayOut ?? '—'}</div>
-            <div className="stat-label">Exits (Out)</div>
+            <div className="stat-value">{stats.failures ?? '—'}</div>
+            <div className="stat-label">Failures</div>
           </div>
           <div className="stat-card">
             <div className="stat-value">{stats.uniqueEmployees ?? stats.unique_employees ?? '—'}</div>
@@ -196,11 +196,11 @@ export default function GateEvents() {
             <input type="text" className="search-input" placeholder="e.g. 1" value={filterGateId} onChange={e => setFilterGateId(e.target.value)} />
           </div>
           <div className="filter-field">
-            <label>Direction</label>
-            <select className="select-input" value={filterDir} onChange={e => setFilterDir(e.target.value)}>
+            <label>Result</label>
+            <select className="select-input" value={filterResult} onChange={e => setFilterResult(e.target.value)}>
               <option value="">All</option>
-              <option value="in">In</option>
-              <option value="out">Out</option>
+              <option value="success">Success</option>
+              <option value="fail">Fail</option>
             </select>
           </div>
           <div className="filter-field">
@@ -225,42 +225,44 @@ export default function GateEvents() {
           <div className="loading-row"><div className="spinner" /><span>Loading gate events…</span></div>
         ) : (
           <>
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Employee ID</th>
-                  <th>Gate ID</th>
-                  <th>Location</th>
-                  <th>Direction</th>
-                  <th>Door No</th>
-                  <th>Event Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.length === 0 ? (
-                  <tr><td colSpan={7} className="empty-cell">
-                    <div style={{ padding: '2rem', textAlign: 'center' }}>
-                      <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🚪</div>
-                      <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>No gate events found</div>
-                      <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-                        Gate events appear here when employees badge through access points. Try adjusting your filters or sync events from devices.
-                      </div>
-                    </div>
-                  </td></tr>
-                ) : events.map((ev, idx) => (
-                  <tr key={ev.id || idx}>
-                    <td><code>{ev.id}</code></td>
-                    <td><strong>{ev.employee_id || '—'}</strong></td>
-                    <td>{ev.gate_id ?? '—'}</td>
-                    <td>{ev.loc || '—'}</td>
-                    <td>{dirBadge(ev.dir)}</td>
-                    <td>{ev.door_no ?? '—'}</td>
-                    <td>{formatDate(ev.etime)}</td>
+            <div className="data-table-wrapper">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Employee ID</th>
+                    <th>Gate ID</th>
+                    <th>Description</th>
+                    <th>Result</th>
+                    <th>Door No</th>
+                    <th>Event Time</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {events.length === 0 ? (
+                    <tr><td colSpan={7} className="empty-cell">
+                      <div style={{ padding: '2rem', textAlign: 'center' }}>
+                        <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🚪</div>
+                        <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>No gate events found</div>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+                          Gate events appear here when employees badge through access points. Try adjusting your filters or sync events from devices.
+                        </div>
+                      </div>
+                    </td></tr>
+                  ) : events.map((ev, idx) => (
+                    <tr key={ev.id || idx}>
+                      <td data-label="ID"><code>{ev.id}</code></td>
+                      <td data-label="Employee ID"><strong>{ev.employee_id || '—'}</strong></td>
+                      <td data-label="Gate ID">{ev.gate_id ?? '—'}</td>
+                      <td data-label="Description">{ev.description || '—'}</td>
+                      <td data-label="Result">{resultBadge(ev.authResult)}</td>
+                      <td data-label="Door No">{ev.door_no ?? '—'}</td>
+                      <td data-label="Event Time">{formatDate(ev.etime)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (

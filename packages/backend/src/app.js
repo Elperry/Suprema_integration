@@ -28,7 +28,9 @@ import locationRoutes from './routes/locationRoutes.js';
 import timeRoutes from './routes/timeRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import presetRoutes from './routes/presetRoutes.js';
+import processRoutes from './routes/processRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
+import settingsRoutes from './routes/settingsRoutes.js';
 
 // Error handling infrastructure
 import { createErrorHandler, notFoundHandler } from './core/errors/index.js';
@@ -50,11 +52,15 @@ function buildServicesObject(container) {
         biometric: container.resolve('biometricService'),
         time: container.resolve('timeService'),
         sync: container.resolve('syncService'),
+        userSync: container.resolve('userSyncService'),
+        cloudSync: container.resolve('cloudSyncService'),
         enrollment: container.resolve('enrollmentService'),
         card: container.resolve('biometricService'), // card ops via biometric service
         database: container.resolve('database'),
         logger: container.resolve('logger'),
         audit: container.resolve('auditService'),
+        syncSettings: container.resolve('syncSettingsService'),
+        processService: (() => { try { return container.resolve('processService'); } catch { return null; } })(),
     };
 }
 
@@ -105,7 +111,9 @@ function setupRoutes(app, services) {
     app.use('/api/time', timeRoutes(services));
     app.use('/api/audit', auditRoutes(services));
     app.use('/api/presets', presetRoutes(services));
+    app.use('/api/processes', processRoutes(services));
     app.use('/api/reports', reportRoutes(services));
+    app.use('/api/settings', settingsRoutes(services));
 
     // API documentation index
     app.get('/api', (req, res) => {
@@ -130,7 +138,8 @@ function setupRoutes(app, services) {
                 time: '/api/time',
                 audit: '/api/audit',
                 presets: '/api/presets',
-                reports: '/api/reports'
+                reports: '/api/reports',
+                settings: '/api/settings'
             },
             health: '/health'
         });

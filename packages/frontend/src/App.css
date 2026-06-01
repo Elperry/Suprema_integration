@@ -60,12 +60,17 @@ body {
   font-weight: 500;
 }
 
-.status-indicator.connected {
+.status-indicator.healthy {
   background: #dcfce7;
   color: var(--success-color);
 }
 
-.status-indicator.disconnected {
+.status-indicator.degraded {
+  background: #fef3c7;
+  color: #d97706;
+}
+
+.status-indicator.unhealthy {
   background: #fee2e2;
   color: var(--error-color);
 }

@@ -112,16 +112,19 @@ const configSchema = {
     
     // Database
     database: {
-        url: process.env.DATABASE_URL,
+        url: process.env.DATABASE_URL,           // local DB — primary connection used by Prisma
+        cloudUrl: process.env.CLOUD_DATABASE_URL || null, // remote/cloud DB — used for sync only
+        cloudSyncTrigger: String(process.env.CLOUD_SYNC_TRIGGER || 'disabled').trim().toLowerCase(),
         provider: process.env.DB_PROVIDER || 'mysql',
         host: process.env.DB_HOST || 'localhost',
         port: parseInteger(process.env.DB_PORT, 3306),
         name: process.env.DB_NAME || 'suprema_integration',
         user: process.env.DB_USER || 'root',
         password: process.env.DB_PASSWORD || '',
-        poolMin: parseInteger(process.env.DB_POOL_MIN, 2),
         poolMax: parseInteger(process.env.DB_POOL_MAX, 10),
-        logQueries: parseBoolean(process.env.DB_LOG_QUERIES, isDevelopment())
+        poolTimeout: parseInteger(process.env.DB_POOL_TIMEOUT, 30),
+        logQueries: parseBoolean(process.env.DB_LOG_QUERIES, isDevelopment()),
+        cloudSyncIntervalMs: parseInteger(process.env.CLOUD_SYNC_INTERVAL_MS, 5 * 60 * 1000),
     },
     
     // Logging

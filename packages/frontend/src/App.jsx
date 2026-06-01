@@ -21,6 +21,7 @@ import CardAssignments from './components/CardAssignments'
 import SyncCenter from './components/SyncCenter'
 import AuditLog from './components/AuditLog'
 import Reports from './components/Reports'
+import Processes from './components/Processes'
 import BulkImport from './components/BulkImport'
 import EmployeeDetail from './components/EmployeeDetail'
 import SystemHealth from './components/SystemHealth'
@@ -32,6 +33,7 @@ import NotificationCenter from './components/NotificationCenter'
 import Sidebar from './components/Sidebar'
 import { NotificationProvider } from './components/Notifications'
 import { API_CONFIG, API_ENDPOINTS } from './config/constants'
+import { deriveHealthSummary } from './utils/healthStatus'
 
 function AppContent() {
   const [health, setHealth] = useState(null)
@@ -68,6 +70,8 @@ function AppContent() {
     }
   }
 
+  const healthSummary = deriveHealthSummary(health)
+
   return (
     <div className="app">
       {mobileOpen && <div className="sidebar-overlay visible" onClick={() => setMobileOpen(false)} />}
@@ -86,9 +90,9 @@ function AppContent() {
               </button>
             )}
             <div className="header-status">
-              <div className={`status-indicator ${health ? 'connected' : 'disconnected'}`}>
+              <div className={`status-indicator ${healthSummary.status}`}>
                 <span className="dot"></span>
-                <span>{health ? 'Connected' : 'Disconnected'}</span>
+                <span>{healthSummary.connectionLabel}</span>
               </div>
             </div>
           </div>
@@ -123,6 +127,8 @@ function AppContent() {
               <Route path="/employee/:id" element={<EmployeeDetail />} />
               <Route path="/doors" element={<Doors />} />
               <Route path="/access-matrix" element={<AccessMatrix />} />
+              <Route path="/processes" element={<Processes />} />
+              <Route path="/processes/:id" element={<Processes />} />
               <Route path="/notifications" element={<NotificationCenter />} />
               <Route path="/debugger" element={<Debugger />} />
               <Route path="/health" element={<SystemHealth />} />

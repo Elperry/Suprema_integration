@@ -5,6 +5,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "postinstall": "prisma generate",
     "start": "node index.js",
     "dev": "nodemon index.js",
     "setup": "node setup.js",
@@ -21,7 +22,8 @@
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "cards:revoke-invalid-base64": "node scripts/revoke-invalid-base64-cards.mjs"
   },
   "keywords": [
     "suprema",
@@ -41,7 +43,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "google-protobuf": "^4.0.0",
+    "google-protobuf": "~3.21.4",
     "helmet": "^7.1.0",
     "lodash": "^4.17.21",
     "moment": "^2.29.4",

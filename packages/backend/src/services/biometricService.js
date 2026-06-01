@@ -21,6 +21,42 @@ const fingerMessage = require('../../biostar/service/finger_pb');
 const cardMessage = require('../../biostar/service/card_pb');
 const faceMessage = require('../../biostar/service/face_pb');
 
+const CARD_ID_SIZE = 32;
+
+/**
+ * Build a 32-byte right-aligned card ID buffer from a hex string (or pass-through
+ * Buffer/Uint8Array). Per Suprema docs, both CSNCardData.data and
+ * BlacklistItem.cardID must be 32 bytes with the CSN bytes right-aligned and
+ * the leading bytes zero-padded.
+ *
+ * @param {string|Buffer|Uint8Array} cardId
+ * @returns {Buffer} 32-byte buffer
+ */
+function buildCardIdBuffer(cardId) {
+    let source;
+    if (Buffer.isBuffer(cardId)) {
+        source = cardId;
+    } else if (cardId instanceof Uint8Array) {
+        source = Buffer.from(cardId);
+    } else {
+        let hex = String(cardId || '').replace(/[^0-9A-Fa-f]/g, '');
+        if (hex.length === 0) {
+            return Buffer.alloc(CARD_ID_SIZE, 0);
+        }
+        if (hex.length % 2 === 1) hex = `0${hex}`;
+        source = Buffer.from(hex, 'hex');
+    }
+
+    if (source.length === CARD_ID_SIZE) return source;
+    if (source.length > CARD_ID_SIZE) {
+        // Take the last 32 bytes (right-aligned)
+        return source.subarray(source.length - CARD_ID_SIZE);
+    }
+    const out = Buffer.alloc(CARD_ID_SIZE, 0);
+    source.copy(out, CARD_ID_SIZE - source.length);
+    return out;
+}
+
 class SupremaBiometricService extends EventEmitter {
     constructor(connectionService) {
         super();
@@ -484,7 +520,10 @@ class SupremaBiometricService extends EventEmitter {
         try {
             const blacklistItems = cardInfos.map(cardInfo => {
                 const item = new cardMessage.BlacklistItem();
-                item.setCardid(Buffer.from(cardInfo.cardId, 'utf-8'));
+                // Per Suprema docs, BlacklistItem.cardID must be a 32-byte
+                // buffer, right-aligned with the CSN bytes (same layout as
+                // CSNCardData.data).
+                item.setCardid(buildCardIdBuffer(cardInfo.cardId));
                 item.setIssuecount(cardInfo.issueCount || 1);
                 return item;
             });
@@ -522,7 +561,10 @@ class SupremaBiometricService extends EventEmitter {
         try {
             const blacklistItems = cardInfos.map(cardInfo => {
                 const item = new cardMessage.BlacklistItem();
-                item.setCardid(Buffer.from(cardInfo.cardId, 'utf-8'));
+                // Per Suprema docs, BlacklistItem.cardID must be a 32-byte
+                // buffer, right-aligned with the CSN bytes (same layout as
+                // CSNCardData.data).
+                item.setCardid(buildCardIdBuffer(cardInfo.cardId));
                 item.setIssuecount(cardInfo.issueCount || 1);
                 return item;
             });

@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
 import { deviceAPI, gateEventAPI, employeeAPI } from '../services/api';
 import { SkeletonCards, SkeletonTable } from './Skeleton';
+import { deriveHealthSummary } from '../utils/healthStatus';
 import './Dashboard.css';
 
 export default function Dashboard({ health }) {
@@ -96,13 +97,7 @@ export default function Dashboard({ health }) {
     return '↔️';
   };
 
-  const getHealthStatus = () => {
-    if (!health) return { status: 'offline', label: 'Offline', color: 'danger' };
-    if (health.status === 'healthy') return { status: 'healthy', label: 'Healthy', color: 'success' };
-    return { status: 'degraded', label: 'Degraded', color: 'warning' };
-  };
-
-  const healthInfo = getHealthStatus();
+  const healthInfo = deriveHealthSummary(health);
 
   if (loading && !lastUpdate) {
     return (
@@ -113,14 +108,16 @@ export default function Dashboard({ health }) {
         <SkeletonCards count={4} height={120} />
         <div className="card" style={{ marginTop: 20 }}>
           <h3 style={{ marginBottom: 12 }}>Recent Activity</h3>
-          <table className="table" style={{ width: '100%' }}>
-            <thead>
-              <tr><th>Time</th><th>Employee</th><th>Device</th><th>Direction</th></tr>
-            </thead>
-            <tbody>
-              <SkeletonTable rows={5} cols={4} />
-            </tbody>
-          </table>
+          <div className="dashboard-table-wrapper">
+            <table className="table dashboard-table" style={{ width: '100%' }}>
+              <thead>
+                <tr><th>Time</th><th>Employee</th><th>Device</th><th>Direction</th></tr>
+              </thead>
+              <tbody>
+                <SkeletonTable rows={5} cols={4} />
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -157,8 +154,8 @@ export default function Dashboard({ health }) {
           <span>System Status: <strong>{healthInfo.label}</strong></span>
         </div>
         <div className="health-details">
-          <span>Gateway: {health?.gateway || 'N/A'}</span>
-          <span>Database: {health?.database?.connected ? '🟢 Connected' : '🔴 Disconnected'}</span>
+          <span>Gateway: {healthInfo.gatewayLabel}</span>
+          <span>Database: {healthInfo.databaseConnected ? '🟢 Connected' : '🔴 Disconnected'}</span>
           <span>Devices: {stats.devices.connected}/{stats.devices.total} online</span>
         </div>
       </div>
@@ -269,14 +266,14 @@ export default function Dashboard({ health }) {
         <div className="replication-grid">
           <div className="repl-stat">
             <span className="repl-label">Gateway</span>
-            <span className={`badge badge-${health?.gateway === 'connected' ? 'success' : 'warning'}`}>
-              {health?.gateway || 'Unknown'}
+            <span className={`badge badge-${healthInfo.isGatewayConnected ? 'success' : 'warning'}`}>
+              {healthInfo.gatewayLabel}
             </span>
           </div>
           <div className="repl-stat">
             <span className="repl-label">Database</span>
-            <span className={`badge badge-${health?.database?.connected ? 'success' : 'danger'}`}>
-              {health?.database?.connected ? 'Connected' : 'Disconnected'}
+            <span className={`badge badge-${healthInfo.databaseConnected ? 'success' : 'danger'}`}>
+              {healthInfo.databaseConnected ? 'Connected' : 'Disconnected'}
             </span>
           </div>
           <div className="repl-stat">
@@ -326,34 +323,36 @@ export default function Dashboard({ health }) {
         {recentEvents.length === 0 ? (
           <p className="empty-state">No recent events. Events will appear here when synced from devices.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Location</th>
-                <th>Direction</th>
-                <th>Date</th>
-                <th>Time</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentEvents.map((event, index) => (
-                <tr key={event.id || index}>
-                  <td>
-                    <span className="employee-id">{event.employee_id || 'Unknown'}</span>
-                  </td>
-                  <td>{event.loc || `Door ${event.door_no}` || 'N/A'}</td>
-                  <td>
-                    <span className={`direction-badge ${event.dir?.toLowerCase()}`}>
-                      {getDirectionIcon(event.dir)} {event.dir || 'N/A'}
-                    </span>
-                  </td>
-                  <td>{formatDate(event.etime)}</td>
-                  <td>{formatTime(event.etime)}</td>
+          <div className="dashboard-table-wrapper">
+            <table className="table dashboard-table">
+              <thead>
+                <tr>
+                  <th>Employee</th>
+                  <th>Location</th>
+                  <th>Direction</th>
+                  <th>Date</th>
+                  <th>Time</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {recentEvents.map((event, index) => (
+                  <tr key={event.id || index}>
+                    <td data-label="Employee">
+                      <span className="employee-id">{event.employee_id || 'Unknown'}</span>
+                    </td>
+                    <td data-label="Location">{event.loc || `Door ${event.door_no}` || 'N/A'}</td>
+                    <td data-label="Direction">
+                      <span className={`direction-badge ${event.dir?.toLowerCase()}`}>
+                        {getDirectionIcon(event.dir)} {event.dir || 'N/A'}
+                      </span>
+                    </td>
+                    <td data-label="Date">{formatDate(event.etime)}</td>
+                    <td data-label="Time">{formatTime(event.etime)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

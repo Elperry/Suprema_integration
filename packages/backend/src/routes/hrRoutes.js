@@ -38,14 +38,47 @@ export default (services) => {
                 }
             }));
 
-            await services.user.enrollUsers(deviceId, supremaUsers);
+            const ps = services.processService;
+            if (!ps) {
+                // Fallback: synchronous
+                await services.user.enrollUsers(deviceId, supremaUsers);
+                return res.json({
+                    success: true,
+                    message: `Successfully synced ${supremaUsers.length} users to device ${deviceId}`,
+                    syncedUsers: supremaUsers.length
+                });
+            }
 
+            const processId = ps.create('hr-users-sync', {
+                description: `HR user sync → device ${deviceId}`,
+                deviceId,
+                userCount: supremaUsers.length,
+            });
+            ps.update(processId, { total: supremaUsers.length });
             res.json({
                 success: true,
-                message: `Successfully synced ${supremaUsers.length} users to device ${deviceId}`,
-                syncedUsers: supremaUsers.length
+                background: true,
+                processId,
+                message: `HR sync started for ${supremaUsers.length} user(s). Track progress at /processes/${processId}`,
             });
 
+            setImmediate(async () => {
+                try {
+                    ps.update(processId, { status: 'running' });
+                    ps.log(processId, `Enrolling ${supremaUsers.length} HR user(s) onto device ${deviceId}…`);
+                    await services.user.enrollUsers(deviceId, supremaUsers);
+                    ps.update(processId, {
+                        status: 'completed',
+                        progress: supremaUsers.length,
+                        results: [{ deviceId, userCount: supremaUsers.length, success: true }],
+                    });
+                    ps.log(processId, `HR sync complete — ${supremaUsers.length} user(s) enrolled`);
+                } catch (error) {
+                    services.logger.error('[API] hr/users/sync background error:', { error: error.message });
+                    ps.update(processId, { status: 'failed' });
+                    ps.log(processId, `Fatal error: ${error.message}`, 'error');
+                }
+            });
         } catch (error) {
             res.status(500).json({
                 error: 'Internal Server Error',
@@ -222,17 +255,39 @@ export default (services) => {
             let eventCodes = [];
             switch (eventType) {
                 case 'success':
-                    eventCodes = [0x1000, 0x1100]; // Auth success, Identify success
+                    // All grant events: Verify, Identify, Card, Fingerprint, Face, PIN, Dual Auth, Operator
+                    eventCodes = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
                     break;
                 case 'failure':
-                    eventCodes = [0x1001, 0x1101]; // Auth fail, Identify fail
+                    // All denial events per credential type
+                    eventCodes = [
+                        0x1001, 0x1002, 0x1003, // Verify Fail (Not Registered, Mismatch, Timeout)
+                        0x1101, 0x1102, 0x1103, // Identify Fail
+                        0x1201, 0x1202, 0x1203, // Verify Fail (Card)
+                        0x1301, 0x1302, 0x1303, // Verify Fail (Fingerprint)
+                        0x1401, 0x1402, 0x1403, // Verify Fail (Face)
+                        0x1501, 0x1502,          // Verify Fail (PIN)
+                    ];
                     break;
                 case 'door':
-                    eventCodes = [0x2000, 0x2001, 0x2002, 0x2003]; // Door events
+                    // All door state events including forced open, held open, alarms, emergency
+                    eventCodes = [
+                        0x2000, 0x2001, 0x2002, 0x2003, 0x2004, // Opened, Closed, Locked, Unlocked, Forced Open
+                        0x2005, 0x2006, 0x2007, 0x2008,          // Held Open, Open Alarm, Open Warning, Released
+                        0x2100,                                    // Exit Button Pressed
+                        0x2200, 0x2201,                           // Emergency Lock, Emergency Unlock
+                    ];
                     break;
                 default:
                     // All authentication and door events
-                    eventCodes = [0x1000, 0x1001, 0x1100, 0x1101, 0x2000, 0x2001, 0x2002, 0x2003];
+                    eventCodes = [
+                        0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700, // success
+                        0x1001, 0x1002, 0x1003, 0x1101, 0x1102, 0x1103,                  // verify/identify fail
+                        0x1201, 0x1202, 0x1203, 0x1301, 0x1302, 0x1303,                  // card/fingerprint fail
+                        0x1401, 0x1402, 0x1403, 0x1501, 0x1502,                          // face/PIN fail
+                        0x2000, 0x2001, 0x2002, 0x2003, 0x2004,                          // door state
+                        0x2005, 0x2006, 0x2007, 0x2008, 0x2100, 0x2200, 0x2201,         // door alarms/emergency
+                    ];
             }
 
             filters.eventCodes = eventCodes;
@@ -265,7 +320,7 @@ export default (services) => {
                 timestamp: event.timestamp,
                 eventType: event.eventType,
                 eventDescription: event.description,
-                accessGranted: [0x1000, 0x1100].includes(event.eventcode),
+                accessGranted: [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700].includes(event.eventcode),
                 doorAction: event.eventcode >= 0x2000 && event.eventcode < 0x3000 ? 
                     event.description : null,
                 rawEventId: event.id
@@ -605,10 +660,13 @@ export default (services) => {
             if (event === 'terminated' || event === 'suspended') {
                 // Revoke all active card assignments for this employee
                 const prisma = services.database.getPrisma();
-                const activeCards = await prisma.cardAssignment.findMany({
-                    where: { employeeId: String(employeeId), status: 'active' },
-                    include: { enrollments: { where: { status: 'active' } } }
+                const localUser = await prisma.user.findFirst({
+                    where: { employee_id: parseInt(employeeId) }
                 });
+                const activeCards = localUser ? await prisma.cardAssignment.findMany({
+                    where: { user_id: localUser.id, status: 'active' },
+                    include: { enrollments: { where: { status: 'active' } } }
+                }) : [];
 
                 for (const card of activeCards) {
                     try {
@@ -676,10 +734,13 @@ export default (services) => {
             const { reason } = req.body || {};
 
             const prisma = services.database.getPrisma();
-            const activeCards = await prisma.cardAssignment.findMany({
-                where: { employeeId: String(employeeId), status: 'active' },
-                include: { enrollments: { where: { status: 'active' } } }
+            const localUser = await prisma.user.findFirst({
+                where: { employee_id: parseInt(employeeId) }
             });
+            const activeCards = localUser ? await prisma.cardAssignment.findMany({
+                where: { user_id: localUser.id, status: 'active' },
+                include: { enrollments: { where: { status: 'active' } } }
+            }) : [];
 
             const results = [];
             for (const card of activeCards) {

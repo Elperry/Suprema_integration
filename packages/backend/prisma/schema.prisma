@@ -40,8 +40,10 @@ model Device {
   password        String?
   loc             String?
   channel         Int?     @db.UnsignedTinyInt
-  last_event_sync DateTime @default(now())
-  last_user_sync  DateTime @default(now())
+  last_event_sync      DateTime @default(now())  // Timestamp of the last event sync run
+  last_user_sync       DateTime @default(now())  // Timestamp of the last user sync run
+  last_synced_event_id Int      @default(0) @db.UnsignedInt // Integer event-ID cursor for SyncService
+  last_replicated_event_id Int  @default(0) @db.UnsignedInt // Independent cursor for EventReplicationService
   port            Int?     @default(51211) @db.UnsignedInt
   isActive        Boolean  @default(true)
   status          String?  @default("disconnected")
@@ -81,12 +83,20 @@ model GateEvent {
   @@map("gateevents")
 }
 
+// Local user record provisioned from the employee table.
+// Source of truth is this local DB; auto-created by CloudSyncService when a
+// new employee is detected during each cloud sync cycle.
 model User {
-  id           Int    @id @default(autoincrement())
-  username     String @db.VarChar(300)
-  userpassword String @db.VarChar(300)
-  displayname  String @db.VarChar(300)
+  id          Int    @id @default(autoincrement())
+  code        String @db.VarChar(15)
+  name        String @db.VarChar(200)
+  full_name   String @db.VarChar(200)
+  employee_id Int
 
+  cardAssignments CardAssignment[]
+
+  @@unique([employee_id])
+  @@index([code])
   @@map("user")
 }
 
@@ -105,24 +115,22 @@ model TempAccess {
   @@map("tempaccess")
 }
 
-// Card assignments - links cards to employees
+// Card assignments - links cards to local users (which are linked to employees)
 model CardAssignment {
-  id            Int       @id @default(autoincrement())
-  employeeId    String    @db.VarChar(50)  // References HR employee ID
-  employeeName  String?   @db.VarChar(255) // Cached employee name for quick lookup
-  cardData      String    @db.VarChar(255) // Full 32-byte card data as hex (G-SDK CSN always 32 bytes)
-  cardSize      Int       @default(32)     // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
-  cardType      String    @default("CSN") @db.VarChar(50) // CSN, SmartCard, QR, etc.
-  cardFormat    Int       @default(0)      // Card format type from Suprema
-  status        String    @default("active") @db.VarChar(20) // active, revoked, lost, expired
-  assignedAt    DateTime  @default(now())
-  revokedAt     DateTime?
-  notes         String?   @db.Text
+  id        Int       @id @default(autoincrement())
+  user_id   Int
+  card_data String    @db.VarChar(191) // Hex value
+  card_csn  String    @default("") @db.VarChar(100) // Decimal value
+  status    String    @default("active") @db.VarChar(20) // active, revoked, lost, expired
+  assignedAt DateTime @default(now())
+  revokedAt  DateTime?
+  notes      String?  @db.Text
 
-  enrollments   DeviceEnrollment[]
+  user        User             @relation(fields: [user_id], references: [id])
+  enrollments DeviceEnrollment[]
 
-  @@unique([cardData])
-  @@index([employeeId])
+  @@unique([card_data])
+  @@index([user_id])
   @@index([status])
   @@map("card_assignments")
 }
@@ -160,6 +168,7 @@ model Event {
   authResult    String?   @db.VarChar(20)  // success, fail, etc.
   timestamp     DateTime  // Event timestamp from device
   syncedAt      DateTime  @default(now())  // When we synced this event
+  cloudSyncedAt DateTime?                   // When pushed to cloud gateevents (null = pending)
   rawData       Json?     // Full event data from device
 
   @@unique([deviceId, supremaEventId])
@@ -168,7 +177,36 @@ model Event {
   @@index([userId])
   @@index([timestamp])
   @@index([authResult])
+  @@index([cloudSyncedAt])
   @@map("events")
+}
+
+// Local cache of the cloud employee view.
+// Populated and kept fresh by CloudSyncService every CLOUD_SYNC_INTERVAL_MS.
+model Employee {
+  id          Int       @id @db.UnsignedInt
+  fullname    String?   @db.VarChar(191)
+  firstname   String?   @db.VarChar(100)
+  lastname    String?   @db.VarChar(100)
+  displayname String?   @db.VarChar(255)
+  email       String?   @db.VarChar(255)
+  mobile      String?   @db.VarChar(50)
+  jobtitle    String?   @db.VarChar(255)
+  company_id  Int?
+  suspend     String?   @db.VarChar(10)   // 'yes' | 'no'
+  ssn         String?   @db.VarChar(50)
+  card        String?   @db.VarChar(100)
+  department  String?   @db.VarChar(255)
+  code        String?   @db.VarChar(100)
+  extra       Json?     // any additional columns from the cloud view
+  lastSyncedAt DateTime @default(now())
+
+  @@index([company_id])
+  @@index([suspend])
+  @@index([fullname])
+  @@index([ssn])
+  @@index([code])
+  @@map("employee")
 }
 
 // Audit log - records administrative and operator actions
@@ -207,6 +245,18 @@ model FilterPreset {
   @@unique([name, scope])
   @@index([scope])
   @@map("filter_presets")
+}
+
+// Generic persisted application settings.
+// Sync settings are stored under key="sync" so operators can change runtime
+// intervals/toggles from the UI without editing .env.
+model SystemSetting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
 }
 
 // Enrollment debug logs - stores verbose logging for troubleshooting

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { reportAPI, deviceAPI } from '../services/api'
 import { useNotification } from './Notifications'
+import { formatDeviceOptionLabel, getDeviceSelectGroups } from '../utils/deviceOptions'
 
 const REPORT_DEFS = [
   { key: 'users', label: 'User Detail Report', description: 'All enrolled users across devices', icon: '👤', params: ['deviceId'] },
@@ -25,6 +26,8 @@ export default function Reports() {
   useEffect(() => {
     deviceAPI.getAll().then(r => setDevices(r.data.data || [])).catch(() => {})
   }, [])
+
+  const { onlineDevices, offlineDevices } = getDeviceSelectGroups(devices)
 
   const report = REPORT_DEFS.find(r => r.key === selectedReport)
 
@@ -74,8 +77,17 @@ export default function Reports() {
     if (p === 'deviceId') {
       return (
         <select key={p} value={params.deviceId || ''} onChange={e => updateParam('deviceId', e.target.value)} className="form-control" style={{ width: 'auto' }}>
-          <option value="">All Devices</option>
-          {devices.map(d => <option key={d.id} value={d.id}>{d.name} ({d.ip})</option>)}
+          <option value="">All Registered Devices</option>
+          {onlineDevices.length > 0 && (
+            <optgroup label="Online Devices">
+              {onlineDevices.map(d => <option key={d.id} value={d.id}>{formatDeviceOptionLabel(d)}</option>)}
+            </optgroup>
+          )}
+          {offlineDevices.length > 0 && (
+            <optgroup label="Registered but Offline">
+              {offlineDevices.map(d => <option key={d.id} value={d.id}>{formatDeviceOptionLabel(d)}</option>)}
+            </optgroup>
+          )}
         </select>
       )
     }

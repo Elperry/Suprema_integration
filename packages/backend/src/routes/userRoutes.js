@@ -24,8 +24,9 @@ export default (services) => {
     const prisma = services.database.getPrisma();
     const audit = services.audit;
 
-    // Initialize sync service with shared prisma
-    const syncService = new UserSyncService(
+    // Prefer the shared bootstrap-managed instance so background routines and
+    // route handlers operate on the same service state.
+    const syncService = services.userSync || new UserSyncService(
         services.user,
         services.connection,
         services.logger || console,
@@ -47,25 +48,55 @@ export default (services) => {
      * This makes devices match the database state exactly.
      */
     router.post('/sync-all', asyncHandler(async (req, res) => {
-        try {
-            services.logger.info('[API] POST /api/users/sync-all - Syncing database to all devices');
-            const results = await audit.wrap(
-                { action: 'sync-all', category: 'sync', ipAddress: req.ip, requestId: req.requestId },
-                () => syncService.syncDatabaseToAllDevices()
-            );
+        const ps = services.processService;
+        services.logger.info('[API] POST /api/users/sync-all - Starting background sync');
 
-            res.json({
-                success: true,
-                message: 'Database synchronized to all devices',
-                ...results
-            });
-        } catch (error) {
-            services.logger.error('[API] Sync all error:', { error: error.message });
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
+        if (!ps) {
+            // Fallback: fire-and-forget without tracking
+            res.json({ success: true, background: true, message: 'Sync started in background. Check logs for progress.' });
+            setImmediate(() => syncService.syncDatabaseToAllDevices().catch(e =>
+                services.logger.error('[API] sync-all error:', { error: e.message })
+            ));
+            return;
         }
+
+        const processId = ps.create('user-sync-all', { description: 'Sync database → all connected devices' });
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `User sync started. Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(async () => {
+            try {
+                ps.update(processId, { status: 'running' });
+                ps.log(processId, 'Fetching connected devices…');
+
+                const result = await audit.wrap(
+                    { action: 'sync-all', category: 'sync', ipAddress: req.ip, requestId: req.requestId },
+                    () => syncService.syncDatabaseToAllDevices()
+                );
+
+                const results = result.results || [];
+                ps.update(processId, {
+                    status: 'completed',
+                    progress: results.filter(r => r.success).length,
+                    total: results.length,
+                    results: results.map(r => ({
+                        deviceName: r.deviceName || r.deviceId,
+                        success: r.success,
+                        error: r.error || null,
+                        synced: r.synced ?? r.pushed ?? null,
+                    })),
+                });
+                ps.log(processId, `Sync complete — ${results.filter(r => r.success).length}/${results.length} devices OK`);
+            } catch (error) {
+                services.logger.error('[API] sync-all error:', { error: error.message });
+                ps.update(processId, { status: 'failed' });
+                ps.log(processId, `Fatal error: ${error.message}`, 'error');
+            }
+        });
     }));
 
     /**
@@ -148,96 +179,131 @@ export default (services) => {
                 });
             }
 
-            // Per-row validation
-            const results = [];
-            let created = 0;
-            let skipped = 0;
-            let errors = 0;
-
-            for (let i = 0; i < rows.length; i++) {
-                const row = rows[i];
-                const rowNum = i + 2; // 1-indexed, header is row 1
-
-                const employeeId = (row.employee_id || '').trim();
-                const employeeName = (row.employee_name || '').trim();
-                const cardData = (row.card_data || '').trim();
-                const cardType = (row.card_type || 'CSN').trim();
-                const notes = (row.notes || '').trim();
-
-                // Validate fields
-                if (!employeeId || !employeeName || !cardData) {
-                    results.push({ row: rowNum, status: 'error', message: 'Missing required field(s)' });
-                    errors++;
-                    continue;
-                }
-
-                // Validate card data looks like hex (even-length hex string)
-                if (!/^[0-9a-fA-F]+$/.test(cardData) || cardData.length % 2 !== 0) {
-                    results.push({ row: rowNum, status: 'error', message: 'card_data must be an even-length hex string' });
-                    errors++;
-                    continue;
-                }
-
-                if (dryRun) {
-                    results.push({ row: rowNum, status: 'valid', employeeId, employeeName });
-                    created++;
-                    continue;
-                }
-
-                try {
-                    // Check for duplicate card
-                    const existing = await prisma.cardAssignment.findFirst({
-                        where: { cardData },
-                    });
-
-                    if (existing) {
-                        results.push({ row: rowNum, status: 'skipped', message: `Card already assigned to ${existing.employeeName}` });
-                        skipped++;
-                        continue;
+            // Dry-run: validate rows synchronously and return immediately
+            if (dryRun) {
+                const results = [];
+                let valid = 0;
+                let errors = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i];
+                    const rowNum = i + 2;
+                    const employeeId = (row.employee_id || '').trim();
+                    const employeeName = (row.employee_name || '').trim();
+                    const cardData = (row.card_data || '').trim();
+                    if (!employeeId || !employeeName || !cardData) {
+                        results.push({ row: rowNum, status: 'error', message: 'Missing required field(s)' });
+                        errors++;
+                    } else if (!/^[0-9a-fA-F]+$/.test(cardData) || cardData.length % 2 !== 0) {
+                        results.push({ row: rowNum, status: 'error', message: 'card_data must be an even-length hex string' });
+                        errors++;
+                    } else {
+                        results.push({ row: rowNum, status: 'valid', employeeId, employeeName });
+                        valid++;
                     }
-
-                    // Create card assignment
-                    await prisma.cardAssignment.create({
-                        data: {
-                            employeeId,
-                            employeeName,
-                            cardData,
-                            cardType,
-                            notes: notes || `Bulk import`,
-                            status: 'active',
-                        },
-                    });
-
-                    results.push({ row: rowNum, status: 'created', employeeId, employeeName });
-                    created++;
-                } catch (rowError) {
-                    results.push({ row: rowNum, status: 'error', message: rowError.message });
-                    errors++;
                 }
-            }
-
-            if (!dryRun) {
-                audit?.log({
-                    action: 'bulk-import-csv',
-                    category: 'import',
-                    details: { totalRows: rows.length, created, skipped, errors },
-                    ipAddress: req.ip,
-                    requestId: req.requestId,
+                return res.json({
+                    success: true,
+                    dryRun: true,
+                    summary: { total: rows.length, valid, errors },
+                    results,
                 });
             }
 
+            // Real import — run as background process
+            const ps = services.processService;
+            if (!ps) {
+                // Fallback: synchronous (original behaviour)
+                const results = [];
+                let created = 0; let skipped = 0; let errors = 0;
+                for (let i = 0; i < rows.length; i++) {
+                    const row = rows[i]; const rowNum = i + 2;
+                    const employeeId = (row.employee_id || '').trim();
+                    const employeeName = (row.employee_name || '').trim();
+                    const cardData = (row.card_data || '').trim();
+                    const notes = (row.notes || '').trim();
+                    if (!employeeId || !employeeName || !cardData) { results.push({ row: rowNum, status: 'error', message: 'Missing required field(s)' }); errors++; continue; }
+                    if (!/^[0-9a-fA-F]+$/.test(cardData) || cardData.length % 2 !== 0) { results.push({ row: rowNum, status: 'error', message: 'card_data must be an even-length hex string' }); errors++; continue; }
+                    try {
+                        const localUser = await prisma.user.findFirst({ where: { employee_id: parseInt(employeeId) } });
+                        if (!localUser) { results.push({ row: rowNum, status: 'skipped', message: `No user found for employee ${employeeId}` }); skipped++; continue; }
+                        const existing = await prisma.cardAssignment.findFirst({ where: { card_data: cardData }, include: { user: true } });
+                        if (existing) { results.push({ row: rowNum, status: 'skipped', message: `Card already assigned to ${existing.user?.name || 'unknown'}` }); skipped++; continue; }
+                        await prisma.cardAssignment.create({ data: { user_id: localUser.id, card_data: cardData, card_csn: '', notes: notes || 'Bulk import', status: 'active' } });
+                        results.push({ row: rowNum, status: 'created', employeeId, employeeName }); created++;
+                    } catch (rowError) { results.push({ row: rowNum, status: 'error', message: rowError.message }); errors++; }
+                }
+                audit?.log({ action: 'bulk-import-csv', category: 'import', details: { totalRows: rows.length, created, skipped, errors }, ipAddress: req.ip, requestId: req.requestId });
+                return res.json({ success: true, dryRun: false, summary: { total: rows.length, created, skipped, errors }, results });
+            }
+
+            const processId = ps.create('import-csv', {
+                description: 'Bulk CSV card-assignment import',
+                totalRows: rows.length,
+            });
+            ps.update(processId, { total: rows.length });
             res.json({
                 success: true,
-                dryRun,
-                summary: { total: rows.length, created, skipped, errors },
-                results,
+                background: true,
+                processId,
+                message: `Import started for ${rows.length} rows. Track progress at /processes/${processId}`,
+            });
+
+            setImmediate(async () => {
+                try {
+                    ps.update(processId, { status: 'running' });
+                    ps.log(processId, `Processing ${rows.length} CSV rows…`);
+
+                    let created = 0; let skipped = 0; let errors = 0;
+                    for (let i = 0; i < rows.length; i++) {
+                        if (ps.isCancelled(processId)) { ps.log(processId, 'Import cancelled by user', 'warning'); break; }
+
+                        const row = rows[i]; const rowNum = i + 2;
+                        const employeeId = (row.employee_id || '').trim();
+                        const employeeName = (row.employee_name || '').trim();
+                        const cardData = (row.card_data || '').trim();
+                        const notes = (row.notes || '').trim();
+
+                        if (!employeeId || !employeeName || !cardData) {
+                            ps.addResult(processId, { row: rowNum, status: 'error', success: false, error: 'Missing required field(s)' });
+                            errors++; continue;
+                        }
+                        if (!/^[0-9a-fA-F]+$/.test(cardData) || cardData.length % 2 !== 0) {
+                            ps.addResult(processId, { row: rowNum, status: 'error', success: false, error: 'card_data must be an even-length hex string' });
+                            errors++; continue;
+                        }
+
+                        try {
+                            const localUser = await prisma.user.findFirst({ where: { employee_id: parseInt(employeeId) } });
+                            if (!localUser) {
+                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: `No user found for employee ${employeeId}` });
+                                skipped++; continue;
+                            }
+                            const existing = await prisma.cardAssignment.findFirst({ where: { card_data: cardData }, include: { user: true } });
+                            if (existing) {
+                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: `Card already assigned to ${existing.user?.name || 'unknown'}` });
+                                skipped++; continue;
+                            }
+                            await prisma.cardAssignment.create({ data: { user_id: localUser.id, card_data: cardData, card_csn: '', notes: notes || 'Bulk import', status: 'active' } });
+                            ps.addResult(processId, { row: rowNum, employeeId, employeeName, status: 'created', success: true });
+                            created++;
+                        } catch (rowError) {
+                            ps.addResult(processId, { row: rowNum, status: 'error', success: false, error: rowError.message });
+                            errors++;
+                        }
+                    }
+
+                    audit?.log({ action: 'bulk-import-csv', category: 'import', details: { totalRows: rows.length, created, skipped, errors }, ipAddress: req.ip, requestId: req.requestId });
+                    ps.update(processId, { status: ps.isCancelled(processId) ? 'cancelled' : 'completed' });
+                    ps.log(processId, `Import done — ${created} created, ${skipped} skipped, ${errors} errors`);
+                } catch (error) {
+                    services.logger.error('[API] import-csv background error:', { error: error.message });
+                    ps.update(processId, { status: 'failed' });
+                    ps.log(processId, `Fatal error: ${error.message}`, 'error');
+                }
             });
         } catch (error) {
             services.logger.error('[API] Bulk CSV import error:', { error: error.message });
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message,
-            });
+            res.status(500).json({ error: 'Internal Server Error', message: error.message });
         }
     }));
 
@@ -359,6 +425,27 @@ export default (services) => {
     }));
 
     /**
+     * Check one user on a specific device.
+     * GET /api/users/reconciliation/:deviceId/check-user/:userId
+     */
+    router.get('/reconciliation/:deviceId/check-user/:userId', asyncHandler(async (req, res) => {
+        try {
+            const { deviceId, userId } = req.params;
+            const report = await syncService.checkUserOnDevice(deviceId, userId);
+
+            res.json({
+                success: true,
+                data: report,
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
+
+    /**
      * Repair one device to match database assignments.
      * POST /api/users/reconciliation/:deviceId/repair
      */
@@ -413,23 +500,60 @@ export default (services) => {
      * POST /api/users/reconciliation/repair-all
      */
     router.post('/reconciliation/repair-all', asyncHandler(async (req, res) => {
-        try {
-            const result = await audit.wrap(
-                { action: 'repair-all-devices', category: 'sync', ipAddress: req.ip, requestId: req.requestId },
-                () => syncService.repairAllDevices()
-            );
+        const ps = services.processService;
 
-            res.json({
-                success: true,
-                message: 'Batch device repair completed',
-                data: result
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
+        if (!ps) {
+            // Fallback: synchronous
+            try {
+                const result = await audit.wrap(
+                    { action: 'repair-all-devices', category: 'sync', ipAddress: req.ip, requestId: req.requestId },
+                    () => syncService.repairAllDevices()
+                );
+                return res.json({ success: true, message: 'Batch device repair completed', data: result });
+            } catch (error) {
+                return res.status(500).json({ error: 'Internal Server Error', message: error.message });
+            }
         }
+
+        const processId = ps.create('repair-all', { description: 'Reconcile & repair all connected devices' });
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `Repair-all started. Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(async () => {
+            try {
+                ps.update(processId, { status: 'running' });
+                ps.log(processId, 'Running reconciliation overview…');
+
+                const result = await audit.wrap(
+                    { action: 'repair-all-devices', category: 'sync', ipAddress: req.ip, requestId: req.requestId },
+                    () => syncService.repairAllDevices()
+                );
+
+                const deviceResults = result.results || [];
+                const ok = deviceResults.filter(r => r.status === 'success').length;
+                ps.update(processId, {
+                    status: 'completed',
+                    progress: ok,
+                    total: deviceResults.length,
+                    results: deviceResults.map(r => ({
+                        deviceName: r.name || r.deviceId,
+                        success: r.status === 'success',
+                        status: r.status,
+                        error: r.error || null,
+                        reason: r.reason || null,
+                    })),
+                });
+                ps.log(processId, `Repair complete — ${ok}/${deviceResults.length} devices repaired`);
+            } catch (error) {
+                services.logger.error('[API] repair-all error:', { error: error.message });
+                ps.update(processId, { status: 'failed' });
+                ps.log(processId, `Fatal error: ${error.message}`, 'error');
+            }
+        });
     }));
 
     /**
@@ -479,6 +603,98 @@ export default (services) => {
                 success: true,
                 message: `User ${userId} deleted from all devices`,
                 ...result
+            });
+        } catch (error) {
+            res.status(500).json({
+                error: 'Internal Server Error',
+                message: error.message
+            });
+        }
+    }));
+
+    /**
+     * Enroll users to multiple devices — runs in background and returns a processId.
+     * POST /api/users/enroll-multi
+     * Body: { deviceIds: [], users: [] }
+     * Response: { success, processId, message }
+     */
+    router.post('/enroll-multi', asyncHandler(async (req, res) => {
+        const { deviceIds, users } = req.body;
+
+        if (!deviceIds || !Array.isArray(deviceIds)) {
+            return res.status(400).json({ error: 'Bad Request', message: 'deviceIds array is required' });
+        }
+        if (!users || !Array.isArray(users)) {
+            return res.status(400).json({ error: 'Bad Request', message: 'users array is required' });
+        }
+
+        const ps = services.processService;
+        if (!ps) {
+            // Fallback: synchronous enrollment (no process tracking)
+            try {
+                const result = await syncService.enrollUsersToDevices(deviceIds, users);
+                return res.json({ success: true, message: `Enrolled ${users.length} user(s) to ${deviceIds.length} device(s)`, results: result.results });
+            } catch (err) {
+                return res.status(500).json({ error: 'Internal Server Error', message: err.message });
+            }
+        }
+
+        const processId = ps.create('enroll-multi', {
+            deviceIds,
+            userCount: users.length,
+            deviceCount: deviceIds.length,
+        });
+
+        services.logger.info(`[API] POST /api/users/enroll-multi — processId=${processId}, users=${users.length}, devices=${deviceIds.length}`);
+
+        // Respond immediately — enrollment continues in background
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `Enrollment started in the background for ${users.length} user(s) on ${deviceIds.length} device(s). Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(() => {
+            syncService
+                .enrollUsersToDevices(deviceIds, users, { processId, processService: ps })
+                .catch((err) => {
+                    services.logger.error(`[API] enroll-multi background error (process ${processId}):`, err.message);
+                    ps.update(processId, { status: 'failed' });
+                    ps.log(processId, `Fatal error: ${err.message}`, 'error');
+                });
+        });
+    }));
+
+    /**
+     * Delete users from multiple devices
+     * DELETE /api/users/delete-multi
+     * Body: { deviceIds: [], userIds: [] }
+     */
+    router.delete('/delete-multi', asyncHandler(async (req, res) => {
+        try {
+            const { deviceIds, userIds } = req.body;
+
+            if (!deviceIds || !Array.isArray(deviceIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'deviceIds array is required'
+                });
+            }
+
+            if (!userIds || !Array.isArray(userIds)) {
+                return res.status(400).json({
+                    error: 'Bad Request',
+                    message: 'userIds array is required'
+                });
+            }
+
+            const result = await syncService.deleteUsersFromDevices(deviceIds, userIds);
+
+            res.json({
+                success: true,
+                message: `Deleted ${userIds.length} user(s) from ${deviceIds.length} device(s)`,
+                results: result.results
             });
         } catch (error) {
             res.status(500).json({
@@ -909,43 +1125,6 @@ export default (services) => {
     }));
 
     /**
-     * Enroll users to multiple devices
-     * POST /api/users/enroll-multi
-     * Body: { deviceIds: [], users: [] }
-     */
-    router.post('/enroll-multi', asyncHandler(async (req, res) => {
-        try {
-            const { deviceIds, users } = req.body;
-
-            if (!deviceIds || !Array.isArray(deviceIds)) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'deviceIds array is required'
-                });
-            }
-
-            if (!users || !Array.isArray(users)) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'users array is required'
-                });
-            }
-
-            await services.user.enrollUsersMulti(deviceIds, users);
-
-            res.json({
-                success: true,
-                message: `Enrolled ${users.length} users to ${deviceIds.length} devices`
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    }));
-
-    /**
      * Update users on multiple devices
      * PUT /api/users/update-multi
      * Body: { deviceIds: [], users: [] }
@@ -973,43 +1152,6 @@ export default (services) => {
             res.json({
                 success: true,
                 message: `Updated ${users.length} users on ${deviceIds.length} devices`
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    }));
-
-    /**
-     * Delete users from multiple devices
-     * DELETE /api/users/delete-multi
-     * Body: { deviceIds: [], userIds: [] }
-     */
-    router.delete('/delete-multi', asyncHandler(async (req, res) => {
-        try {
-            const { deviceIds, userIds } = req.body;
-
-            if (!deviceIds || !Array.isArray(deviceIds)) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'deviceIds array is required'
-                });
-            }
-
-            if (!userIds || !Array.isArray(userIds)) {
-                return res.status(400).json({
-                    error: 'Bad Request',
-                    message: 'userIds array is required'
-                });
-            }
-
-            await services.user.deleteUsersMulti(deviceIds, userIds);
-
-            res.json({
-                success: true,
-                message: `Deleted ${userIds.length} users from ${deviceIds.length} devices`
             });
         } catch (error) {
             res.status(500).json({
