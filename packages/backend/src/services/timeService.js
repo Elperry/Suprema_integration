@@ -298,6 +298,11 @@ class SupremaTimeService extends EventEmitter {
     async syncAllDevices(timezoneOffset = null) {
         try {
             const tz = timezoneOffset ?? this.defaultTimezoneOffset;
+            const timezone = {
+                offsetSeconds: tz,
+                offsetHours: tz / 3600,
+                description: this.getTimezoneDescription(tz)
+            };
             const connectedDevices = await this.connectionService.getConnectedDevices();
             
             if (!connectedDevices || connectedDevices.length === 0) {
@@ -305,7 +310,12 @@ class SupremaTimeService extends EventEmitter {
                 return {
                     success: true,
                     message: 'No devices to sync',
-                    devicesCount: 0
+                    devicesCount: 0,
+                    deviceIds: [],
+                    serverTime: new Date().toISOString(),
+                    timezone,
+                    configSync: { success: true, errors: [] },
+                    timeSync: { success: true, setTime: null, errors: [] }
                 };
             }
 
@@ -322,7 +332,12 @@ class SupremaTimeService extends EventEmitter {
                 return {
                     success: true,
                     message: 'No valid device IDs',
-                    devicesCount: 0
+                    devicesCount: 0,
+                    deviceIds: [],
+                    serverTime: new Date().toISOString(),
+                    timezone,
+                    configSync: { success: true, errors: [] },
+                    timeSync: { success: true, setTime: null, errors: [] }
                 };
             }
 
@@ -360,11 +375,7 @@ class SupremaTimeService extends EventEmitter {
                 devicesCount: deviceIds.length,
                 deviceIds,
                 serverTime: new Date().toISOString(),
-                timezone: {
-                    offsetSeconds: tz,
-                    offsetHours: tz / 3600,
-                    description: this.getTimezoneDescription(tz)
-                },
+                timezone,
                 configSync: {
                     success: configResult.success,
                     errors: configResult.errors || []

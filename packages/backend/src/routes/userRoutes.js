@@ -9,7 +9,6 @@
  */
 
 import express from 'express';
-import UserSyncService from '../services/userSyncService.js';
 import { resolveSupremaDeviceId } from '../utils/deviceResolver.js';
 import { toCsv, toExcelTable, parseCsv } from '../utils/csv.js';
 import { validate, schemas } from '../middleware/requestValidator.js';
@@ -24,14 +23,12 @@ export default (services) => {
     const prisma = services.database.getPrisma();
     const audit = services.audit;
 
-    // Prefer the shared bootstrap-managed instance so background routines and
-    // route handlers operate on the same service state.
-    const syncService = services.userSync || new UserSyncService(
-        services.user,
-        services.connection,
-        services.logger || console,
-        { prisma }
-    );
+    // Always use the DI-provided instance — a second instance would create a
+    // separate sync state and break the single-path guarantee.
+    const syncService = services.userSync;
+    if (!syncService) {
+        throw new Error('userSyncService is not registered in the DI container');
+    }
 
     /**
      * Helper function to get Suprema device ID from database ID
@@ -224,13 +221,17 @@ export default (services) => {
                     if (!employeeId || !employeeName || !cardData) { results.push({ row: rowNum, status: 'error', message: 'Missing required field(s)' }); errors++; continue; }
                     if (!/^[0-9a-fA-F]+$/.test(cardData) || cardData.length % 2 !== 0) { results.push({ row: rowNum, status: 'error', message: 'card_data must be an even-length hex string' }); errors++; continue; }
                     try {
-                        const localUser = await prisma.user.findFirst({ where: { employee_id: parseInt(employeeId) } });
-                        if (!localUser) { results.push({ row: rowNum, status: 'skipped', message: `No user found for employee ${employeeId}` }); skipped++; continue; }
-                        const existing = await prisma.cardAssignment.findFirst({ where: { card_data: cardData }, include: { user: true } });
-                        if (existing) { results.push({ row: rowNum, status: 'skipped', message: `Card already assigned to ${existing.user?.name || 'unknown'}` }); skipped++; continue; }
-                        await prisma.cardAssignment.create({ data: { user_id: localUser.id, card_data: cardData, card_csn: '', notes: notes || 'Bulk import', status: 'active' } });
+                        await services.enrollment.assignCardToEmployee({ employeeId, cardData, notes: notes || 'Bulk import' });
                         results.push({ row: rowNum, status: 'created', employeeId, employeeName }); created++;
-                    } catch (rowError) { results.push({ row: rowNum, status: 'error', message: rowError.message }); errors++; }
+                    } catch (rowError) {
+                        if (rowError.message.includes('already assigned')) {
+                            results.push({ row: rowNum, status: 'skipped', message: rowError.message }); skipped++;
+                        } else if (rowError.message.includes('No local user found')) {
+                            results.push({ row: rowNum, status: 'skipped', message: `No user found for employee ${employeeId}` }); skipped++;
+                        } else {
+                            results.push({ row: rowNum, status: 'error', message: rowError.message }); errors++;
+                        }
+                    }
                 }
                 audit?.log({ action: 'bulk-import-csv', category: 'import', details: { totalRows: rows.length, created, skipped, errors }, ipAddress: req.ip, requestId: req.requestId });
                 return res.json({ success: true, dryRun: false, summary: { total: rows.length, created, skipped, errors }, results });
@@ -273,22 +274,20 @@ export default (services) => {
                         }
 
                         try {
-                            const localUser = await prisma.user.findFirst({ where: { employee_id: parseInt(employeeId) } });
-                            if (!localUser) {
-                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: `No user found for employee ${employeeId}` });
-                                skipped++; continue;
-                            }
-                            const existing = await prisma.cardAssignment.findFirst({ where: { card_data: cardData }, include: { user: true } });
-                            if (existing) {
-                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: `Card already assigned to ${existing.user?.name || 'unknown'}` });
-                                skipped++; continue;
-                            }
-                            await prisma.cardAssignment.create({ data: { user_id: localUser.id, card_data: cardData, card_csn: '', notes: notes || 'Bulk import', status: 'active' } });
+                            await services.enrollment.assignCardToEmployee({ employeeId, cardData, notes: notes || 'Bulk import' });
                             ps.addResult(processId, { row: rowNum, employeeId, employeeName, status: 'created', success: true });
                             created++;
                         } catch (rowError) {
-                            ps.addResult(processId, { row: rowNum, status: 'error', success: false, error: rowError.message });
-                            errors++;
+                            if (rowError.message.includes('already assigned')) {
+                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: rowError.message });
+                                skipped++;
+                            } else if (rowError.message.includes('No local user found')) {
+                                ps.addResult(processId, { row: rowNum, status: 'skipped', success: false, error: `No user found for employee ${employeeId}` });
+                                skipped++;
+                            } else {
+                                ps.addResult(processId, { row: rowNum, status: 'error', success: false, error: rowError.message });
+                                errors++;
+                            }
                         }
                     }
 
@@ -1213,30 +1212,6 @@ export default (services) => {
             res.json({
                 success: true,
                 data: users[0]
-            });
-        } catch (error) {
-            res.status(500).json({
-                error: 'Internal Server Error',
-                message: error.message
-            });
-        }
-    }));
-
-    /**
-     * Sync users from device to database
-     * POST /api/users/:deviceId/sync
-     */
-    router.post('/:deviceId/sync', asyncHandler(async (req, res) => {
-        try {
-            const { deviceId } = req.params;
-            const supremaDeviceId = await getSupremaDeviceId(deviceId);
-            const result = await syncService.importUsersFromDevice(supremaDeviceId);
-
-            res.json({
-                success: true,
-                message: 'Users synchronized to database',
-                synced: result.imported,
-                deviceId: deviceId
             });
         } catch (error) {
             res.status(500).json({

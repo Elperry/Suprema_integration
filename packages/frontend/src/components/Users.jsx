@@ -2282,6 +2282,7 @@ export default function Users() {
                       />
                     </th>
                     <th>Employee ID</th>
+                    <th>User ID</th>
                     <th>Code</th>
                     <th>Name</th>
                     <th>Cards</th>
@@ -2313,6 +2314,7 @@ export default function Users() {
                           />
                         </td>
                         <td data-label="Employee ID"><code>{u.userID}</code></td>
+                        <td data-label="User ID"><code>{u.userId ?? '—'}</code></td>
                         <td data-label="Code">{u.code || '—'}</td>
                         <td data-label="Name">
                           <div className="user-name-cell">

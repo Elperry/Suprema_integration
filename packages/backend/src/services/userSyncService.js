@@ -29,6 +29,7 @@ class UserSyncService {
      * @param {Object} [options]
      * @param {import('@prisma/client').PrismaClient} [options.prisma] - Shared PrismaClient
      * @param {Object} [options.biometricService] - Optional biometric service for blacklist queries
+     * @param {Object} [options.enrollmentService] - EnrollmentService for single-path card writes
      */
     constructor(userService, connectionService, logger, options = {}) {
         this.userService = userService;
@@ -36,6 +37,7 @@ class UserSyncService {
         this.logger = logger || console;
         this.prisma = options.prisma || connectionService.database?.getPrisma();
         this.biometricService = options.biometricService || null;
+        this.enrollmentService = options.enrollmentService || null;
         this._autoSyncInterval = null;
         this._autoSyncIntervalMs = null;
         this._autoImportInterval = null;
@@ -164,6 +166,7 @@ class UserSyncService {
             if (!groupedUsers.has(groupKey)) {
                 groupedUsers.set(groupKey, {
                     userID: employeeId || `unknown-${assignment.id}`,
+                    userId: assignment.user?.id ?? null,
                     employeeId: employeeId || null,
                     code: assignment.user?.code || null,
                     name: '',
@@ -227,6 +230,7 @@ class UserSyncService {
 
                 return {
                     userID: user.userID,
+                    userId: user.userId ?? null,
                     employeeId: user.employeeId,
                     code: user.code || null,
                     name: user.name || 'Unknown',
@@ -1347,21 +1351,35 @@ class UserSyncService {
                 }
             }
 
-            // Update database
+            // Update database enrollment records
             await this.prisma.deviceEnrollment.updateMany({
                 where: { deviceUserId: userId },
                 data: { status: 'removed', lastSyncAt: new Date() }
             });
 
-            // Revoke the card if requested
-            if (revokeCard) {
-                // Find user by id (device user ID = local user.id) then revoke their card assignments
+            // Revoke the card via enrollmentService (single write-path)
+            if (revokeCard && this.enrollmentService) {
                 const user = await this.prisma.user.findFirst({
                     where: { id: parseInt(userId) }
                 });
                 if (user) {
+                    const activeAssignments = await this.prisma.cardAssignment.findMany({
+                        where: { user_id: user.id, status: 'active' }
+                    });
+                    for (const assignment of activeAssignments) {
+                        try {
+                            await this.enrollmentService.revokeCardAssignment(assignment.id, 'Deleted from all devices');
+                        } catch (revokeErr) {
+                            this.logger.warn(`[DeleteUserAll] Failed to revoke card ${assignment.id}: ${revokeErr.message}`);
+                        }
+                    }
+                }
+            } else if (revokeCard) {
+                // Fallback when enrollmentService is not injected (should not happen in production)
+                const user = await this.prisma.user.findFirst({ where: { id: parseInt(userId) } });
+                if (user) {
                     await this.prisma.cardAssignment.updateMany({
-                        where: { user_id: user.id },
+                        where: { user_id: user.id, status: 'active' },
                         data: { status: 'revoked', revokedAt: new Date() }
                     });
                 }
@@ -1509,30 +1527,16 @@ class UserSyncService {
                             error: `No local user found for user ID ${user.userID}. Run a sync cycle first.`
                         });
                     } else {
-                        // Atomically create cardAssignment + deviceEnrollment
-                        await this.prisma.$transaction(async (tx) => {
-                            const cardAssignment = await tx.cardAssignment.create({
-                                data: {
-                                    user_id:  localUser.id,
-                                    card_data: user.cardData,
-                                    card_csn: '',
-                                    status:   'active'
-                                }
-                            });
-
-                            if (dbDevice) {
-                                await this._upsertEnrollmentRecord(
-                                    tx,
-                                    dbDevice.id,
-                                    cardAssignment.id,
-                                    user.userID,
-                                    'active'
-                                );
-                            }
-
-                            byCardData.set(cardAssignment.card_data, cardAssignment);
-                            activeByEmployee.set(user.userID, cardAssignment);
+                        // Atomically create cardAssignment + deviceEnrollment via the single write-path
+                        const cardAssignment = await this.enrollmentService.recordCardImport({
+                            userId: localUser.id,
+                            cardData: user.cardData,
+                            deviceDbId: dbDevice ? dbDevice.id : null,
+                            deviceUserId: user.userID
                         });
+
+                        byCardData.set(cardAssignment.card_data, cardAssignment);
+                        activeByEmployee.set(user.userID, cardAssignment);
 
                         stats.imported++;
                         if (dbDevice) stats.enrolled++;

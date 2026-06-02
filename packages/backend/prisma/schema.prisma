@@ -42,7 +42,6 @@ model Device {
   channel         Int?     @db.UnsignedTinyInt
   last_event_sync      DateTime @default(now())  // Timestamp of the last event sync run
   last_user_sync       DateTime @default(now())  // Timestamp of the last user sync run
-  last_synced_event_id Int      @default(0) @db.UnsignedInt // Integer event-ID cursor for SyncService
   last_replicated_event_id Int  @default(0) @db.UnsignedInt // Independent cursor for EventReplicationService
   port            Int?     @default(51211) @db.UnsignedInt
   isActive        Boolean  @default(true)
@@ -63,24 +62,6 @@ model Device {
   @@index([locationId])
   @@index([direction])
   @@map("device")
-}
-
-model GateEvent {
-  id              Int       @id @default(autoincrement()) @db.UnsignedInt
-  employee_id     String?   @db.Char(20)
-  door_no         Int?      @db.UnsignedInt
-  gate_id         Int?      @db.UnsignedInt
-  loc             String?   @db.Char(15)
-  dir             String?   @db.Char(5)
-  etime           DateTime?
-  etime_truncated String?   @db.VarChar(16)
-  d               DateTime? @db.Date
-  t               DateTime? @db.Time(0)
-
-  @@index([etime], map: "etime")
-  @@index([gate_id], map: "gate_id")
-  @@index([employee_id], map: "index_foreignkey_gateevents_employee")
-  @@map("gateevents")
 }
 
 // Local user record provisioned from the employee table.
@@ -168,7 +149,7 @@ model Event {
   authResult    String?   @db.VarChar(20)  // success, fail, etc.
   timestamp     DateTime  // Event timestamp from device
   syncedAt      DateTime  @default(now())  // When we synced this event
-  cloudSyncedAt DateTime?                   // When pushed to cloud gateevents (null = pending)
+  cloudSyncedAt DateTime?                   // When pushed to the cloud events mirror (null = pending)
   rawData       Json?     // Full event data from device
 
   @@unique([deviceId, supremaEventId])
@@ -236,7 +217,7 @@ model AuditLog {
 model FilterPreset {
   id          Int       @id @default(autoincrement())
   name        String    @db.VarChar(100)
-  scope       String    @db.VarChar(50)  // events, gate-events, audit, attendance, reconciliation
+  scope       String    @db.VarChar(50)  // events, audit, attendance, reconciliation
   filters     Json                        // Serialized filter key-value pairs
   isDefault   Boolean   @default(false)
   createdAt   DateTime  @default(now())

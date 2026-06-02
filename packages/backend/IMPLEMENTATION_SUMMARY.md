@@ -1,7 +1,7 @@
 # Implementation Summary - Comprehensive REST API Endpoints
 
 ## Overview
-Successfully implemented comprehensive REST API endpoints for Suprema device management, covering all CRUD operations, card operations, event/user syncing, and all necessary endpoints as requested.
+The current backend exposes comprehensive REST endpoints for Suprema device management, card operations, unified replicated-event reporting, and user/device reconciliation.
 
 ---
 
@@ -26,26 +26,21 @@ Successfully implemented comprehensive REST API endpoints for Suprema device man
 
 ---
 
-### 2. Sync Service (`src/services/syncService.js`)
-**Purpose:** Handle synchronization between devices and database
+### 2. Sync Services (`src/services/eventReplicationService.js`, `src/services/userSyncService.js`)
+**Purpose:** `EventReplicationService` is the single runtime path for device -> database event replication, while `UserSyncService` handles DB <-> device user reconciliation.
 
-**Key Features:**
-- Event synchronization (device → database)
-- User synchronization (device → database)
-- Batch processing support
-- Auto-sync with configurable intervals
-- Multi-device sync support
-- Sync status tracking
+**Current Event Replication Features:**
+- Automatic backlog catch-up on startup and device reconnect
+- Realtime monitoring enabled only after catch-up completes
+- Background manual sync for one device or all connected devices
+- Dedicated `last_replicated_event_id` cursor plus `last_event_sync` observability
+- Duplicate-safe persistence through `UNIQUE(deviceId, supremaEventId)`
 
 **Key Methods:**
-- `syncEventsToDatabase(deviceId, fromEventId, batchSize)`
-- `syncAllDevicesEvents(batchSize)`
-- `getSyncStatus(deviceId)`
-- `syncUsersToDatabase(deviceId)`
-- `syncAllDevicesUsers()`
-- `startAutoSync(deviceId, interval)`
-- `stopAutoSync(deviceId)`
-- `getAutoSyncStatus()`
+- `eventReplicationService.syncDeviceNow(dbDeviceId, options)`
+- `eventReplicationService.syncAllNow(options)`
+- `userSyncService.syncDatabaseToDevice(deviceId)`
+- `userSyncService.syncDatabaseToAllDevices()`
 
 ---
 
@@ -57,7 +52,7 @@ Successfully implemented comprehensive REST API endpoints for Suprema device man
 - User Management (21 endpoints)
 - Card Operations (10 endpoints)
 - Event Management (18 endpoints)
-- Gate Events (4 endpoints)
+- Access Events via `/api/events/db`
 - Employee Management (4 endpoints)
 - Door, T&A, Biometric, HR endpoints
 - Response formats and status codes
@@ -101,12 +96,10 @@ Successfully implemented comprehensive REST API endpoints for Suprema device man
 
 ### 3. Main Server (`index.js`)
 **Updates:**
-- Imported `SyncService`
 - Imported `cardRoutes`
-- Initialized `services.sync` with all service dependencies
 - Registered `/api/cards` route
 - Updated API documentation endpoint
-- Updated health check to include sync service
+- Updated health check to expose active replication and enrollment services
 
 ---
 
@@ -150,6 +143,8 @@ Successfully implemented comprehensive REST API endpoints for Suprema device man
 9. Sync all devices - `POST /api/events/sync-all`
 10. Get sync status - `GET /api/events/sync-status/:deviceId`
 
+Manual sync now uses `/api/events/sync/:deviceId` and `/api/events/sync-all` only. The removed `/api/events/sync-all-to-db` route is no longer part of the API surface.
+
 ### ✅ User/Card Syncing (Complete)
 1. Get users - `GET /api/users/:deviceId`
 2. Get user details - `GET /api/users/:deviceId/user/:userId`
@@ -171,30 +166,30 @@ Successfully implemented comprehensive REST API endpoints for Suprema device man
 
 ## Service Integration
 
-### Sync Service Integration
-The new `SyncService` class integrates with all existing services:
-- **Connection Service** - Device management
-- **User Service** - User operations
-- **Event Service** - Event operations
-- **Database** - Direct database access for storing synced data
+### Event Replication Integration
+`EventReplicationService` is the active event-sync runtime and integrates with the following services:
+- **Connection Service** - Connected-device tracking and reconnect events
+- **Event Service** - Historical log pulls and realtime event stream
+- **Event Repository** - Deduplicated event persistence
+- **Database** - Device cursor and observability updates
 
 ### Auto-Sync Features
-- Automatic event synchronization at configurable intervals
-- Tracks last synced event ID per device
-- Batch processing for large event sets
-- Support for multi-device synchronization
-- Status monitoring and error handling
+- Initial catch-up sync before realtime monitoring is enabled
+- Automatic reconnect catch-up on `device:connected`
+- Periodic background polling with batching and deduplication
+- Managed cursor tracking via `device.last_replicated_event_id`
+- Status monitoring through `last_event_sync` and replication health endpoints
 
 ---
 
 ## Database Integration
 
 ### Event Sync Flow
-1. Get last synced event ID from `device.last_event_sync`
-2. Fetch new events from device starting from last ID
-3. Transform events to `gateevents` table format
-4. Save to database
-5. Update `device.last_event_sync` timestamp
+1. Read `device.last_replicated_event_id` from the device row
+2. Fetch device events from that ID forward in repeated batches until a short batch is returned
+3. Persist authentication and attendance events into the `events` table with duplicate skipping
+4. Advance `device.last_replicated_event_id` to the highest observed event ID in the batch
+5. Update `device.last_event_sync`, then enable realtime monitoring if this was a startup or reconnect catch-up
 
 ### User Sync Flow
 1. Get all users from device
@@ -324,7 +319,6 @@ POST http://localhost:3000/api/cards/blacklist/1
 ```bash
 # Sync events
 POST http://localhost:3000/api/events/sync/1
-{ "batchSize": 1000 }
 
 # Get sync status
 GET http://localhost:3000/api/events/sync-status/1

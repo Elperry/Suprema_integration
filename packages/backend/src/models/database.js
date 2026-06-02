@@ -196,21 +196,26 @@ class DatabaseManager {
      */
     async ensureDeviceColumns() {
         try {
-            // Check whether last_synced_event_id already exists
-            const rows = await this.prisma.$queryRaw`
-                SELECT COLUMN_NAME
-                FROM   INFORMATION_SCHEMA.COLUMNS
-                WHERE  TABLE_SCHEMA = DATABASE()
-                  AND  TABLE_NAME   = 'device'
-                  AND  COLUMN_NAME  = 'last_synced_event_id'
-            `;
-            if (rows.length === 0) {
-                await this.prisma.$executeRaw`
-                    ALTER TABLE device
-                    ADD COLUMN last_synced_event_id INT UNSIGNED NOT NULL DEFAULT 0
+            const ensureColumn = async (columnName, definition) => {
+                const rows = await this.prisma.$queryRaw`
+                    SELECT COLUMN_NAME
+                    FROM   INFORMATION_SCHEMA.COLUMNS
+                    WHERE  TABLE_SCHEMA = DATABASE()
+                      AND  TABLE_NAME   = 'device'
+                      AND  COLUMN_NAME  = ${columnName}
                 `;
-                this.logger.info('Added last_synced_event_id column to device table');
-            }
+
+                if (rows.length === 0) {
+                    await this.prisma.$executeRawUnsafe(
+                        `ALTER TABLE device ADD COLUMN ${columnName} ${definition}`
+                    );
+                    this.logger.info(`Added ${columnName} column to device table`);
+                }
+            };
+
+            await ensureColumn('last_replicated_event_id', 'INT UNSIGNED NOT NULL DEFAULT 0');
+            await ensureColumn('last_event_sync', 'DATETIME NULL DEFAULT CURRENT_TIMESTAMP');
+            await ensureColumn('last_user_sync', 'DATETIME NULL DEFAULT CURRENT_TIMESTAMP');
         } catch (err) {
             // Non-fatal: log and continue — app will still work, sync cursor
             // will fall back to 0 on first run.
@@ -294,13 +299,6 @@ class DatabaseManager {
                 findByConnection: (ip) => this.prisma.device.findFirst({
                     where: { ip }
                 })
-            };
-        }
-        if (modelName === 'GateEvent') {
-            return {
-                findAll: (options = {}) => this.prisma.gateEvent.findMany(options),
-                create: (data) => this.prisma.gateEvent.create({ data }),
-                count: (options = {}) => this.prisma.gateEvent.count(options)
             };
         }
         if (modelName === 'User') {
@@ -427,53 +425,6 @@ class DatabaseManager {
         // You can add a retries column to the Device model if needed
         this.logger.info(`Device ${id} connection retries reset`);
         return;
-    }
-
-    // ================ GATE EVENTS ================
-
-    /**
-     * Add gate event
-     */
-    async addGateEvent(eventData) {
-        return await this.prisma.gateEvent.create({
-            data: eventData
-        });
-    }
-
-    /**
-     * Get gate events with filters
-     */
-    async getGateEvents(filters = {}) {
-        const where = {};
-        
-        if (filters.employee_id) {
-            where.employee_id = filters.employee_id;
-        }
-        if (filters.gate_id) {
-            where.gate_id = filters.gate_id;
-        }
-        if (filters.startDate && filters.endDate) {
-            where.etime = {
-                gte: new Date(filters.startDate),
-                lte: new Date(filters.endDate)
-            };
-        }
-
-        return await this.prisma.gateEvent.findMany({
-            where,
-            orderBy: { etime: 'desc' },
-            take: filters.limit || 100
-        });
-    }
-
-    /**
-     * Get latest gate event for employee
-     */
-    async getLatestEmployeeEvent(employee_id) {
-        return await this.prisma.gateEvent.findFirst({
-            where: { employee_id },
-            orderBy: { etime: 'desc' }
-        });
     }
 
     // ================ USER MANAGEMENT ================

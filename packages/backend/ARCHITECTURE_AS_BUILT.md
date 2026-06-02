@@ -100,7 +100,7 @@ packages/backend/
     │   ├── biometricService.js        # Fingerprint/face/card biometrics
     │   ├── tnaService.js              # Time & Attendance
     │   ├── timeService.js             # Device clock synchronization
-    │   ├── syncService.js             # Event/user/card sync to DB
+     │   ├── eventReplicationService.js # Device -> DB event replication
     │   ├── enrollmentService.js       # Card enrollment workflow
     │   ├── userSyncService.js         # DB ↔ device user sync
     │   ├── deviceMonitoringService.js # Periodic status & auto-reconnect
@@ -116,7 +116,6 @@ packages/backend/
     │   ├── cardRoutes.js
     │   ├── enrollmentRoutes.js
     │   ├── hrRoutes.js
-    │   ├── gateEventRoutes.js
     │   ├── employeeRoutes.js
     │   ├── locationRoutes.js
     │   └── timeRoutes.js
@@ -147,7 +146,7 @@ Single place where all dependencies are created and wired into the DI container:
     UserService        EventService              DoorService ...
           │                   │
           ▼                   ▼
-    SyncService        EnrollmentService
+         EventReplicationService    EnrollmentService
           │
           ▼
     DeviceMonitoringService    HRIntegrationService
@@ -171,7 +170,7 @@ No route creates its own dependencies (except one violation — see §6).
 | `biometricService` | Fingerprint/face/card operations | connectionService |
 | `tnaService` | T&A config, work-time logs | connectionService, eventService |
 | `timeService` | Device clock sync with server | connectionService, database |
-| `syncService` | Bulk sync events/users/cards to DB | all domain services, database |
+| `eventReplicationService` | Device -> DB event replication and catch-up before monitoring | connectionService, eventService, eventRepository, database |
 | `enrollmentService` | Card enrollment workflow | userService, biometricService, connectionService, prisma |
 | `userSyncService` | Bidirectional DB ↔ device user sync | userService, connectionService, prisma |
 | `deviceMonitoringService` | Periodic status check + auto-reconnect | connectionService, logger |
@@ -191,7 +190,7 @@ No route creates its own dependencies (except one violation — see §6).
 - **Prisma ORM** — MySQL via `@prisma/client`
 - **DatabaseManager** (`models/database.js`) — wraps Prisma with domain helpers:
   `getAllDevices()`, `getActiveDevices()`, `updateDevice()`, `incrementDeviceRetries()`, etc.
-- 8 Prisma models: `Location`, `Device`, `GateEvent`, `User`, `TempAccess`, `CardAssignment`, `DeviceEnrollment`, `Event`
+- Core Prisma models include `Location`, `Device`, `User`, `TempAccess`, `CardAssignment`, `DeviceEnrollment`, and `Event`
 
 ---
 
@@ -245,7 +244,7 @@ The 4 repositories are properly built and registered in the DI container, but mo
 go directly through `DatabaseManager` or raw `prisma` calls:
 
 - `connectionService` → `this.database.getAllDevices()`, `this.database.updateDevice()`
-- `syncService` → `this.database.getAllDevices()`, `this.database.getActiveDevices()`
+- `eventReplicationService` → `this.database.getAllDevices()`, `this.database.getActiveDevices()`
 - `enrollmentService` → `this.prisma.cardAssignment.findMany()`
 - `userSyncService` → `this.prisma.cardAssignment.findFirst()`
 - `locationRoutes` → `services.database.getPrisma().location.findMany()`
@@ -266,7 +265,7 @@ instead of being created once in `bootstrap.js`:
 
 ```javascript
 // userRoutes.js — VIOLATION
-const syncService = new UserSyncService(
+const userSyncService = new UserSyncService(
     services.user, services.connection, services.logger, { prisma }
 );
 ```
@@ -388,15 +387,16 @@ HTTP Request
                            └─► response → JSON → HTTP 200
 ```
 
-### Event Sync
+### Event Replication
 
 ```
-syncService.syncEvents(deviceId)
-  └─► connectionService (resolve Suprema device ID)
-       └─► eventService.getEventLog(supremaDeviceId, filters)
-            └─► gRPC getEventLog → device
-       └─► database.createEvents(events)   ◄── bypasses EventRepository
-            └─► prisma.event.createMany()
+eventReplicationService.syncDeviceNow(deviceId)
+  └─► connectionService (resolve connected device / Suprema ID)
+       └─► eventService.getEventLogs(supremaDeviceId, startEventId, batchSize)
+            └─► gRPC getEventLog → device batches
+       └─► eventRepository.createMany(events)
+            └─► prisma.event.createMany({ skipDuplicates: true })
+       └─► database.updateDevice({ last_replicated_event_id, last_event_sync })
 ```
 
 ---
@@ -423,7 +423,6 @@ Location  ──┐
 Device    ◄──┘
   │
   ├── Event (synced from device)
-  ├── GateEvent (legacy gate access log)
   ├── DeviceEnrollment ──► CardAssignment ──► (employeeId)
   │
 User (app auth)
@@ -447,7 +446,6 @@ TempAccess (QR-based temporary access)
 | `/api/cards` | cardRoutes | Card assign, revoke, scan |
 | `/api/enrollment` | enrollmentRoutes | Full enrollment workflow |
 | `/api/hr` | hrRoutes | HR system sync |
-| `/api/gate-events` | gateEventRoutes | Gate event queries |
 | `/api/employees` | employeeRoutes | Employee view (DB) |
 | `/api/locations` | locationRoutes | Location tree CRUD |
 | `/api/time` | timeRoutes | Device time sync |

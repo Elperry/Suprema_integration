@@ -44,7 +44,6 @@ const NAV_GROUPS = [
     icon: '📈',
     items: [
       { to: '/events', icon: '📋', label: 'Events' },
-      { to: '/gate-events', icon: '🚪', label: 'Gate Events' },
       { to: '/sync-center', icon: '♻️', label: 'Sync Center' },
       { to: '/reports', icon: '📊', label: 'Reports' },
       { to: '/audit-log', icon: '📝', label: 'Audit Log' },

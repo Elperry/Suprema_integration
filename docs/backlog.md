@@ -210,7 +210,7 @@ Current product direction:
 ### Page Enhancements
 - [x] **DASH-01: Dashboard — Fix Employee Stat & Add Health Widgets**
   - After BUG-01 fix, employee count will populate
-  - Compute Access Rate from `GET /gate-events/stats` (today's entries / active employees)
+  - Compute Access Rate from replicated authentication events in `GET /events/db` (today's entries / active employees)
   - Add System Health widget (DB status, gRPC gateway status, replication lag)
   - Add Replication Status mini-widget from `GET /events/replication/health`
   - Status: Complete — Added Service Health grid + Replication Status widget, moved Quick Actions above Device Status
@@ -302,10 +302,10 @@ Current product direction:
 ### New Pages
 - [x] **EMP-01: Employee Profile Page (`/employee/:id`)**
   - Full employee profile with linked data across all systems
-  - Sections: Identity stats (ID, Dept, Position, Card/SSN), Overview tab (info table + card history), Cards tab (assignments with status), Gate Events tab (last 100)
+  - Sections: Identity stats (ID, Dept, Position, Card/SSN), Overview tab (info table + card history), Cards tab (assignments with status), Events tab (last 100)
   - Parallel data loading with `Promise.allSettled` for graceful degradation
   - Employees list updated with "Profile" button navigating to `/employee/:id`
-  - APIs: `GET /employees/:id`, `GET /employees/:id/card`, `GET /enrollment/cards?employeeId=`, `GET /enrollment/cards/history/:id`, `GET /gate-events/employee/:id`
+  - APIs: `GET /employees/:id`, `GET /employees/:id/card`, `GET /enrollment/cards?employeeId=`, `GET /enrollment/cards/history/:id`, `GET /events/db?exactUserId=:id`
   - Files: new `EmployeeDetail.jsx`, modified `Employees.jsx` (added Profile button + useNavigate), `App.jsx` (added route)
   - Status: Complete
   - Effort: 1 day
@@ -356,9 +356,9 @@ Current product direction:
   - Effort: 1 day
 
 - [x] **EMPTY-01: Empty State Components**
-  - Pages like Gate Events, Audit Log, TNA show blank tables with "0 records" — no guidance
+  - Pages like Events, Audit Log, TNA show blank tables with "0 records" — no guidance
   - Add illustrated empty-state panels explaining why data is empty and what action to take
-  - Status: Done (Sprint 11) — Empty states with guidance added to GateEvents, AuditLog, Reports
+  - Status: Done (Sprint 11) — Empty states with guidance added to Events, AuditLog, Reports
   - Effort: 1 day
 
 - [x] **SKELETON-01: Skeleton Loaders**
@@ -608,11 +608,10 @@ Current product direction:
 
 ### Sprint 10 — New Bugs (from UI/UX Audit)
 
-- [x] **BUG-07: Gate Events API Returns 404 for Empty Results**
-  - `GET /api/gate-events/employee/:id` returns HTTP 404 when no events exist instead of 200 with empty array
-  - Creates noisy console errors on Employee Detail page (4 errors per load)
-  - Fix: Return `res.json({ success: true, data: null })` instead of `res.status(404)` when no events exist
-  - File: `packages/backend/src/routes/gateEventRoutes.js`
+- [x] **BUG-07: Employee Event History Empty State**
+  - Employee detail should render an empty state instead of surfacing API noise when no replicated events exist
+  - Fix: employee access history now reads from the replicated events API and treats empty results as a normal state
+  - File: `packages/frontend/src/components/EmployeeDetail.jsx`
   - Status: Fixed
   - Priority: Medium
   - Effort: 0.5 hr
@@ -681,10 +680,10 @@ Current product direction:
   - Status: Done
 
 - [x] **EMPTY-01: Enhanced Empty State Components**
-  - Gate Events: icon + description + guidance
+  - Events: icon + description + guidance
   - Audit Log: icon + description + guidance
   - Reports: icon + description
-  - Files: `GateEvents.jsx`, `AuditLog.jsx`, `Reports.jsx`
+  - Files: `Events.jsx`, `AuditLog.jsx`, `Reports.jsx`
   - Status: Done
 
 - [x] **ENROLL-01: Enrollment Device Status UX Upgrade**

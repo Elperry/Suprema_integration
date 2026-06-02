@@ -42,9 +42,9 @@ const DEFAULT_LOCAL_TO_CLOUD_TABLES = Object.freeze([
         model: 'device',
         label: 'device',
         // Replication cursors are local-only state and must not be mirrored.
-        cloudOmitFields: ['last_synced_event_id', 'last_event_sync', 'last_user_sync', 'last_replicated_event_id'],
+        cloudOmitFields: ['last_event_sync', 'last_user_sync', 'last_replicated_event_id'],
         ignoreCompareFields: [
-            'last_synced_event_id', 'last_event_sync', 'last_user_sync',
+            'last_event_sync', 'last_user_sync',
             'last_replicated_event_id',
             'createdAt', 'updatedAt',
         ],
@@ -65,6 +65,7 @@ const DEFAULT_LOCAL_TO_CLOUD_TABLES = Object.freeze([
     {
         model: 'event',
         label: 'events',
+        // cloudSyncedAt is a LOCAL tracking field — never push it to cloud.
         cloudOmitFields: ['cloudSyncedAt'],
         ignoreCompareFields: ['cloudSyncedAt', 'createdAt', 'updatedAt'],
         jsonFields: ['rawData'],
@@ -72,12 +73,12 @@ const DEFAULT_LOCAL_TO_CLOUD_TABLES = Object.freeze([
         // are missing locally (local table is a short-lived buffer that
         // gets pruned after replication).
         appendOnly: true,
-    },
-    {
-        model: 'gateEvent',
-        label: 'gateevents',
-        jsonFields: [],
-        appendOnly: true,
+        // Use cloudSyncedAt as the local replication cursor:
+        //   - WHERE cloudSyncedAt IS NULL  → rows not yet pushed to cloud
+        //   - After a successful push, SET cloudSyncedAt = NOW() locally
+        // This keeps the cursor entirely in the local (source) DB so the
+        // service never needs to query the cloud to know where it left off.
+        localCursorField: 'cloudSyncedAt',
     },
     {
         model: 'auditLog',
@@ -345,48 +346,62 @@ class CloudSyncService {
 
     /**
      * Ensures all local-schema columns exist in the cloud DB tables.
-     * Uses ADD COLUMN IF NOT EXISTS so it is safe to call on every cycle.
-     * Runs once per process lifetime (guarded by _cloudSchemaEnsured).
+     *
+     * MySQL (unlike MariaDB \u2265 10.0.2 and PostgreSQL) does NOT support
+     * `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so we query
+     * `information_schema.COLUMNS` first and only issue a plain
+     * `ADD COLUMN` when the column is actually missing. Runs once per
+     * process lifetime (guarded by _cloudSchemaEnsured).
      */
     async _ensureCloudSchema() {
         if (this._cloudSchemaEnsured) return;
         if (!this.cloudPrisma) return;
 
-        const migrations = [
-            // ── user ──────────────────────────────────────────────────────────
-            'ALTER TABLE `user` ADD COLUMN IF NOT EXISTS `code`        VARCHAR(15)  NULL',
-            'ALTER TABLE `user` ADD COLUMN IF NOT EXISTS `name`        VARCHAR(200) NULL',
-            'ALTER TABLE `user` ADD COLUMN IF NOT EXISTS `full_name`   VARCHAR(200) NULL',
-            'ALTER TABLE `user` ADD COLUMN IF NOT EXISTS `employee_id` INT          NULL',
-            // ── device ───────────────────────────────────────────────────────
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `last_event_sync`           DATETIME     NULL DEFAULT CURRENT_TIMESTAMP',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `last_user_sync`            DATETIME     NULL DEFAULT CURRENT_TIMESTAMP',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `last_synced_event_id`      INT UNSIGNED NULL DEFAULT 0',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `last_replicated_event_id`  INT UNSIGNED NULL DEFAULT 0',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `port`                      INT UNSIGNED NULL DEFAULT 51211',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `isActive`                  TINYINT(1)   NULL DEFAULT 1',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `status`                    VARCHAR(50)  NULL DEFAULT \'disconnected\'',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `useSSL`                    TINYINT(1)   NULL DEFAULT 0',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `locationId`                INT          NULL',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `direction`                 VARCHAR(10)  NULL DEFAULT \'in\'',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `deviceType`                VARCHAR(50)  NULL',
-            'ALTER TABLE `device` ADD COLUMN IF NOT EXISTS `serialNumber`              VARCHAR(100) NULL',
-            // ── card_assignments ──────────────────────────────────────────────
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `user_id`    INT          NULL',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `card_data`  VARCHAR(191) NULL',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `card_csn`   VARCHAR(100) NULL DEFAULT \'\'',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `status`     VARCHAR(20)  NULL DEFAULT \'active\'',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `assignedAt` DATETIME     NULL',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `revokedAt`  DATETIME     NULL',
-            'ALTER TABLE `card_assignments` ADD COLUMN IF NOT EXISTS `notes`      TEXT         NULL',
+        // [table, column, column-definition without column name]
+        const columns = [
+            // \u2500\u2500 user \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            ['user', 'code',        'VARCHAR(15)  NULL'],
+            ['user', 'name',        'VARCHAR(200) NULL'],
+            ['user', 'full_name',   'VARCHAR(200) NULL'],
+            ['user', 'employee_id', 'INT          NULL'],
+            // \u2500\u2500 device \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            ['device', 'last_event_sync',          'DATETIME     NULL DEFAULT CURRENT_TIMESTAMP'],
+            ['device', 'last_user_sync',           'DATETIME     NULL DEFAULT CURRENT_TIMESTAMP'],
+            ['device', 'last_replicated_event_id', 'INT UNSIGNED NULL DEFAULT 0'],
+            ['device', 'port',                     'INT UNSIGNED NULL DEFAULT 51211'],
+            ['device', 'isActive',                 'TINYINT(1)   NULL DEFAULT 1'],
+            ['device', 'status',                   "VARCHAR(50)  NULL DEFAULT 'disconnected'"],
+            ['device', 'useSSL',                   'TINYINT(1)   NULL DEFAULT 0'],
+            ['device', 'locationId',               'INT          NULL'],
+            ['device', 'direction',                "VARCHAR(10)  NULL DEFAULT 'in'"],
+            ['device', 'deviceType',               'VARCHAR(50)  NULL'],
+            ['device', 'serialNumber',             'VARCHAR(100) NULL'],
+            // \u2500\u2500 card_assignments \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+            ['card_assignments', 'user_id',    'INT          NULL'],
+            ['card_assignments', 'card_data',  'VARCHAR(191) NULL'],
+            ['card_assignments', 'card_csn',   "VARCHAR(100) NULL DEFAULT ''"],
+            ['card_assignments', 'status',     "VARCHAR(20)  NULL DEFAULT 'active'"],
+            ['card_assignments', 'assignedAt', 'DATETIME     NULL'],
+            ['card_assignments', 'revokedAt',  'DATETIME     NULL'],
+            ['card_assignments', 'notes',      'TEXT         NULL'],
         ];
 
-        for (const sql of migrations) {
+        for (const [table, column, definition] of columns) {
             try {
+                const exists = await this.cloudPrisma.$queryRawUnsafe(
+                    'SELECT 1 AS present FROM information_schema.COLUMNS '
+                    + 'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ? LIMIT 1',
+                    table,
+                    column,
+                );
+                if (Array.isArray(exists) && exists.length > 0) continue;
+
+                const sql = `ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`;
                 await this.cloudPrisma.$executeRawUnsafe(sql);
+                this.logger.info(`[CloudSync] Added cloud column ${table}.${column}`);
             } catch (err) {
-                // Column likely already exists — not fatal.
-                this.logger.debug(`[CloudSync] _ensureCloudSchema: ${err.message}`);
+                // Column may have been added concurrently \u2014 not fatal.
+                this.logger.debug(`[CloudSync] _ensureCloudSchema (${table}.${column}): ${err.message}`);
             }
         }
 
@@ -699,6 +714,21 @@ class CloudSyncService {
                     : await applyPromise;
                 totalUpserted += upserted;
                 totalUnchanged += plan.unchanged;
+
+                // For cursor-based tables (localCursorField), stamp the local rows
+                // that were just successfully pushed to cloud.  Failure here is
+                // non-fatal: the rows keep cloudSyncedAt = NULL and will be
+                // re-pushed next cycle (idempotent ON DUPLICATE KEY UPDATE).
+                if (plan.localIds && plan.localIds.length > 0) {
+                    try {
+                        await this._markLocalRowsSynced(plan);
+                    } catch (cursorErr) {
+                        this.logger.warn(
+                            `[CloudSync:${plan.spec.label}] cursor update failed` +
+                            ` (rows will retry next cycle): ${cursorErr.message}`
+                        );
+                    }
+                }
             } catch (error) {
                 this._notifyOnConnectivityError(error);
                 const code = error.code;
@@ -738,6 +768,39 @@ class CloudSyncService {
     }
 
     async _buildMirrorPlan(spec) {
+        // ── Local-cursor path (e.g. events.cloudSyncedAt) ──────────────────
+        // When a spec declares `localCursorField`, the replication cursor lives
+        // entirely in the local (source) DB.  Rows where the field IS NULL have
+        // not yet been pushed to cloud; rows where it has a value are already
+        // replicated and are skipped.  After a successful cloud upsert the
+        // caller stamps those rows with the current timestamp.
+        if (spec.localCursorField) {
+            const localRows = await this.localPrisma[spec.model].findMany({
+                where:   { [spec.localCursorField]: null },
+                orderBy: { id: 'asc' },
+            });
+
+            const rowsToUpsert = localRows.map(row =>
+                this._prepareRecordForWrite(spec, row, { omitFields: spec.cloudOmitFields })
+            );
+
+            return {
+                spec,
+                rowsToUpsert,
+                // Keep track of the originating local IDs so the apply stage
+                // can update the cursor field on success.
+                localIds: localRows.map(r => r.id),
+                staleIds: [],
+                localCount: localRows.length,
+                cloudCount: 0,
+                unchanged: 0,
+                skipDeletes: true,
+            };
+        }
+
+        // ── Cloud-cursor path (append-only: audit_logs, enrollment_logs) ───
+        // Derives the cursor by querying MAX(id) on the cloud side.  Suitable
+        // for tables that have no local tracking column.
         if (spec.appendOnly) {
             // Fast-path for logs/events: cursor-based fetch
             const maxCloud = await this.cloudPrisma[spec.model].aggregate({
@@ -1081,6 +1144,28 @@ class CloudSyncService {
             chunks.push(items.slice(index, index + size));
         }
         return chunks;
+    }
+
+    /**
+     * After a successful cloud upsert for a `localCursorField` spec, stamp
+     * the source rows in the local DB so they are excluded from the next cycle.
+     *
+     * Batch-updates in chunks of 500 to stay within MySQL's `IN (...)` limit.
+     * Each chunk is an independent UPDATE so a partial failure leaves already-
+     * stamped rows intact and only un-stamped rows are re-pushed next cycle.
+     */
+    async _markLocalRowsSynced(plan) {
+        const { spec, localIds } = plan;
+        const syncedAt = new Date();
+        for (const batch of this._chunk(localIds, 500)) {
+            await this.localPrisma[spec.model].updateMany({
+                where: { id: { in: batch } },
+                data:  { [spec.localCursorField]: syncedAt },
+            });
+        }
+        this.logger.info(
+            `[CloudSync:${spec.label}] ${localIds.length} local row(s) marked as cloud-synced`
+        );
     }
 }
 

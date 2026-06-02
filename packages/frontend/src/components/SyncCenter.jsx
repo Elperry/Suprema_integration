@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { eventAPI, gateEventAPI, healthAPI, userAPI } from '../services/api'
+import { eventAPI, healthAPI, userAPI } from '../services/api'
 import { useNotification } from './Notifications'
 import ErrorBanner from './ErrorBanner'
 import { GATEWAY_OFFLINE_MESSAGE } from '../utils/gatewayErrors'
@@ -211,18 +211,6 @@ export default function SyncCenter() {
     }
   }
 
-  const exportGateEvents = async (format) => {
-    try {
-      await downloadResponse(
-        gateEventAPI.exportReport({ format, limit: 5000 }),
-        `gate_events.${format === 'xls' ? 'xls' : format}`
-      )
-      notify.success(`Gate events exported as ${format.toUpperCase()}`)
-    } catch (err) {
-      notify.error(err.userMessage || 'Failed to export gate events')
-    }
-  }
-
   return (
     <div className="sync-center-page">
       <div className="page-header sync-header">
@@ -305,7 +293,7 @@ export default function SyncCenter() {
           <div className="sync-actions card">
             <div>
               <div className="filter-card-title">📤 Report Exports</div>
-              <p className="helper-text">Download reconciliation, replicated events, and gate-event reports in operational formats.</p>
+              <p className="helper-text">Download reconciliation and replicated event reports in operational formats.</p>
             </div>
             <div className="export-groups">
               <div className="export-group">
@@ -317,11 +305,6 @@ export default function SyncCenter() {
                 <span>Replicated Events</span>
                 <button className="btn btn-secondary btn-sm" onClick={() => exportSyncedEvents('csv')}>CSV</button>
                 <button className="btn btn-secondary btn-sm" onClick={() => exportSyncedEvents('xls')}>Excel</button>
-              </div>
-              <div className="export-group">
-                <span>Gate Events</span>
-                <button className="btn btn-secondary btn-sm" onClick={() => exportGateEvents('csv')}>CSV</button>
-                <button className="btn btn-secondary btn-sm" onClick={() => exportGateEvents('xls')}>Excel</button>
               </div>
             </div>
           </div>

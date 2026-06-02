@@ -248,14 +248,16 @@ This document provides a complete reference for all available REST API endpoints
 
 #### Sync events from device to database
 - **POST** `/api/events/sync/:deviceId`
-- Body: `{ fromEventId?, batchSize: 1000 }`
+- Starts an on-demand catch-up sync for one device using the managed replication cursor.
 
 #### Sync events from all devices
 - **POST** `/api/events/sync-all`
-- Body: `{ batchSize: 1000 }`
+- Starts an on-demand background catch-up sync for all currently connected devices.
 
 #### Get sync status for device
 - **GET** `/api/events/sync-status/:deviceId`
+
+> Event backlog catch-up already runs automatically on startup and on every `device:connected` event before realtime monitoring is enabled. The old `POST /api/events/sync-all-to-db` endpoint has been removed.
 
 ### Event Statistics
 
@@ -270,22 +272,17 @@ This document provides a complete reference for all available REST API endpoints
 
 ---
 
-## 5. Gate Events (`/api/gate-events`)
+## 5. Access Events
 
-### Gate Event CRUD
+Access-event reporting now uses the unified replicated events API.
 
-#### Get all gate events
-- **GET** `/api/gate-events?limit=100&offset=0&startDate=&endDate=`
+#### Get replicated access events
+- **GET** `/api/events/db?page=1&pageSize=50&eventType=authentication&userId=&deviceId=&startDate=&endDate=`
 
-#### Create new gate event
-- **POST** `/api/gate-events`
-- Body: `{ employee_id, door_no, gate_id, loc, dir, etime }`
+#### Export replicated access events
+- **GET** `/api/events/db/export?format=csv&eventType=authentication&userId=&deviceId=&startDate=&endDate=`
 
-#### Get events for specific employee
-- **GET** `/api/gate-events/employee/:employeeId?limit=50`
-
-#### Get gate event statistics
-- **GET** `/api/gate-events/stats?startDate=&endDate=&loc=`
+Access history is read from the replicated `events` table.
 
 ---
 
@@ -445,7 +442,7 @@ This document provides a complete reference for all available REST API endpoints
 - ✅ Export events
 
 ### Database Operations ✅
-- ✅ Gate events CRUD
+- ✅ Replicated event queries and export
 - ✅ Employee queries
 - ✅ Employee search
 - ✅ Statistics & reporting
@@ -454,7 +451,8 @@ This document provides a complete reference for all available REST API endpoints
 
 ## Notes
 
-- All sync operations use the `SyncService` to handle synchronization between devices and database
+- Device-to-database event replication is handled by `EventReplicationService`
+- User/card reconciliation is handled by `UserSyncService`
 - Event monitoring supports real-time streaming with configurable queue sizes
 - Multi-device operations support batch enrollment, updates, and deletions
 - Card operations include blacklist management and QR code support

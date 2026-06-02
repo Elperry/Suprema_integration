@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { employeeAPI, gateEventAPI, enrollmentAPI } from '../services/api'
+import { employeeAPI, enrollmentAPI, eventAPI } from '../services/api'
 import { useNotification } from './Notifications'
 
 export default function EmployeeDetail() {
@@ -12,7 +12,7 @@ export default function EmployeeDetail() {
   const [cardInfo, setCardInfo] = useState(null)
   const [cardAssignments, setCardAssignments] = useState([])
   const [cardHistory, setCardHistory] = useState([])
-  const [gateEvents, setGateEvents] = useState([])
+  const [employeeEvents, setEmployeeEvents] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('overview')
 
@@ -28,14 +28,14 @@ export default function EmployeeDetail() {
         employeeAPI.getCardInfo(id),
         enrollmentAPI.getCardAssignments({ employeeId: id }),
         enrollmentAPI.getCardHistory(id),
-        gateEventAPI.getByEmployee(id, 100),
+        eventAPI.getFromDB({ page: 1, pageSize: 100, exactUserId: id }),
       ])
 
       if (empRes.status === 'fulfilled') setEmployee(empRes.value.data?.data || empRes.value.data)
       if (cardRes.status === 'fulfilled') setCardInfo(cardRes.value.data?.data || cardRes.value.data)
       if (assignRes.status === 'fulfilled') setCardAssignments(assignRes.value.data?.data || [])
       if (historyRes.status === 'fulfilled') setCardHistory(historyRes.value.data?.data || [])
-      if (eventsRes.status === 'fulfilled') setGateEvents(eventsRes.value.data?.data || [])
+      if (eventsRes.status === 'fulfilled') setEmployeeEvents(eventsRes.value.data?.data || [])
     } catch (error) {
       showNotification('Failed to load employee details', 'error')
     } finally {
@@ -75,9 +75,17 @@ export default function EmployeeDetail() {
   const profileIncomplete = dept === '-' && position === '-' && email === '-' && company === '-'
 
   const tabs = [
+    { id: 'overview', label: 'Overview' },
     { id: 'cards', label: `Cards (${cardAssignments.length})` },
-    { id: 'events', label: `Gate Events (${gateEvents.length})` },
+    { id: 'events', label: `Events (${employeeEvents.length})` },
   ]
+
+  const getEventResultClass = (event) => {
+    const value = String(event.authResult || '').toLowerCase()
+    return value === 'success' || value === 'granted' ? 'active' : 'suspended'
+  }
+
+  const getDeviceLabel = (event) => event.deviceName || event.deviceLocation || event.deviceId || '-'
 
   return (
     <div className="page employee-detail">
@@ -232,9 +240,9 @@ export default function EmployeeDetail() {
 
         {activeTab === 'events' && (
           <div>
-            <h3 style={{ marginBottom: '1rem' }}>Recent Gate Events</h3>
-            {gateEvents.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)' }}>No gate events found.</p>
+            <h3 style={{ marginBottom: '1rem' }}>Recent Events</h3>
+            {employeeEvents.length === 0 ? (
+              <p style={{ color: 'var(--text-secondary)' }}>No synced events found.</p>
             ) : (
               <table className="table">
                 <thead>
@@ -242,20 +250,20 @@ export default function EmployeeDetail() {
                     <th>Time</th>
                     <th>Device</th>
                     <th>Door</th>
-                    <th>Direction</th>
+                    <th>Type</th>
                     <th>Result</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {gateEvents.map((e, i) => (
+                  {employeeEvents.map((e, i) => (
                     <tr key={e.id || i}>
-                      <td>{e.timestamp ? new Date(e.timestamp).toLocaleString() : e.event_time || '-'}</td>
-                      <td>{e.deviceName || e.device_name || e.deviceId || '-'}</td>
-                      <td>{e.doorName || e.door_name || '-'}</td>
-                      <td>{e.direction || '-'}</td>
+                      <td>{e.timestamp ? new Date(e.timestamp).toLocaleString() : '-'}</td>
+                      <td>{getDeviceLabel(e)}</td>
+                      <td>{e.doorId || '-'}</td>
+                      <td>{e.description || e.eventType || '-'}</td>
                       <td>
-                        <span className={`emp-status-badge ${e.result === 'granted' || e.result === 'success' ? 'active' : 'suspended'}`}>
-                          {e.result || e.auth_result || '-'}
+                        <span className={`emp-status-badge ${getEventResultClass(e)}`}>
+                          {e.authResult || '-'}
                         </span>
                       </td>
                     </tr>

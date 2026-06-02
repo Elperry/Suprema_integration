@@ -1403,6 +1403,73 @@ class EnrollmentService {
             throw error;
         }
     }
+
+    /**
+     * Record a card assignment that already exists on a device, importing it to the database.
+     * This is the single write-path for device-import operations — no gRPC call is made because
+     * the data originated FROM the device.
+     *
+     * @param {Object} data
+     * @param {number} data.userId       - Local DB user.id
+     * @param {string} data.cardData     - Normalised card data (hex string)
+     * @param {number|null} data.deviceDbId   - Local DB device.id (null if unknown)
+     * @param {string} data.deviceUserId - Suprema user ID string on the device
+     * @returns {Promise<Object>} Created card assignment
+     */
+    async recordCardImport({ userId, cardData, deviceDbId, deviceUserId }) {
+        return await this.prisma.$transaction(async (tx) => {
+            const cardAssignment = await tx.cardAssignment.create({
+                data: {
+                    user_id: userId,
+                    card_data: cardData,
+                    card_csn: '',
+                    status: 'active',
+                }
+            });
+
+            if (deviceDbId != null) {
+                // Upsert the device enrollment record without calling gRPC.
+                // Handle the two unique constraints (by assignment and by device-user) gracefully.
+                const dvUserId = String(deviceUserId);
+
+                const byDeviceUser = await tx.deviceEnrollment.findUnique({
+                    where: {
+                        deviceId_deviceUserId: { deviceId: deviceDbId, deviceUserId: dvUserId }
+                    }
+                });
+
+                if (byDeviceUser) {
+                    await tx.deviceEnrollment.update({
+                        where: { id: byDeviceUser.id },
+                        data: { cardAssignmentId: cardAssignment.id, status: 'active', lastSyncAt: new Date() }
+                    });
+                } else {
+                    await tx.deviceEnrollment.upsert({
+                        where: {
+                            deviceId_cardAssignmentId: {
+                                deviceId: deviceDbId,
+                                cardAssignmentId: cardAssignment.id
+                            }
+                        },
+                        create: {
+                            deviceId: deviceDbId,
+                            cardAssignmentId: cardAssignment.id,
+                            deviceUserId: dvUserId,
+                            status: 'active',
+                            lastSyncAt: new Date()
+                        },
+                        update: {
+                            status: 'active',
+                            deviceUserId: dvUserId,
+                            lastSyncAt: new Date()
+                        }
+                    });
+                }
+            }
+
+            return cardAssignment;
+        });
+    }
 }
 
 export default EnrollmentService;

@@ -126,14 +126,13 @@ export default function Settings() {
     setSyncStatus((prev) => ({ ...prev, events: { ...prev.events, status: 'syncing' } }));
 
     try {
-      const response = await eventAPI.syncAll(syncSettings.eventReplication.batchSize);
+      const response = await eventAPI.syncAll();
       const data = extractResponseData(response);
-      const count = data.synced ?? data.totalSynced ?? data.count ?? 0;
       setSyncStatus((prev) => ({
         ...prev,
-        events: { lastSync: new Date().toISOString(), status: 'success', count },
+        events: { ...prev.events, lastSync: new Date().toISOString(), status: 'success' },
       }));
-      showNotification(`Events synced successfully: ${count} events`, 'success');
+      showNotification(data.message || 'Background event sync started', 'success');
     } catch (error) {
       setSyncStatus((prev) => ({ ...prev, events: { ...prev.events, status: 'error' } }));
       showNotification('Failed to sync events: ' + (error.userMessage || error.message), 'error');

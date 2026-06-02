@@ -337,10 +337,8 @@ export const eventAPI = {
   enableMonitoringMulti: (deviceIds) => api.post('/events/monitoring/enable-multi', { deviceIds }),
   
   // Sync - use longer timeout
-  sync: (deviceId, fromEventId, batchSize = 1000) => 
-    syncApi.post(`/events/sync/${deviceId}`, { fromEventId, batchSize }),
-  syncAll: (batchSize = 1000) => syncApi.post('/events/sync-all', { batchSize }),
-  syncAllToDB: (batchSize = 500) => syncApi.post('/events/sync-all-to-db', { batchSize }),
+  sync: (deviceId) => syncApi.post(`/events/sync/${deviceId}`),
+  syncAll: () => syncApi.post('/events/sync-all'),
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
   getReplicationHealth: (params = {}) => api.get('/events/replication/health', { params }),
   
@@ -351,6 +349,7 @@ export const eventAPI = {
     if (params.pageSize) query.append('pageSize', params.pageSize);
     if (params.deviceId) query.append('deviceId', params.deviceId);
     if (params.eventType) query.append('eventType', params.eventType);
+    if (params.exactUserId) query.append('exactUserId', params.exactUserId);
     if (params.userId) query.append('userId', params.userId);
     if (params.authResult) query.append('authResult', params.authResult);
     if (params.doorId) query.append('doorId', params.doorId);
@@ -364,17 +363,6 @@ export const eventAPI = {
   getStatistics: (deviceId, params = {}) => api.get('/events/statistics', { params: { deviceId, ...params } }),
   getCount: (deviceId) => api.get(`/events/count?deviceId=${deviceId}`),
   getCodes: () => api.get('/events/codes'),
-};
-
-// ==================== GATE EVENT ENDPOINTS ====================
-
-export const gateEventAPI = {
-  getAll: (params) => api.get('/gate-events', { params }),
-  create: (eventData) => api.post('/gate-events', eventData),
-  getByEmployee: (employeeId, limit = 50) => 
-    api.get(`/gate-events/employee/${employeeId}?limit=${limit}`),
-  getStats: (params) => api.get('/gate-events/stats', { params }),
-  exportReport: (params = {}) => api.get('/gate-events/export', { params, responseType: 'blob' }),
 };
 
 // ==================== EMPLOYEE ENDPOINTS ====================

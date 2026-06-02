@@ -17,16 +17,19 @@ export default (services) => {
      */
     const getSupremaDeviceId = (dbDeviceId) => resolveSupremaDeviceId(dbDeviceId, services.connection);
 
-    const buildDbEventWhere = (query) => {
+    const buildDbEventWhere = (query, options = {}) => {
+        const { includeStoredEventType = false } = options;
         const where = {};
 
         if (query.deviceId) {
             where.deviceId = parseInt(query.deviceId);
         }
-        if (query.eventType) {
+        if (includeStoredEventType && query.eventType) {
             where.eventType = query.eventType;
         }
-        if (query.userId) {
+        if (query.exactUserId) {
+            where.userId = String(query.exactUserId);
+        } else if (query.userId) {
             where.userId = { contains: query.userId };
         }
         if (query.authResult) {
@@ -45,10 +48,123 @@ export default (services) => {
         return where;
     };
 
+    const getDbEventCode = (event) => Number(event?.eventCode ?? event?.rawData?.eventcode ?? event?.rawData?.eventCode ?? 0);
+    const getDbEventSubCode = (event) => Number(event?.subType ?? event?.rawData?.subcode ?? event?.rawData?.subCode ?? 0);
+    const getDbEventTnaKey = (event) => Number(event?.rawData?.tnakey ?? event?.rawData?.tnaKey ?? 0);
+
+    const isValidPersistedTnaEvent = (event) => {
+        const storedEventType = String(event?.eventType || '');
+        // Accept any access event: plain auth or T&A-keyed attendance
+        if (storedEventType === 'authentication' || storedEventType === 'attendance' || storedEventType.startsWith('tna_key_')) {
+            return true;
+        }
+        return false;
+    };
+
     const serializeDbEvent = (event) => ({
         ...event,
         supremaEventId: event.supremaEventId.toString()
     });
+
+    const runBackgroundEventSync = async ({ req, res, processType, description, source, deviceIds = null }) => {
+        const ps = services.processService;
+        const eventReplication = services.eventReplication;
+
+        if (!ps) {
+            return res.status(503).json({ error: 'ProcessService unavailable', message: 'Restart the server and try again.' });
+        }
+
+        if (!eventReplication || typeof eventReplication.syncAllNow !== 'function') {
+            return res.status(503).json({ error: 'EventReplication unavailable', message: 'Restart the server and try again.' });
+        }
+
+        const prisma = services.database.getPrisma();
+        let devices = await prisma.device.findMany({ where: { isActive: true } });
+
+        if (Array.isArray(deviceIds) && deviceIds.length > 0) {
+            const wanted = new Set(deviceIds.map((id) => String(id)));
+            devices = devices.filter((device) => wanted.has(String(device.id)));
+        }
+
+        const processId = ps.create(processType, {
+            description,
+            deviceCount: devices.length,
+        });
+        ps.update(processId, { total: devices.length });
+
+        res.json({
+            success: true,
+            background: true,
+            processId,
+            message: `Event sync started for ${devices.length} device(s). Track progress at /processes/${processId}`,
+        });
+
+        setImmediate(async () => {
+            try {
+                ps.update(processId, { status: 'running' });
+                ps.log(processId, 'Delegating event sync to EventReplicationService…');
+
+                const results = await eventReplication.syncAllNow({ deviceIds: devices.map((device) => device.id), source });
+
+                for (const result of results) {
+                    if (ps.isCancelled(processId)) {
+                        ps.log(processId, 'Cancelled by user', 'warning');
+                        break;
+                    }
+
+                    ps.addResult(processId, result);
+
+                    if (result.success) {
+                        ps.log(processId, `${result.deviceName || result.deviceId}: synced ${result.synced} event(s)`);
+                    } else {
+                        ps.log(processId, `${result.deviceName || result.deviceId}: ${result.error || 'sync failed'}`, 'warning');
+                    }
+                }
+
+                const successfulResults = results.filter((result) => result.success);
+                const totalSynced = successfulResults.reduce((sum, result) => sum + (result.synced || 0), 0);
+
+                ps.update(processId, {
+                    status: ps.isCancelled(processId) ? 'cancelled' : 'completed',
+                    progress: successfulResults.length,
+                });
+                ps.log(processId, `Event sync done — ${totalSynced} event(s) persisted across ${successfulResults.length}/${results.length} devices`);
+            } catch (error) {
+                services.logger.error('[API] background event sync error:', { processType, error: error.message });
+                ps.update(processId, { status: 'failed' });
+                ps.log(processId, `Fatal error: ${error.message}`, 'error');
+            }
+        });
+    };
+
+    const normalizeDbEvent = (event) => {
+        const eventCode = getDbEventCode(event);
+        const subCode = getDbEventSubCode(event);
+        const storedEventType = String(event?.eventType || '');
+
+        const isPersistedTna = storedEventType === 'attendance' || storedEventType.startsWith('tna_key_');
+        const isPersistedAuth = storedEventType === 'authentication';
+
+        // Trust the stored eventType for authentication/attendance rows.
+        // For any old rows with an unexpected type, reclassify from the event code.
+        const eventType = isPersistedTna
+            ? 'attendance'
+            : isPersistedAuth
+            ? 'authentication'
+            : (typeof services.event?.classifyEventType === 'function'
+                ? services.event.classifyEventType(eventCode)
+                : event.eventType);
+
+        const description = typeof services.event?.getEventDescription === 'function'
+            ? services.event.getEventDescription(eventCode, subCode)
+            : event.description;
+
+        return {
+            ...serializeDbEvent(event),
+            eventType,
+            description,
+        };
+    };
 
     /**
      * Subscribe to real-time events
@@ -129,6 +245,7 @@ export default (services) => {
                 pageSize = 50,
                 deviceId,
                 eventType,
+                exactUserId,
                 userId,
                 authResult,
                 doorId,
@@ -137,22 +254,29 @@ export default (services) => {
             } = req.query;
 
             const prisma = services.database.getPrisma();
-            const where = buildDbEventWhere({ deviceId, eventType, userId, authResult, doorId, startDate, endDate });
+            const where = buildDbEventWhere({ deviceId, eventType, exactUserId, userId, authResult, doorId, startDate, endDate }, { includeStoredEventType: true });
+            const pageNumber = parseInt(page);
+            const pageSizeNumber = parseInt(pageSize);
 
-            // Get total count
-            const totalEvents = await prisma.event.count({ where });
-            
-            // Get paginated events
             const events = await prisma.event.findMany({
                 where,
-                orderBy: { timestamp: 'desc' },
-                skip: (parseInt(page) - 1) * parseInt(pageSize),
-                take: parseInt(pageSize)
+                orderBy: { timestamp: 'desc' }
             });
 
-            // Enrich events with employee names
-            const uniqueUserIds = [...new Set(events.map(e => e.userId).filter(id => id && /^\d+$/.test(id)))];
+            const filteredEvents = events
+                .map((event) => normalizeDbEvent(event));
+
+            const totalEvents = filteredEvents.length;
+            const paginatedEvents = filteredEvents.slice(
+                (pageNumber - 1) * pageSizeNumber,
+                pageNumber * pageSizeNumber
+            );
+
+            // Enrich events with employee and device context for UI consumers.
+            const uniqueUserIds = [...new Set(paginatedEvents.map(e => e.userId).filter(id => id && /^\d+$/.test(id)))];
+            const uniqueDeviceIds = [...new Set(paginatedEvents.map((event) => event.deviceId).filter((id) => Number.isInteger(id)))];
             const employeeMap = {};
+            const deviceMap = {};
             if (uniqueUserIds.length > 0) {
                 const employees = await prisma.employee.findMany({
                     where: { id: { in: uniqueUserIds.map(id => parseInt(id)) } },
@@ -162,21 +286,35 @@ export default (services) => {
                     employeeMap[String(emp.id)] = emp.fullname || [emp.firstname, emp.lastname].filter(Boolean).join(' ') || null;
                 });
             }
+            if (uniqueDeviceIds.length > 0) {
+                const devices = await prisma.device.findMany({
+                    where: { id: { in: uniqueDeviceIds } },
+                    select: { id: true, name: true, loc: true }
+                });
+                devices.forEach((device) => {
+                    deviceMap[device.id] = {
+                        name: device.name || null,
+                        location: device.loc || null,
+                    };
+                });
+            }
 
             // Convert BigInt to string for JSON serialization
-            const serializedEvents = events.map((event) => ({
-                ...serializeDbEvent(event),
-                userName: employeeMap[event.userId] || null
+            const serializedEvents = paginatedEvents.map((event) => ({
+                ...event,
+                userName: employeeMap[event.userId] || null,
+                deviceName: deviceMap[event.deviceId]?.name || null,
+                deviceLocation: deviceMap[event.deviceId]?.location || null,
             }));
 
             res.json({
                 success: true,
                 data: serializedEvents,
                 pagination: {
-                    page: parseInt(page),
-                    pageSize: parseInt(pageSize),
+                    page: pageNumber,
+                    pageSize: pageSizeNumber,
                     totalEvents,
-                    totalPages: Math.ceil(totalEvents / parseInt(pageSize))
+                    totalPages: Math.ceil(totalEvents / pageSizeNumber)
                 }
             });
         } catch (error) {
@@ -199,6 +337,7 @@ export default (services) => {
                 limit = 10000,
                 deviceId,
                 eventType,
+                exactUserId,
                 userId,
                 authResult,
                 doorId,
@@ -207,13 +346,14 @@ export default (services) => {
             } = req.query;
 
             const prisma = services.database.getPrisma();
-            const where = buildDbEventWhere({ deviceId, eventType, userId, authResult, doorId, startDate, endDate });
+            const where = buildDbEventWhere({ deviceId, eventType, exactUserId, userId, authResult, doorId, startDate, endDate }, { includeStoredEventType: true });
             const events = await prisma.event.findMany({
                 where,
-                orderBy: { timestamp: 'desc' },
-                take: parseInt(limit)
+                orderBy: { timestamp: 'desc' }
             });
-            const serializedEvents = events.map((event) => serializeDbEvent(event));
+            const serializedEvents = events
+                .map((event) => normalizeDbEvent(event))
+                .slice(0, parseInt(limit));
 
             if (format === 'json') {
                 res.setHeader('Content-Type', 'application/json');
@@ -262,157 +402,6 @@ export default (services) => {
                 message: error.message
             });
         }
-    }));
-
-    /**
-     * Sync events from all connected devices
-     * POST /api/events/sync-all-to-db
-     */
-    router.post('/sync-all-to-db', asyncHandler(async (req, res) => {
-        const { batchSize = 500 } = req.body;
-        const ps = services.processService;
-        const prisma = services.database.getPrisma();
-
-        // Count active devices for metadata
-        const deviceCount = await prisma.device.count({ where: { isActive: true } });
-
-        if (!ps) {
-            // Fallback: original synchronous path (condensed)
-            return res.status(503).json({ error: 'ProcessService unavailable', message: 'Restart the server and try again.' });
-        }
-
-        const processId = ps.create('event-sync-all-to-db', {
-            description: 'Sync events from all devices → database',
-            deviceCount,
-            batchSize,
-        });
-        ps.update(processId, { total: deviceCount });
-        res.json({
-            success: true,
-            background: true,
-            processId,
-            message: `Event sync started for ${deviceCount} device(s). Track progress at /processes/${processId}`,
-        });
-
-        setImmediate(async () => {
-          try {
-            ps.update(processId, { status: 'running' });
-            ps.log(processId, 'Fetching active devices from DB…');
-
-            const devices = await prisma.device.findMany({ where: { isActive: true } });
-            const connectedDevices = await services.connection.getConnectedDevices();
-            const results = [];
-
-            for (const device of devices) {
-                if (ps.isCancelled(processId)) { ps.log(processId, 'Cancelled by user', 'warning'); break; }
-                try {
-                    // Get Suprema device ID
-                    let supremaDeviceId = null;
-                    for (const connected of connectedDevices) {
-                        const info = connected.toObject ? connected.toObject() : connected;
-                        if (info.ipaddr === device.ip && info.port === device.port) {
-                            supremaDeviceId = info.deviceid;
-                            break;
-                        }
-                    }
-
-                    if (!supremaDeviceId) {
-                        ps.addResult(processId, { deviceName: device.name, success: false, error: 'Device not connected' });
-                        results.push({ deviceId: device.id, deviceName: device.name, success: false, error: 'Device not connected' });
-                        continue;
-                    }
-
-                    ps.log(processId, `Syncing events from ${device.name}…`);
-
-                    // Get last synced event ID
-                    const lastEvent = await prisma.event.findFirst({
-                        where: { deviceId: device.id },
-                        orderBy: { supremaEventId: 'desc' }
-                    });
-                    const startEventId = lastEvent ? Number(lastEvent.supremaEventId) : 0;
-
-                    // Get events from device
-                    const events = await services.event.getEventLogs(
-                        supremaDeviceId,
-                        startEventId,
-                        parseInt(batchSize)
-                    );
-                    
-                    // Store events in batches using createMany with skipDuplicates
-                    let syncedCount = 0;
-                    const BATCH_SIZE = 100;
-                    
-                    for (let i = 0; i < events.length; i += BATCH_SIZE) {
-                        const batch = events.slice(i, i + BATCH_SIZE);
-                        const eventsToInsert = batch.map(event => ({
-                            deviceId: device.id,
-                            supremaEventId: BigInt(event.id || event.eventid || 0),
-                            eventCode: event.eventcode || 0,
-                            eventType: event.eventType || 'other',
-                            subType: event.subType || null,
-                            userId: extractUserIdFromEvent(event),
-                            doorId: event.doorid || null,
-                            description: event.description || null,
-                            authResult: event.authResult || null,
-                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-                            rawData: event
-                        }));
-                        
-                        try {
-                            const result = await prisma.event.createMany({
-                                data: eventsToInsert,
-                                skipDuplicates: true
-                            });
-                            syncedCount += result.count;
-                        } catch (batchError) {
-                            services.logger.error('Batch insert error:', batchError.message);
-                            // Fall back to individual inserts for this batch
-                            for (const eventData of eventsToInsert) {
-                                try {
-                                    await prisma.event.upsert({
-                                        where: {
-                                            deviceId_supremaEventId: {
-                                                deviceId: eventData.deviceId,
-                                                supremaEventId: eventData.supremaEventId
-                                            }
-                                        },
-                                        update: eventData,
-                                        create: eventData
-                                    });
-                                    syncedCount++;
-                                } catch (e) {
-                                    // Skip duplicate events
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Update device last_event_sync
-                    await prisma.device.update({
-                        where: { id: device.id },
-                        data: { last_event_sync: new Date() }
-                    });
-                    
-                    ps.addResult(processId, { deviceName: device.name, success: true, synced: syncedCount, total: events.length });
-                    results.push({ deviceId: device.id, deviceName: device.name, success: true, synced: syncedCount, total: events.length });
-                } catch (err) {
-                    ps.addResult(processId, { deviceName: device.name, success: false, error: err.message });
-                    results.push({ deviceId: device.id, deviceName: device.name, success: false, error: err.message });
-                }
-            }
-
-            const totalSynced = results.reduce((sum, r) => sum + (r.synced || 0), 0);
-            ps.update(processId, {
-                status: ps.isCancelled(processId) ? 'cancelled' : 'completed',
-                progress: results.filter(r => r.success).length,
-            });
-            ps.log(processId, `Event sync done — ${totalSynced} events stored across ${results.filter(r => r.success).length}/${results.length} devices`);
-          } catch (error) {
-            services.logger.error('[API] event sync-all-to-db error:', { error: error.message });
-            ps.update(processId, { status: 'failed' });
-            ps.log(processId, `Fatal error: ${error.message}`, 'error');
-          }
-        });
     }));
 
     /**
@@ -520,13 +509,12 @@ export default (services) => {
             
             // Return common event code categories
             const eventCodes = {
-                verify: { code: 0x1000, description: 'Verify Success/Fail' },
-                identify: { code: 0x1100, description: 'Identify Success/Fail' },
-                door: { code: 0x2000, description: 'Door Events' },
-                zone: { code: 0x3000, description: 'Zone Events' },
-                device: { code: 0x4000, description: 'Device Events' },
-                user: { code: 0x5000, description: 'User Events' },
-                tna: { code: 0x6000, description: 'Time & Attendance' },
+                authentication: { code: 0x1000, description: 'Authentication events' },
+                attendance: { code: 0x1000, description: 'Authentication events with TNAKey > 0' },
+                user: { code: 0x2000, description: 'User management events' },
+                system: { code: 0x3000, description: 'System/device events' },
+                door: { code: 0x5000, description: 'Door events' },
+                zone: { code: 0x6000, description: 'Zone events' },
                 eventCodeMapSize: status.eventCodeMapSize
             };
 
@@ -1040,92 +1028,31 @@ export default (services) => {
     }));
 
     /**
-     * Sync events from device to database
+        * Sync events from device to database using the managed replication cursor
      * POST /api/events/sync/:deviceId
-     * Body: { fromEventId, batchSize }
      */
     router.post('/sync/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const { fromEventId, batchSize = 1000 } = req.body;
+            const result = await services.eventReplication.syncDeviceNow(parseInt(deviceId), { source: 'manual' });
 
-            const supremaDeviceId = await getSupremaDeviceId(deviceId);
-            const prisma = services.database.getPrisma();
-            
-            // Get last synced event ID from database if not provided
-            let startEventId = fromEventId;
-            if (startEventId === undefined || startEventId === null) {
-                const lastEvent = await prisma.event.findFirst({
-                    where: { deviceId: parseInt(deviceId) },
-                    orderBy: { supremaEventId: 'desc' }
+            if (!result.success) {
+                const statusCode = result.error === 'Device not found' ? 404 : 409;
+                return res.status(statusCode).json({
+                    success: false,
+                    message: result.error,
+                    data: result,
                 });
-                startEventId = lastEvent ? Number(lastEvent.supremaEventId) : 0;
             }
-            
-            // Get events from device
-            const events = await services.event.getEventLogs(
-                supremaDeviceId,
-                parseInt(startEventId),
-                parseInt(batchSize)
-            );
-
-            // Store events in database
-            let syncedCount = 0;
-            for (const event of events) {
-                try {
-                    await prisma.event.upsert({
-                        where: {
-                            deviceId_supremaEventId: {
-                                deviceId: parseInt(deviceId),
-                                supremaEventId: BigInt(event.id || event.eventid || 0)
-                            }
-                        },
-                        update: {
-                            eventCode: event.eventcode || 0,
-                            eventType: event.eventType || 'other',
-                            subType: event.subType || null,
-                            userId: extractUserIdFromEvent(event),
-                            doorId: event.doorid || null,
-                            description: event.description || null,
-                            authResult: event.authResult || null,
-                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-                            rawData: event
-                        },
-                        create: {
-                            deviceId: parseInt(deviceId),
-                            supremaEventId: BigInt(event.id || event.eventid || 0),
-                            eventCode: event.eventcode || 0,
-                            eventType: event.eventType || 'other',
-                            subType: event.subType || null,
-                            userId: extractUserIdFromEvent(event),
-                            doorId: event.doorid || null,
-                            description: event.description || null,
-                            authResult: event.authResult || null,
-                            timestamp: event.timestamp ? new Date(event.timestamp) : new Date(),
-                            rawData: event
-                        }
-                    });
-                    syncedCount++;
-                } catch (upsertError) {
-                    // Log but continue with other events
-                    services.logger.error(`Failed to sync event ${event.id}:`, upsertError.message);
-                }
-            }
-            
-            // Update device last_event_sync
-            await prisma.device.update({
-                where: { id: parseInt(deviceId) },
-                data: { last_event_sync: new Date() }
-            });
             
             res.json({
                 success: true,
                 message: 'Events synced to database',
-                synced: syncedCount,
-                total: events.length,
-                lastEventId: events.length > 0 ? events[events.length - 1].id : startEventId,
-                deviceId: deviceId,
-                supremaDeviceId: supremaDeviceId
+                synced: result.synced,
+                lastEventId: result.lastEventId,
+                deviceId: result.deviceId,
+                supremaDeviceId: result.supremaId,
+                data: result,
             });
         } catch (error) {
             res.status(500).json({
@@ -1136,61 +1063,21 @@ export default (services) => {
     }));
 
     /**
-     * Sync events from all devices
+        * Sync events from all devices into the local database using the managed replication cursor
      * POST /api/events/sync-all
-     * Body: { batchSize }
      */
     router.post('/sync-all', asyncHandler(async (req, res) => {
-        const { batchSize = 1000 } = req.body;
-        const ps = services.processService;
-
-        if (!ps) {
-            return res.status(503).json({ error: 'ProcessService unavailable', message: 'Restart the server and try again.' });
-        }
-
-        const connectedDevices = await services.connection.getConnectedDevices();
-        const processId = ps.create('event-sync-all', {
-            description: 'Fetch & store events from all connected devices',
-            deviceCount: connectedDevices.length,
-            batchSize,
-        });
-        ps.update(processId, { total: connectedDevices.length });
-        res.json({
-            success: true,
-            background: true,
-            processId,
-            message: `Event sync started for ${connectedDevices.length} device(s). Track progress at /processes/${processId}`,
-        });
-
-        setImmediate(async () => {
-            try {
-                ps.update(processId, { status: 'running' });
-                ps.log(processId, `Syncing events from ${connectedDevices.length} connected device(s)…`);
-
-                for (const device of connectedDevices) {
-                    if (ps.isCancelled(processId)) { ps.log(processId, 'Cancelled by user', 'warning'); break; }
-                    const info = device.toObject ? device.toObject() : device;
-                    try {
-                        const events = await services.event.getEventLogs(info.deviceid, 0, parseInt(batchSize));
-                        ps.addResult(processId, { deviceId: info.deviceid, ip: info.ipaddr, synced: events.length, success: true });
-                    } catch (err) {
-                        ps.addResult(processId, { deviceId: info.deviceid, ip: info.ipaddr, success: false, error: err.message });
-                    }
-                }
-
-                const ok = ps.get(processId)?.results.filter(r => r.success).length ?? 0;
-                ps.update(processId, { status: ps.isCancelled(processId) ? 'cancelled' : 'completed', progress: ok });
-                ps.log(processId, `Event sync done — ${ok}/${connectedDevices.length} devices OK`);
-            } catch (error) {
-                services.logger.error('[API] event sync-all error:', { error: error.message });
-                ps.update(processId, { status: 'failed' });
-                ps.log(processId, `Fatal error: ${error.message}`, 'error');
-            }
+        await runBackgroundEventSync({
+            req,
+            res,
+            processType: 'event-sync-all',
+            description: 'Sync events from all devices -> database',
+            source: 'manual',
         });
     }));
 
     /**
-     * Get last synced event ID for device
+     * Get event replication status for device
      * GET /api/events/sync-status/:deviceId
      */
     router.get('/sync-status/:deviceId', asyncHandler(async (req, res) => {
@@ -1214,6 +1101,7 @@ export default (services) => {
                     deviceId: device.id,
                     deviceName: device.name,
                     lastEventSync: device.last_event_sync,
+                    lastReplicatedEventId: device.last_replicated_event_id,
                     lastUserSync: device.last_user_sync,
                     status: device.status
                 }

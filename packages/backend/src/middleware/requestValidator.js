@@ -370,7 +370,7 @@ export const schemas = {
         scope: {
             type: 'string',
             required: true,
-            enum: ['events', 'gate-events', 'audit', 'attendance', 'reconciliation']
+            enum: ['events', 'audit', 'attendance', 'reconciliation']
         }
     },
 

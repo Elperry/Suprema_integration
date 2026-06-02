@@ -20,6 +20,7 @@ class EventReplicationService {
      * @param {Object} deps.eventRepository - EventRepository (Prisma)
      * @param {Object} deps.database - DatabaseManager (device queries)
      * @param {Object} deps.logger - Logger
+     * @param {Object} [deps.timeService] - SupremaTimeService for time sync on connect
      * @param {Object} [opts]
      * @param {number} [opts.intervalMs=60000]
      * @param {number} [opts.batchSize=1000]
@@ -33,6 +34,7 @@ class EventReplicationService {
         this.eventRepository = deps.eventRepository;
         this.database = deps.database;
         this.logger = deps.logger;
+        this.timeService = deps.timeService || null;
 
         this.intervalMs = opts.intervalMs ?? 60_000;
         this.batchSize = opts.batchSize ?? 1000;
@@ -44,10 +46,15 @@ class EventReplicationService {
         this._started = false;
         this._realtimeSubscription = null;
         this._onDeviceConnected = null;
+        this._onDeviceDisconnected = null;
         this._onRealtimeEvent = null;
         this._syncing = new Set();
         this._monitoredDevices = new Set();
         this._deviceStatus = new Map();
+        // supremaId(string) -> deviceRecord. Refreshed on connect/disconnect
+        // events and on a cache miss. Avoids one getAllDevices() call per
+        // realtime event (was ~30 reads/sec/device).
+        this._deviceRecordCache = new Map();
         this._stats = {
             startedAt: null,
             lastPeriodicRunAt: null,
@@ -82,8 +89,26 @@ class EventReplicationService {
         this.eventService.on('event:received', this._onRealtimeEvent);
 
         this._onDeviceConnected = ({ deviceId, config }) => {
-            // FIX: Run catch-up sync FIRST before enabling realtime to prevent gaps
-            this._syncConnectedDevice(deviceId, config).then(() => {
+            // Invalidate cached entry so it gets re-fetched fresh
+            this._deviceRecordCache.delete(String(deviceId));
+
+            // Step 1: Time sync (fire-and-forget, non-blocking — don't let a
+            // failed time sync prevent event catch-up or monitoring setup).
+            const timeSyncPromise = this.timeService
+                ? this.timeService.setDeviceTime(deviceId).then(() => {
+                      this.logger.info('[EventReplication] Time synced on connect', { deviceId });
+                  }).catch((err) => {
+                      this.logger.warn('[EventReplication] Time sync failed on connect', {
+                          deviceId,
+                          error: err.message,
+                      });
+                  })
+                : Promise.resolve();
+
+            // Steps 2+3: catch-up pull from last_replicated_event_id, then
+            // enable realtime monitoring — matching the example's
+            // connectionCallback in example/sync/event.js.
+            timeSyncPromise.then(() => this._syncConnectedDevice(deviceId, config)).then(() => {
                 if (this.enableRealtime) {
                     this._ensureRealtimeMonitoring(deviceId).catch((error) => {
                         this.logger.warn('[EventReplication] Failed to enable realtime monitoring for connected device', {
@@ -95,6 +120,16 @@ class EventReplicationService {
             }).catch(() => {});
         };
         this.connectionService.on('device:connected', this._onDeviceConnected);
+
+        // On disconnect: clear cache AND remove from monitored set so that
+        // when the device reconnects _ensureRealtimeMonitoring will call
+        // enableMonitoring again instead of silently skipping it.
+        this._onDeviceDisconnected = ({ deviceId }) => {
+            this._deviceRecordCache.delete(String(deviceId));
+            this._monitoredDevices.delete(deviceId);
+            this.logger.info('[EventReplication] Device disconnected — monitoring registration cleared', { deviceId });
+        };
+        this.connectionService.on('device:disconnected', this._onDeviceDisconnected);
 
         // FIX: Sequential Startup. Perform full periodic catch-up sync first.
         this._syncAllDevices('periodic').then(() => {
@@ -135,6 +170,13 @@ class EventReplicationService {
             this.connectionService.removeListener('device:connected', this._onDeviceConnected);
             this._onDeviceConnected = null;
         }
+
+        if (this._onDeviceDisconnected) {
+            this.connectionService.removeListener('device:disconnected', this._onDeviceDisconnected);
+            this._onDeviceDisconnected = null;
+        }
+
+        this._deviceRecordCache.clear();
 
         if (this._onRealtimeEvent) {
             this.eventService.removeListener('event:received', this._onRealtimeEvent);
@@ -318,14 +360,76 @@ class EventReplicationService {
             return;
         }
 
-        for (const device of devices) {
-            const supremaId = this._resolveSupremaId(device);
-            if (!supremaId) continue;
-
-            await this._syncDevice(device.id, supremaId, device, source).catch(() => {});
-        }
+        await this._syncDeviceList(devices, source);
 
         this._stats.lastPeriodicSuccessAt = new Date();
+    }
+
+    async syncAllNow(options = {}) {
+        const source = options.source ?? 'manual';
+        let devices = await this.database.getActiveDevices();
+
+        if (Array.isArray(options.deviceIds) && options.deviceIds.length > 0) {
+            const wanted = new Set(options.deviceIds.map((id) => String(id)));
+            devices = devices.filter((device) => wanted.has(String(device.id)));
+        }
+
+        return this._syncDeviceList(devices, source);
+    }
+
+    async syncDeviceNow(dbDeviceId, options = {}) {
+        const source = options.source ?? 'manual';
+        const devices = await this.database.getAllDevices();
+        const deviceRecord = devices.find((device) => String(device.id) === String(dbDeviceId));
+
+        if (!deviceRecord) {
+            return {
+                deviceId: dbDeviceId,
+                deviceName: null,
+                source,
+                success: false,
+                synced: 0,
+                error: 'Device not found',
+            };
+        }
+
+        const supremaId = this._resolveSupremaId(deviceRecord);
+        if (!supremaId) {
+            return {
+                deviceId: deviceRecord.id,
+                deviceName: deviceRecord.name,
+                source,
+                success: false,
+                synced: 0,
+                error: 'Device not connected',
+            };
+        }
+
+        return this._syncDevice(deviceRecord.id, supremaId, deviceRecord, source);
+    }
+
+    async _syncDeviceList(devices, source) {
+        const tasks = [];
+
+        for (const device of devices) {
+            const supremaId = this._resolveSupremaId(device);
+
+            if (!supremaId) {
+                tasks.push(Promise.resolve({
+                    deviceId: device.id,
+                    deviceName: device.name,
+                    source,
+                    success: false,
+                    synced: 0,
+                    error: 'Device not connected',
+                }));
+                continue;
+            }
+
+            tasks.push(this._syncDevice(device.id, supremaId, device, source));
+        }
+
+        return Promise.all(tasks);
     }
 
     async _syncConnectedDevice(supremaId, config = {}) {
@@ -344,19 +448,49 @@ class EventReplicationService {
 
     async _syncDevice(dbDeviceId, supremaId, deviceRecord, source = 'periodic') {
         const lockKey = String(dbDeviceId);
-        if (this._syncing.has(lockKey)) return;
+        if (this._syncing.has(lockKey)) {
+            return {
+                deviceId: dbDeviceId,
+                deviceName: deviceRecord?.name ?? null,
+                supremaId: supremaId ?? null,
+                source,
+                success: false,
+                synced: 0,
+                error: 'Sync already in progress',
+            };
+        }
         this._syncing.add(lockKey);
 
         try {
             if (!deviceRecord) {
                 const devices = await this.database.getAllDevices();
                 deviceRecord = devices.find((device) => String(device.id) === lockKey);
-                if (!deviceRecord) return;
+                if (!deviceRecord) {
+                    return {
+                        deviceId: dbDeviceId,
+                        deviceName: null,
+                        supremaId: supremaId ?? null,
+                        source,
+                        success: false,
+                        synced: 0,
+                        error: 'Device not found',
+                    };
+                }
             }
 
             if (!supremaId) {
                 supremaId = this._resolveSupremaId(deviceRecord);
-                if (!supremaId) return;
+                if (!supremaId) {
+                    return {
+                        deviceId: deviceRecord.id,
+                        deviceName: deviceRecord.name,
+                        supremaId: null,
+                        source,
+                        success: false,
+                        synced: 0,
+                        error: 'Device not connected',
+                    };
+                }
             }
 
             this._recordAttempt(deviceRecord.id);
@@ -364,6 +498,7 @@ class EventReplicationService {
             // FIX: Use independent replication cursor to avoid real-time race condition jump
             const cursorId = deviceRecord.last_replicated_event_id ? Number(deviceRecord.last_replicated_event_id) : 0;
             const startEventId = cursorId > 0 ? cursorId + 1 : 0;
+            let lastObservedEventId = cursorId;
 
             this.logger.info('[EventReplication] Syncing device', {
                 device: deviceRecord.name,
@@ -379,7 +514,7 @@ class EventReplicationService {
                 let events;
 
                 try {
-                    events = await this.eventService.getEventLogs(supremaId, currentStartId, this.batchSize);
+                    events = await this._getSyncEvents(supremaId, currentStartId, this.batchSize, source);
                 } catch (error) {
                     this._recordFailure(deviceRecord.id, error.message);
                     this._stats.totalSyncFailures += 1;
@@ -398,6 +533,7 @@ class EventReplicationService {
                 totalInserted += inserted;
 
                 const lastId = this._maxEventId(events);
+                if (lastId !== null) lastObservedEventId = lastId;
                 if (lastId === null || lastId < currentStartId) break;
 
                 currentStartId = lastId + 1;
@@ -417,6 +553,17 @@ class EventReplicationService {
                 source,
                 synced: totalInserted,
             });
+
+            return {
+                deviceId: deviceRecord.id,
+                deviceName: deviceRecord.name,
+                supremaId,
+                source,
+                success: true,
+                synced: totalInserted,
+                startEventId,
+                lastEventId: lastObservedEventId,
+            };
         } catch (error) {
             this._recordFailure(dbDeviceId, error.message);
             this._stats.totalSyncFailures += 1;
@@ -426,35 +573,70 @@ class EventReplicationService {
                 source,
                 error: error.message,
             });
+
+            return {
+                deviceId: dbDeviceId,
+                deviceName: deviceRecord?.name ?? null,
+                supremaId: supremaId ?? null,
+                source,
+                success: false,
+                synced: 0,
+                error: error.message,
+            };
         } finally {
             this._syncing.delete(lockKey);
         }
     }
 
+    async _getSyncEvents(supremaId, startEventId, batchSize, _source) {
+        return this.eventService.getEventLogs(supremaId, startEventId, batchSize);
+    }
+
     async _persistEvents(events, deviceRecord, source) {
-        const rows = events
-            .map((event) => this._mapEventToRow(event, deviceRecord.id))
-            .filter(Boolean);
-
-        if (rows.length === 0) {
-            return 0;
-        }
-
-        const result = await this.eventRepository.bulkCreate(rows);
-        const inserted = result?.count ?? rows.length;
-
+        // We track the highest observed event ID across the entire batch
+        // (including filtered-out non-access events) so the device replication
+        // cursor advances past them. Otherwise periodic runs would re-fetch
+        // the same events forever.
         const lastEventId = this._maxEventId(events);
         const lastEventTimestamp = this._maxEventTimestamp(events);
 
-        if (inserted > 0) {
-            const updateInfo = { last_event_sync: new Date() };
+        // Persist authentication and attendance events (eventcode 0x1000-0x1FFF).
+        // enhanceEvent() has already set eventType to 'authentication' or 'attendance'.
+        // All other event types (user, system, door, zone) are skipped.
+        const accessEvents = events.filter((event) => {
+            const t = event?.eventType;
+            return t === 'authentication' || t === 'attendance';
+        });
+        const skipped = events.length - accessEvents.length;
 
-            // FIX: Only advance the cursor if this is a sequential pull (not real-time ping)
-            if (source !== 'realtime' && lastEventId !== null) {
+        const rows = accessEvents
+            .map((event) => this._mapEventToRow(event, deviceRecord.id))
+            .filter(Boolean);
+
+        let inserted = 0;
+        if (rows.length > 0) {
+            const result = await this.eventRepository.bulkCreate(rows);
+            inserted = result?.count ?? rows.length;
+        }
+
+        // Advance cursor whenever we saw any events, regardless of how many
+        // we actually persisted. Real-time pings still skip the cursor update
+        // because they arrive out-of-order relative to the historical pull.
+        if (lastEventId !== null) {
+            const updateInfo = { last_event_sync: new Date() };
+            if (source !== 'realtime') {
                 updateInfo.last_replicated_event_id = lastEventId;
             }
-
             await this.database.updateDevice(deviceRecord.id, updateInfo);
+        }
+
+        if (skipped > 0) {
+            this.logger.debug('[EventReplication] Skipped non-access events', {
+                device: deviceRecord.name,
+                source,
+                skipped,
+                persisted: inserted,
+            });
         }
 
         this._recordSuccess(deviceRecord.id, {
@@ -486,8 +668,12 @@ class EventReplicationService {
             }
 
             let authResult = null;
-            if (event.eventType === 'authentication') {
-                const code = event.eventcode ?? event.eventCode;
+            const code = event.eventcode ?? event.eventCode;
+            // Compute authResult for any underlying authentication event
+            // (0x1000-0x1FFF), even when our eventType was promoted to
+            // 'attendance' because a TNA key was selected on the swipe.
+            const isAuthCode = typeof code === 'number' && code >= 0x1000 && code < 0x2000;
+            if (event.eventType === 'authentication' || isAuthCode) {
                 const successCodes = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
                 authResult = successCodes.includes(code) ? 'success' : 'fail';
             }
@@ -555,10 +741,20 @@ class EventReplicationService {
     }
 
     async _findDeviceRecordBySupremaId(supremaId) {
+        const key = String(supremaId);
+        // Hot path — realtime stream calls this for every event. Caching
+        // here avoids a getAllDevices() round-trip per event. The cache is
+        // invalidated by the device:connected / device:disconnected handlers
+        // wired in start().
+        const cached = this._deviceRecordCache.get(key);
+        if (cached) return cached;
+
         const connectionInfo = this.connectionService.connectedDevices.get(supremaId);
         if (!connectionInfo) return null;
 
-        return this._findDeviceRecord(connectionInfo);
+        const record = await this._findDeviceRecord(connectionInfo);
+        if (record) this._deviceRecordCache.set(key, record);
+        return record;
     }
 
     _getDeviceStatus(deviceId) {

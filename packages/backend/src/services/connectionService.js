@@ -35,9 +35,14 @@ class SupremaConnectionService extends EventEmitter {
         this.connClient = null;
         this.deviceClient = null;
         this.connectedDevices = new Map();
-        this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 5;
         this.gatewayReady = false;
+
+        // Per-device circuit-breaker state for autoReconnectDevices().
+        // Each entry: { failures, openUntil, backoffMs }
+        this._circuitBreaker = new Map();
+        this._cbFailureThreshold = 3;       // trips after 3 consecutive failures
+        this._cbBaseBackoffMs    = 30_000;  // 30 s first open window
+        this._cbMaxBackoffMs     = 30 * 60_000; // cap at 30 min
         this.gatewayAddress = null;
         this.gatewayClientOptions = {};
         
@@ -1292,34 +1297,73 @@ class SupremaConnectionService extends EventEmitter {
     }
 
     /**
-     * Auto-reconnect to failed devices
+     * Auto-reconnect to failed devices with per-device exponential back-off.
+     *
+     * State machine per device (keyed by device.id):
+     *   CLOSED    — fewer than `_cbFailureThreshold` consecutive failures;
+     *               attempt connection on every tick.
+     *   OPEN      — `openUntil > Date.now()`; skip this device entirely.
+     *   HALF-OPEN — `openUntil` has elapsed; send one probe.
+     *               Success → CLOSED (reset failures + backoff).
+     *               Failure → OPEN again with doubled backoff (capped).
      */
     async autoReconnectDevices() {
+        if (!this.database) return;
+
+        let failedDevices;
         try {
-            if (!this.database) {
-                return;
+            failedDevices = await this.database.getPrisma().device.findMany({
+                where: { isActive: true, status: { in: ['error', 'disconnected'] } },
+            });
+        } catch (error) {
+            this.logger.error('Auto-reconnect: DB query failed:', error);
+            return;
+        }
+
+        const now = Date.now();
+
+        for (const device of failedDevices) {
+            const id = device.id;
+            let cb = this._circuitBreaker.get(id);
+            if (!cb) {
+                cb = { failures: 0, openUntil: 0, backoffMs: this._cbBaseBackoffMs };
+                this._circuitBreaker.set(id, cb);
             }
 
-            const failedDevices = await this.database.getPrisma().device.findMany({
-                where: {
-                    isActive: true,
-                    status: { in: ['error', 'disconnected'] }
-                }
-            });
-            
-            for (const device of failedDevices) {
-                if (device.connectionRetries < device.maxRetries) {
-                    try {
-                        this.logger.info(`Attempting to reconnect device: ${device.name}`);
-                        await this.connectToDeviceFromDB(device);
-                        this.logger.info(`Successfully reconnected device: ${device.name}`);
-                    } catch (error) {
-                        this.logger.warn(`Failed to reconnect device ${device.name}:`, error);
-                    }
+            // OPEN: back-off window has not elapsed — skip
+            if (cb.failures >= this._cbFailureThreshold && now < cb.openUntil) {
+                const remainS = Math.ceil((cb.openUntil - now) / 1000);
+                this.logger.debug(
+                    `Auto-reconnect: ${device.name} circuit OPEN — retry in ${remainS}s`
+                );
+                continue;
+            }
+
+            // CLOSED or HALF-OPEN: attempt connection
+            try {
+                this.logger.info(`Auto-reconnect: attempting ${device.name}`);
+                await this.connectToDeviceFromDB(device);
+                this.logger.info(`Auto-reconnect: ${device.name} reconnected successfully`);
+                // Success → reset circuit breaker
+                cb.failures  = 0;
+                cb.openUntil = 0;
+                cb.backoffMs = this._cbBaseBackoffMs;
+            } catch (error) {
+                cb.failures++;
+                this.logger.warn(
+                    `Auto-reconnect: ${device.name} failed (attempt ${cb.failures}): ${error.message}`
+                );
+
+                if (cb.failures >= this._cbFailureThreshold) {
+                    // Trip or re-trip the breaker with doubled backoff
+                    cb.backoffMs = Math.min(cb.backoffMs * 2, this._cbMaxBackoffMs);
+                    cb.openUntil = now + cb.backoffMs;
+                    this.logger.warn(
+                        `Auto-reconnect: ${device.name} circuit OPEN ` +
+                        `— next retry in ${Math.ceil(cb.backoffMs / 1000)}s`
+                    );
                 }
             }
-        } catch (error) {
-            this.logger.error('Auto-reconnect failed:', error);
         }
     }
 }

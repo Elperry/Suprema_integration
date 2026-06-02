@@ -6,6 +6,7 @@
 import { EventEmitter } from 'events';
 import winston from 'winston';
 import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 
 // Create require function for CommonJS modules
 const require = createRequire(import.meta.url);
@@ -59,13 +60,15 @@ class SupremaEventService extends EventEmitter {
      * @param {string} codeMapFile - Path to event code map JSON file
      */
     loadEventCodeMap(codeMapFile) {
-        // Resolve relative to the package root (two levels up from this file)
-        const defaultPath = path.resolve(path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Z]:)/i, '$1'), '..', '..', 'data', 'event_code.json');
+        const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+        const defaultPath = path.resolve(moduleDir, '..', '..', 'data', 'event_code.json');
         const filePath = codeMapFile || defaultPath;
         try {
             if (fs.existsSync(filePath)) {
                 const jsonData = fs.readFileSync(filePath, 'utf8');
                 const codeMapData = JSON.parse(jsonData);
+
+                this.eventCodeMap.clear();
                 
                 codeMapData.entries.forEach(entry => {
                     const key = `${entry.event_code}_${entry.sub_code}`;
@@ -88,106 +91,69 @@ class SupremaEventService extends EventEmitter {
      */
     createDefaultEventCodeMap() {
         const defaultEvents = [
-            // Authentication Events (0x1000 - 0x1FFF)
             { event_code: 0x1000, sub_code: 0x0, desc: 'Verify Success' },
-            { event_code: 0x1001, sub_code: 0x0, desc: 'Verify Fail - Not Registered' },
-            { event_code: 0x1002, sub_code: 0x0, desc: 'Verify Fail - Mismatch' },
-            { event_code: 0x1003, sub_code: 0x0, desc: 'Verify Fail - Timeout' },
-            { event_code: 0x1100, sub_code: 0x0, desc: 'Identify Success' },
-            { event_code: 0x1101, sub_code: 0x0, desc: 'Identify Fail - Not Registered' },
-            { event_code: 0x1102, sub_code: 0x0, desc: 'Identify Fail - Mismatch' },
-            { event_code: 0x1103, sub_code: 0x0, desc: 'Identify Fail - Timeout' },
-            { event_code: 0x1200, sub_code: 0x0, desc: 'Verify Success (Card)' },
-            { event_code: 0x1300, sub_code: 0x0, desc: 'Verify Success (Fingerprint)' },
-            { event_code: 0x1400, sub_code: 0x0, desc: 'Verify Success (Face)' },
-            { event_code: 0x1500, sub_code: 0x0, desc: 'Verify Success (PIN)' },
+            { event_code: 0x1100, sub_code: 0x0, desc: 'Verify Fail' },
+            { event_code: 0x1200, sub_code: 0x0, desc: 'Verify Success (Duress)' },
+            { event_code: 0x1300, sub_code: 0x0, desc: 'Identify Success' },
+            { event_code: 0x1400, sub_code: 0x0, desc: 'Identify Fail' },
+            { event_code: 0x1500, sub_code: 0x0, desc: 'Identify Success (Duress)' },
             { event_code: 0x1600, sub_code: 0x0, desc: 'Dual Auth Success' },
-            { event_code: 0x1700, sub_code: 0x0, desc: 'Auth by Operator' },
-            
-            // Door Events (0x2000 - 0x2FFF)
-            { event_code: 0x2000, sub_code: 0x0, desc: 'Door Opened' },
-            { event_code: 0x2001, sub_code: 0x0, desc: 'Door Closed' },
-            { event_code: 0x2002, sub_code: 0x0, desc: 'Door Locked' },
-            { event_code: 0x2003, sub_code: 0x0, desc: 'Door Unlocked' },
-            { event_code: 0x2004, sub_code: 0x0, desc: 'Door Forced Open' },
-            { event_code: 0x2005, sub_code: 0x0, desc: 'Door Held Open' },
-            { event_code: 0x2006, sub_code: 0x0, desc: 'Door Open Alarm' },
-            { event_code: 0x2007, sub_code: 0x0, desc: 'Door Open Warning' },
-            { event_code: 0x2008, sub_code: 0x0, desc: 'Door Released' },
-            { event_code: 0x2100, sub_code: 0x0, desc: 'Exit Button Pressed' },
-            { event_code: 0x2200, sub_code: 0x0, desc: 'Emergency Lock' },
-            { event_code: 0x2201, sub_code: 0x0, desc: 'Emergency Unlock' },
-            
-            // Zone Events (0x3000 - 0x3FFF)
-            { event_code: 0x3000, sub_code: 0x0, desc: 'Zone APB Violation' },
-            { event_code: 0x3100, sub_code: 0x0, desc: 'Zone APB Alarm' },
-            { event_code: 0x3200, sub_code: 0x0, desc: 'Zone Timed APB' },
-            { event_code: 0x3300, sub_code: 0x0, desc: 'Zone Fire Alarm' },
-            { event_code: 0x3400, sub_code: 0x0, desc: 'Zone Scheduled Lock' },
-            { event_code: 0x3500, sub_code: 0x0, desc: 'Zone Scheduled Unlock' },
-            { event_code: 0x3600, sub_code: 0x0, desc: 'Zone Emergency Lock' },
-            { event_code: 0x3700, sub_code: 0x0, desc: 'Zone Emergency Unlock' },
-            { event_code: 0x3800, sub_code: 0x0, desc: 'Zone Intrusion Alarm Start' },
-            { event_code: 0x3900, sub_code: 0x0, desc: 'Zone Intrusion Alarm Stop' },
-            { event_code: 0x3A00, sub_code: 0x0, desc: 'Zone Interlock Alarm Start' },
-            { event_code: 0x3B00, sub_code: 0x0, desc: 'Zone Interlock Alarm Stop' },
-            { event_code: 0x3C00, sub_code: 0x0, desc: 'Zone Lift Lock' },
-            { event_code: 0x3D00, sub_code: 0x0, desc: 'Zone Lift Unlock' },
-            
-            // Device/System Events (0x4000 - 0x4FFF)
-            { event_code: 0x4000, sub_code: 0x0, desc: 'Device Started' },
-            { event_code: 0x4001, sub_code: 0x0, desc: 'Device Stopped' },
-            { event_code: 0x4100, sub_code: 0x0, desc: 'Device Reset' },
-            { event_code: 0x4101, sub_code: 0x0, desc: 'Device Config Changed' },
-            { event_code: 0x4102, sub_code: 0x0, desc: 'Device Factory Reset' },
-            { event_code: 0x4103, sub_code: 0x0, desc: 'Device Time Synced' },
-            { event_code: 0x4200, sub_code: 0x0, desc: 'RS485 Connect' },
-            { event_code: 0x4201, sub_code: 0x0, desc: 'RS485 Disconnect' },
-            { event_code: 0x4300, sub_code: 0x0, desc: 'Tamper On' },
-            { event_code: 0x4301, sub_code: 0x0, desc: 'Tamper Off' },
-            { event_code: 0x4400, sub_code: 0x0, desc: 'Input Detected' },
-            { event_code: 0x4500, sub_code: 0x0, desc: 'Output Changed' },
-            { event_code: 0x4600, sub_code: 0x0, desc: 'Firmware Update Started' },
-            { event_code: 0x4601, sub_code: 0x0, desc: 'Firmware Update Success' },
-            { event_code: 0x4602, sub_code: 0x0, desc: 'Firmware Update Failed' },
-            { event_code: 0x4700, sub_code: 0x0, desc: 'Network Connected' },
-            { event_code: 0x4701, sub_code: 0x0, desc: 'Network Disconnected' },
-            { event_code: 0x4800, sub_code: 0x0, desc: 'License Changed' },
-            
-            // User Events (0x5000 - 0x5FFF)
-            { event_code: 0x5000, sub_code: 0x0, desc: 'User Enrolled' },
-            { event_code: 0x5001, sub_code: 0x0, desc: 'User Deleted' },
-            { event_code: 0x5002, sub_code: 0x0, desc: 'User Updated' },
-            { event_code: 0x5100, sub_code: 0x0, desc: 'User Access On' },
-            { event_code: 0x5101, sub_code: 0x0, desc: 'User Access Off' },
-            { event_code: 0x5200, sub_code: 0x0, desc: 'Credential Added' },
-            { event_code: 0x5201, sub_code: 0x0, desc: 'Credential Deleted' },
-            { event_code: 0x5300, sub_code: 0x0, desc: 'User Blacklisted' },
-            { event_code: 0x5301, sub_code: 0x0, desc: 'User Unblacklisted' },
-            
-            // T&A Events (0x6000 - 0x6FFF)
-            { event_code: 0x6000, sub_code: 0x0, desc: 'Time Attendance - Check In' },
-            { event_code: 0x6001, sub_code: 0x0, desc: 'Time Attendance - Check Out' },
-            { event_code: 0x6002, sub_code: 0x0, desc: 'Time Attendance - Break Start' },
-            { event_code: 0x6003, sub_code: 0x0, desc: 'Time Attendance - Break End' },
-            { event_code: 0x6100, sub_code: 0x0, desc: 'TNA Key 1' },
-            { event_code: 0x6101, sub_code: 0x0, desc: 'TNA Key 2' },
-            { event_code: 0x6102, sub_code: 0x0, desc: 'TNA Key 3' },
-            { event_code: 0x6103, sub_code: 0x0, desc: 'TNA Key 4' },
-            { event_code: 0x6104, sub_code: 0x0, desc: 'TNA Key 5' },
-            { event_code: 0x6105, sub_code: 0x0, desc: 'TNA Key 6' },
-            { event_code: 0x6106, sub_code: 0x0, desc: 'TNA Key 7' },
-            { event_code: 0x6107, sub_code: 0x0, desc: 'TNA Key 8' },
-            { event_code: 0x6108, sub_code: 0x0, desc: 'TNA Key 9' },
-            { event_code: 0x6109, sub_code: 0x0, desc: 'TNA Key 10' },
-            { event_code: 0x610A, sub_code: 0x0, desc: 'TNA Key 11' },
-            { event_code: 0x610B, sub_code: 0x0, desc: 'TNA Key 12' },
-            { event_code: 0x610C, sub_code: 0x0, desc: 'TNA Key 13' },
-            { event_code: 0x610D, sub_code: 0x0, desc: 'TNA Key 14' },
-            { event_code: 0x610E, sub_code: 0x0, desc: 'TNA Key 15' },
-            { event_code: 0x610F, sub_code: 0x0, desc: 'TNA Key 16' }
+            { event_code: 0x1700, sub_code: 0x0, desc: 'Dual Auth Fail' },
+            { event_code: 0x1800, sub_code: 0x0, desc: 'Auth Failed (Unregistered)' },
+            { event_code: 0x1900, sub_code: 0x0, desc: 'Access Denied' },
+
+            { event_code: 0x2000, sub_code: 0x0, desc: 'User Enrollment Success' },
+            { event_code: 0x2100, sub_code: 0x0, desc: 'User Enrollment Fail' },
+            { event_code: 0x2200, sub_code: 0x0, desc: 'User Update Success' },
+            { event_code: 0x2300, sub_code: 0x0, desc: 'User Update Fail' },
+            { event_code: 0x2400, sub_code: 0x0, desc: 'User Delete Success' },
+            { event_code: 0x2500, sub_code: 0x0, desc: 'User Delete Fail' },
+            { event_code: 0x2600, sub_code: 0x0, desc: 'Delete All User Success' },
+            { event_code: 0x2800, sub_code: 0x0, desc: 'Duplicate Credential' },
+
+            { event_code: 0x3000, sub_code: 0x0, desc: 'System Reset' },
+            { event_code: 0x3100, sub_code: 0x0, desc: 'System Started' },
+            { event_code: 0x3200, sub_code: 0x0, desc: 'System Time Set' },
+            { event_code: 0x3201, sub_code: 0x0, desc: 'Timezone Changed' },
+            { event_code: 0x3202, sub_code: 0x0, desc: 'DST Changed' },
+            { event_code: 0x3300, sub_code: 0x0, desc: 'LAN Connected' },
+            { event_code: 0x3400, sub_code: 0x0, desc: 'LAN Disconnected' },
+            { event_code: 0x3B00, sub_code: 0x0, desc: 'TCP Connected' },
+            { event_code: 0x3C00, sub_code: 0x0, desc: 'TCP Disconnected' },
+            { event_code: 0x3F00, sub_code: 0x0, desc: 'Input Detected' },
+            { event_code: 0x4000, sub_code: 0x0, desc: 'Tamper On' },
+            { event_code: 0x4100, sub_code: 0x0, desc: 'Tamper Off' },
+            { event_code: 0x4200, sub_code: 0x0, desc: 'Event Log Cleared' },
+            { event_code: 0x4300, sub_code: 0x0, desc: 'Firmware Upgraded' },
+
+            { event_code: 0x5000, sub_code: 0x0, desc: 'Door Unlocked' },
+            { event_code: 0x5100, sub_code: 0x0, desc: 'Door Locked' },
+            { event_code: 0x5200, sub_code: 0x0, desc: 'Door Opened' },
+            { event_code: 0x5300, sub_code: 0x0, desc: 'Door Closed' },
+            { event_code: 0x5400, sub_code: 0x0, desc: 'Door Forced Open' },
+            { event_code: 0x5500, sub_code: 0x0, desc: 'Door Held Open' },
+            { event_code: 0x5600, sub_code: 0x0, desc: 'Forced Open Alarm' },
+            { event_code: 0x5700, sub_code: 0x0, desc: 'Forced Open Alarm Cleared' },
+            { event_code: 0x5800, sub_code: 0x0, desc: 'Held Open Alarm' },
+            { event_code: 0x5900, sub_code: 0x0, desc: 'Held Open Alarm Cleared' },
+            { event_code: 0x5C00, sub_code: 0x0, desc: 'Door Release' },
+            { event_code: 0x5D00, sub_code: 0x0, desc: 'Lock Door' },
+            { event_code: 0x5E00, sub_code: 0x0, desc: 'Unlock Door' },
+
+            { event_code: 0x6000, sub_code: 0x0, desc: 'APB Zone Violated' },
+            { event_code: 0x6100, sub_code: 0x0, desc: 'APB Zone Alarm' },
+            { event_code: 0x6200, sub_code: 0x0, desc: 'APB Zone Alarm Cleared' },
+            { event_code: 0x6300, sub_code: 0x0, desc: 'Timed APB Zone Violated' },
+            { event_code: 0x6600, sub_code: 0x0, desc: 'Fire Alarm Input' },
+            { event_code: 0x6700, sub_code: 0x0, desc: 'Fire Alarm' },
+            { event_code: 0x6800, sub_code: 0x0, desc: 'Fire Alarm Cleared' },
+
+            { event_code: 0x7000, sub_code: 0x0, desc: 'Floor Activated' },
+            { event_code: 0x7100, sub_code: 0x0, desc: 'Floor Deactivated' },
+            { event_code: 0x7200, sub_code: 0x0, desc: 'Floor Released' }
         ];
 
+        this.eventCodeMap.clear();
         defaultEvents.forEach(event => {
             const key = `${event.event_code}_${event.sub_code}`;
             this.eventCodeMap.set(key, event.desc);
@@ -221,18 +187,38 @@ class SupremaEventService extends EventEmitter {
         if (eventCode >= 0x1000 && eventCode < 0x2000) {
             return `Authentication Event (0x${hexCode})`;
         } else if (eventCode >= 0x2000 && eventCode < 0x3000) {
-            return `Door Event (0x${hexCode})`;
-        } else if (eventCode >= 0x3000 && eventCode < 0x4000) {
-            return `Zone Event (0x${hexCode})`;
-        } else if (eventCode >= 0x4000 && eventCode < 0x5000) {
+            return `User Event (0x${hexCode})`;
+        } else if (eventCode >= 0x3000 && eventCode < 0x5000) {
             return `System Event (0x${hexCode})`;
         } else if (eventCode >= 0x5000 && eventCode < 0x6000) {
-            return `User Event (0x${hexCode})`;
+            return `Door Event (0x${hexCode})`;
         } else if (eventCode >= 0x6000 && eventCode < 0x7000) {
-            return `T&A Event (0x${hexCode})`;
+            return `Zone Event (0x${hexCode})`;
+        } else if (eventCode >= 0x7000 && eventCode < 0x8000) {
+            return `Lift Event (0x${hexCode})`;
+        } else if (eventCode >= 0x9000 && eventCode < 0xA000) {
+            return `Intrusion Event (0x${hexCode})`;
         }
         
         return `Event (0x${hexCode})`;
+    }
+
+    isAuthenticationEvent(eventCode) {
+        const code = Number(eventCode ?? 0);
+        return code >= 0x1000 && code < 0x2000;
+    }
+
+    isTnaEvent(event) {
+        const code = Number(event?.eventcode ?? event?.eventCode ?? 0);
+        const tnaKey = Number(
+            event?.tnakey
+            ?? event?.tnaKey
+            ?? event?.rawData?.tnakey
+            ?? event?.rawData?.tnaKey
+            ?? 0
+        );
+
+        return this.isAuthenticationEvent(code) && tnaKey > 0;
     }
 
     // ================ REAL-TIME MONITORING ================
@@ -740,7 +726,14 @@ class SupremaEventService extends EventEmitter {
      */
     enhanceEvent(event) {
         const enhanced = { ...event };
-        
+
+        // Normalize TNA key (proto: tna.Key TNAKey = 8 on EventLog). After
+        // .toObject() the field is `tnakey` and is an integer in [0, 16] where
+        // 0 means "no T&A key selected". Per Suprema, the key only denotes a
+        // T&A record on authentication events; fixed-TNA mode may still stamp a
+        // key on non-auth records such as user-enrollment logs.
+        enhanced.tnakey = Number.isInteger(event.tnakey) ? event.tnakey : 0;
+
         // Add event description
         enhanced.description = this.getEventDescription(event.eventcode, event.subcode);
         
@@ -766,8 +759,13 @@ class SupremaEventService extends EventEmitter {
             enhanced.timestamp = null;
         }
         
-        // Add event type classification
-        enhanced.eventType = this.classifyEventType(event.eventcode);
+        // Add event type classification — if a TNA key was selected, the event
+        // is a T&A event ONLY when the underlying authentication code is in the
+        // 0x1xxx range (per Suprema EventLog spec, TNAKey rides along on the
+        // realtime stream for any auth event).
+        enhanced.eventType = this.isTnaEvent(event)
+            ? 'attendance'
+            : this.classifyEventType(event.eventcode);
         
         // Add severity level
         enhanced.severity = this.getEventSeverity(event.eventcode, event.subcode);
@@ -782,11 +780,12 @@ class SupremaEventService extends EventEmitter {
      */
     classifyEventType(eventCode) {
         if (eventCode >= 0x1000 && eventCode < 0x2000) return 'authentication';
-        if (eventCode >= 0x2000 && eventCode < 0x3000) return 'door';
-        if (eventCode >= 0x3000 && eventCode < 0x4000) return 'zone';
-        if (eventCode >= 0x4000 && eventCode < 0x5000) return 'system';
-        if (eventCode >= 0x5000 && eventCode < 0x6000) return 'user';
-        if (eventCode >= 0x6000 && eventCode < 0x7000) return 'attendance';
+        if (eventCode >= 0x2000 && eventCode < 0x3000) return 'user';
+        if (eventCode >= 0x3000 && eventCode < 0x5000) return 'system';
+        if (eventCode >= 0x5000 && eventCode < 0x6000) return 'door';
+        if (eventCode >= 0x6000 && eventCode < 0x7000) return 'zone';
+        if (eventCode >= 0x7000 && eventCode < 0x8000) return 'lift';
+        if (eventCode >= 0x9000 && eventCode < 0xA000) return 'zone';
         return 'other';
     }
 
@@ -841,9 +840,14 @@ class SupremaEventService extends EventEmitter {
         if (event.eventcode === 0x2002) this.emit('door:locked', event);
         if (event.eventcode === 0x2003) this.emit('door:unlocked', event);
         
-        // Emit attendance events (explicit T&A + all TNA keys 0x6100-0x610F)
-        if (event.eventType === 'attendance') {
+        // Emit attendance/T&A events. Two triggers per Suprema spec:
+        //   1. event.tnakey > 0     — any auth event with a T&A key selected
+        //   2. eventcode 0x6000-0x6FFF — explicit attendance event codes
+        const isTnaKeyEvent = event.tnakey > 0;
+        const isAttendanceCode = event.eventcode >= 0x6000 && event.eventcode < 0x7000;
+        if (event.eventType === 'attendance' || isTnaKeyEvent || isAttendanceCode) {
             this.emit('attendance:event', event);
+            if (isTnaKeyEvent) this.emit(`attendance:key:${event.tnakey}`, event);
             if (event.eventcode === 0x6000) this.emit('attendance:checkin', event);
             if (event.eventcode === 0x6001) this.emit('attendance:checkout', event);
             if (event.eventcode === 0x6002) this.emit('attendance:break_start', event);

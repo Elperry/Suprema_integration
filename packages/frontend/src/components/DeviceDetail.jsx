@@ -119,7 +119,7 @@ export default function DeviceDetail() {
           setSuccess('Users synced to device')
           break
         case 'syncEvents':
-          await eventAPI.sync(deviceId, null, 1000)
+          await eventAPI.sync(deviceId)
           setSuccess('Events synced from device')
           break
         case 'repair':

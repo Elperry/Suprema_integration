@@ -150,33 +150,8 @@ export class IDeviceService extends IService {
     }
 }
 
-/**
- * Sync Service Interface
- * For services that handle data synchronization
- * @extends IService
- */
-export class ISyncService extends IService {
-    /**
-     * Sync from source to target
-     * @param {Object} options - Sync options
-     * @returns {Promise<ServiceResult>}
-     */
-    async sync(options) {
-        throw new Error('Method sync() must be implemented');
-    }
-
-    /**
-     * Get sync status
-     * @returns {Promise<Object>}
-     */
-    async getSyncStatus() {
-        throw new Error('Method getSyncStatus() must be implemented');
-    }
-}
-
 export default {
     IService,
     ICrudService,
-    IDeviceService,
-    ISyncService
+    IDeviceService
 };

@@ -16,9 +16,9 @@ It solves two operational problems:
 ### What the service does well
 
 1. It is fire-and-forget. Startup is not blocked by device connectivity.
-2. It is replay-safe. The fetch cursor is derived from the latest persisted event in the `events` table.
+2. It is replay-safe. The historical fetch cursor is stored on `device.last_replicated_event_id`, separate from realtime persistence.
 3. It is duplicate-safe. Persistence relies on the unique database constraint on `(deviceId, supremaEventId)` and `createMany(..., skipDuplicates: true)`.
-4. It is reconnect-aware. It listens to `connectionService` and immediately runs a catch-up sync on `device:connected`.
+4. It is reconnect-aware. It listens to `connectionService`, drains backlog on `device:connected`, and only then enables realtime monitoring for that device.
 5. It is overlap-safe. A per-device lock prevents concurrent syncs for the same database device.
 6. It is near-real-time capable. Live events emitted by `eventService` are persisted through the same replication pipeline.
 
@@ -26,20 +26,21 @@ It solves two operational problems:
 
 The Suprema gRPC API used here fetches logs by `startEventId`, not by timestamp.
 
-That means the implementation cannot truly ask the device for “all events after date X”. Instead, it uses the strongest available cursor:
+That means the implementation cannot truly ask the device for “all events after date X”. Instead, it uses a dedicated event-ID cursor on the device row:
 
-1. Read the latest persisted event ID for the device from the `events` table.
+1. Read `device.last_replicated_event_id` (or `0` on first sync).
 2. Request all device events after that ID.
+3. Advance the cursor to the highest observed event ID in the batch, even if some events are filtered out before persistence.
 
 This is stronger than using `device.last_event_sync` because event IDs are the actual replay cursor exposed by the device log API.
+
+### Meaning of `device.last_replicated_event_id`
+
+In this design, `device.last_replicated_event_id` is the replay cursor for historical pulls and reconnect catch-up.
 
 ### Meaning of `device.last_event_sync`
 
 In this design, `device.last_event_sync` is not the fetch cursor. It is the timestamp of the last successful replication run for observability and health reporting.
-
-The real cursor is:
-
-`MAX(events.supremaEventId) per device`
 
 ## Placement in the Backend
 
@@ -49,8 +50,8 @@ It depends on five collaborators:
 
 1. `connectionService` for device connection events and connected-device lookup
 2. `eventService` for gRPC event retrieval from the gateway/device
-3. `eventRepository` for persistence and cursor lookup
-4. `database` for device records and `last_event_sync` updates
+3. `eventRepository` for deduplicated event persistence
+4. `database` for device records plus `last_replicated_event_id` / `last_event_sync` updates
 5. `logger` for operational logging
 
 It also subscribes to `eventService`'s `event:received` stream and exposes health data through `/api/events/replication/health`.
@@ -121,9 +122,10 @@ sequenceDiagram
     Main->>Rep: start()
     Rep->>Rep: attach device:connected listener
     Rep->>Rep: attach event:received listener
-    Rep->>Rep: create interval(EVENT_SYNC_INTERVAL_MS)
-    Rep->>Rep: optionally start realtime subscription
     Rep->>Rep: trigger initial _syncAllDevices()
+    Rep->>Rep: after catch-up, optionally start realtime subscription
+    Rep->>Rep: after catch-up, optionally enable monitoring for current connections
+    Rep->>Rep: create interval(EVENT_SYNC_INTERVAL_MS)
 ```
 
 ## Periodic Replication Flow
@@ -134,18 +136,17 @@ flowchart TD
     B --> C{Device connected now?}
     C -- No --> D[Skip device]
     C -- Yes --> E[Resolve Suprema device ID from connectedDevices map]
-    E --> F[Read latest stored event from EventRepository]
-    F --> G[Compute startEventId = latest supremaEventId + 1]
+    E --> F[Read device.last_replicated_event_id]
+    F --> G[Compute startEventId = last_replicated_event_id + 1]
     G --> H[gRPC getEventLogs(supremaId, startEventId, batchSize)]
     H --> I{Returned events?}
     I -- No --> J[Stop for this device]
-    I -- Yes --> K[Map device events to Event rows]
+    I -- Yes --> K[Filter to authentication/attendance rows and compute highest observed event ID]
     K --> L[bulkCreate rows with skipDuplicates]
-    L --> M[Advance cursor to max event ID + 1]
+    L --> M[Update device.last_replicated_event_id and device.last_event_sync]
     M --> N{Batch full?}
     N -- Yes --> H
-    N -- No --> O[Update device.last_event_sync = now]
-    O --> P[Done]
+    N -- No --> O[Done]
 ```
 
 ## Reconnect Catch-Up Sequence
@@ -157,21 +158,20 @@ sequenceDiagram
     participant Conn as SupremaConnectionService
     participant Rep as EventReplicationService
     participant DB as DatabaseManager
-    participant Repo as EventRepository
     participant ES as SupremaEventService
     participant GW as Suprema Gateway / Device
 
     Conn-->>Rep: device:connected {supremaId, config.ip, config.port}
     Rep->>DB: getAllDevices()
     Rep->>Rep: match DB device by ip + port
-    Rep->>Repo: findLatestByDevice(dbDeviceId)
-    Repo-->>Rep: latest supremaEventId
-    Rep->>ES: getEventLogs(supremaId, latestEventId + 1, batchSize)
+    Rep->>DB: read device.last_replicated_event_id
+    Rep->>ES: getEventLogs(supremaId, last_replicated_event_id + 1, batchSize)
     ES->>GW: gRPC getLog()
     GW-->>ES: events batch
     ES-->>Rep: enhanced events
-    Rep->>Repo: bulkCreate(mapped events)
-    Rep->>DB: updateDevice(last_event_sync = now)
+    Rep->>Rep: loop until batch shorter than batchSize
+    Rep->>DB: updateDevice(last_replicated_event_id, last_event_sync)
+    Rep->>ES: enableMonitoring(supremaId)
 ```
 
 ## Realtime Persistence Sequence
@@ -206,6 +206,7 @@ erDiagram
         int id
         string ip
         int port
+        bigint last_replicated_event_id
         datetime last_event_sync
         string status
     }
@@ -231,7 +232,7 @@ erDiagram
 The implemented replay cursor is event-ID-based:
 
 ```text
-startEventId = MAX(events.supremaEventId for device) + 1
+startEventId = (device.last_replicated_event_id ?? 0) + 1
 ```
 
 ### Why this is correct for the current API
@@ -281,7 +282,7 @@ This keeps the service non-fatal but means replication health must be observed t
 | Decision | Reason |
 |---|---|
 | Start in post-startup, not bootstrap | API availability must not depend on device reachability |
-| Use latest persisted `supremaEventId` as cursor | Matches the capabilities of `getEventLogs()` |
+| Use `device.last_replicated_event_id` as cursor | Keeps historical catch-up independent from realtime inserts while matching `getEventLogs()` |
 | Update `last_event_sync` with wall-clock time | Good operational visibility; avoids type mismatch with event IDs |
 | Use repository bulk insert | Centralizes dedup and persistence behavior |
 | Listen to `device:connected` | Minimizes recovery latency after outage |

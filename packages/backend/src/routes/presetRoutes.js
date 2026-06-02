@@ -1,6 +1,6 @@
 /**
  * Filter Preset Routes
- * CRUD for saved filter presets (events, gate-events, audit, attendance, reconciliation).
+ * CRUD for saved filter presets (events, audit, attendance, reconciliation).
  */
 
 import express from 'express';

@@ -35,32 +35,13 @@ CREATE TABLE `device` (
     `direction` VARCHAR(10) NOT NULL DEFAULT 'in',
     `deviceType` VARCHAR(50) NULL,
     `serialNumber` VARCHAR(100) NULL,
+    `last_replicated_event_id` INTEGER UNSIGNED NOT NULL DEFAULT 0,
 
     INDEX `device_locationId_idx`(`locationId`),
     INDEX `device_direction_idx`(`direction`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- CreateTable
-CREATE TABLE `gateevents` (
-    `id` INTEGER UNSIGNED NOT NULL AUTO_INCREMENT,
-    `employee_id` CHAR(20) NULL,
-    `door_no` INTEGER UNSIGNED NULL,
-    `gate_id` INTEGER UNSIGNED NULL,
-    `loc` CHAR(15) NULL,
-    `dir` CHAR(5) NULL,
-    `etime` DATETIME(3) NULL,
-    `etime_truncated` VARCHAR(16) NULL,
-    `d` DATE NULL,
-    `t` TIME(0) NULL,
-
-    INDEX `etime`(`etime`),
-    INDEX `gate_id`(`gate_id`),
-    INDEX `index_foreignkey_gateevents_employee`(`employee_id`),
-    PRIMARY KEY (`id`)
-) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
--- CreateTable
 CREATE TABLE `user` (
     `id` INTEGER NOT NULL AUTO_INCREMENT,
     `username` VARCHAR(300) NOT NULL,

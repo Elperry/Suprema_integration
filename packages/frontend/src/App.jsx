@@ -15,7 +15,6 @@ import Debugger from './components/Debugger'
 import Enrollment from './components/Enrollment'
 import TNA from './components/TNA'
 import Employees from './components/Employees'
-import GateEvents from './components/GateEvents'
 import Doors from './components/Doors'
 import CardAssignments from './components/CardAssignments'
 import SyncCenter from './components/SyncCenter'
@@ -121,7 +120,6 @@ function AppContent() {
               <Route path="/audit-log" element={<AuditLog />} />
               <Route path="/reports" element={<Reports />} />
               <Route path="/bulk-import" element={<BulkImport />} />
-              <Route path="/gate-events" element={<GateEvents />} />
               <Route path="/card-assignments" element={<CardAssignments />} />
               <Route path="/employees" element={<Employees />} />
               <Route path="/employee/:id" element={<EmployeeDetail />} />

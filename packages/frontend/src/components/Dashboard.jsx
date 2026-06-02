@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useCallback } from 'react';
-import { deviceAPI, gateEventAPI, employeeAPI } from '../services/api';
+import { deviceAPI, employeeAPI, eventAPI } from '../services/api';
 import { SkeletonCards, SkeletonTable } from './Skeleton';
 import { deriveHealthSummary } from '../utils/healthStatus';
 import './Dashboard.css';
@@ -18,15 +18,20 @@ export default function Dashboard({ health }) {
 
   const loadData = useCallback(async () => {
     try {
-      const [devicesRes, eventsRes, employeesRes] = await Promise.all([
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+
+      const [devicesRes, eventsRes, todayEventsRes, employeesRes] = await Promise.all([
         deviceAPI.getAll(),
-        gateEventAPI.getAll({ limit: 10 }),
+        eventAPI.getFromDB({ page: 1, pageSize: 10 }),
+        eventAPI.getFromDB({ page: 1, pageSize: 1, startDate: startOfDay.toISOString() }),
         employeeAPI.getAll({ limit: 1 })
       ]);
 
       const devices = devicesRes.data.data || [];
       const connectedDevices = devices.filter(d => d.status === 'connected');
       const disconnectedDevices = devices.filter(d => d.status !== 'connected');
+      const dbEvents = eventsRes.data.data || [];
 
       setDeviceStatus(devices);
       setStats({
@@ -36,8 +41,8 @@ export default function Dashboard({ health }) {
           disconnected: disconnectedDevices.length
         },
         events: {
-          total: eventsRes.data.total || 0,
-          today: eventsRes.data.todayCount || eventsRes.data.data?.length || 0,
+          total: eventsRes.data.pagination?.totalEvents || 0,
+          today: todayEventsRes.data.pagination?.totalEvents || 0,
           thisWeek: eventsRes.data.weekCount || 0
         },
         employees: {
@@ -45,7 +50,7 @@ export default function Dashboard({ health }) {
           withCards: employeesRes.data.withCards || 0
         }
       });
-      setRecentEvents(eventsRes.data.data || []);
+      setRecentEvents(dbEvents);
       setLastUpdate(new Date());
     } catch (e) {
       console.error('Dashboard load error:', e);
@@ -91,11 +96,14 @@ export default function Dashboard({ health }) {
     });
   };
 
-  const getDirectionIcon = (dir) => {
-    if (dir === 'in' || dir === 'IN') return '➡️';
-    if (dir === 'out' || dir === 'OUT') return '⬅️';
-    return '↔️';
+  const getResultTone = (authResult) => {
+    const value = String(authResult || '').toLowerCase();
+    return value === 'success' || value === 'granted' ? 'in' : 'out';
   };
+
+  const getDeviceLabel = (event) => event.deviceName || event.deviceLocation || (event.deviceId ? `Device ${event.deviceId}` : 'Unknown');
+
+  const getEmployeeLabel = (event) => event.userName || event.userId || 'Unknown';
 
   const healthInfo = deriveHealthSummary(health);
 
@@ -111,7 +119,7 @@ export default function Dashboard({ health }) {
           <div className="dashboard-table-wrapper">
             <table className="table dashboard-table" style={{ width: '100%' }}>
               <thead>
-                <tr><th>Time</th><th>Employee</th><th>Device</th><th>Direction</th></tr>
+                <tr><th>Time</th><th>Employee</th><th>Device</th><th>Result</th></tr>
               </thead>
               <tbody>
                 <SkeletonTable rows={5} cols={4} />
@@ -328,8 +336,8 @@ export default function Dashboard({ health }) {
               <thead>
                 <tr>
                   <th>Employee</th>
-                  <th>Location</th>
-                  <th>Direction</th>
+                  <th>Device</th>
+                  <th>Result</th>
                   <th>Date</th>
                   <th>Time</th>
                 </tr>
@@ -338,16 +346,16 @@ export default function Dashboard({ health }) {
                 {recentEvents.map((event, index) => (
                   <tr key={event.id || index}>
                     <td data-label="Employee">
-                      <span className="employee-id">{event.employee_id || 'Unknown'}</span>
+                      <span className="employee-id">{getEmployeeLabel(event)}</span>
                     </td>
-                    <td data-label="Location">{event.loc || `Door ${event.door_no}` || 'N/A'}</td>
-                    <td data-label="Direction">
-                      <span className={`direction-badge ${event.dir?.toLowerCase()}`}>
-                        {getDirectionIcon(event.dir)} {event.dir || 'N/A'}
+                    <td data-label="Device">{getDeviceLabel(event)}</td>
+                    <td data-label="Result">
+                      <span className={`direction-badge ${getResultTone(event.authResult)}`}>
+                        {event.authResult || 'N/A'}
                       </span>
                     </td>
-                    <td data-label="Date">{formatDate(event.etime)}</td>
-                    <td data-label="Time">{formatTime(event.etime)}</td>
+                    <td data-label="Date">{formatDate(event.timestamp)}</td>
+                    <td data-label="Time">{formatTime(event.timestamp)}</td>
                   </tr>
                 ))}
               </tbody>

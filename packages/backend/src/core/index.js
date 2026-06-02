@@ -69,7 +69,6 @@ export {
     IService,
     ICrudService,
     IDeviceService,
-    ISyncService,
     IRepository,
     IController,
     ICrudController

@@ -15,13 +15,45 @@ import moment from 'moment';
 const tnaService = require('../../biostar/service/tna_grpc_pb');
 const tnaMessage = require('../../biostar/service/tna_pb');
 
+// ---------------------------------------------------------------------------
+// Suprema TNA constants — keep in sync with proto/tna.proto:
+//   enum Mode  { UNUSED=0, BY_USER=1, BY_SCHEDULE=2, LAST_CHOICE=3, FIXED=4 }
+//   enum Key   { UNSPECIFIED=0, KEY_1..KEY_16 }
+// TNALog wire shape (after `.toObject()` lowercases):
+//   { id, timestamp, deviceid, userid, eventcode, subcode, tnakey }
+// Where `timestamp` is Unix seconds (UTC).
+// EventLog from the realtime stream also carries `tnakey` (field 8 in proto),
+// so any authentication event with tnakey > 0 is a T&A event.
+// ---------------------------------------------------------------------------
+
+const MAX_TNA_KEYS = 16;
+
+/**
+ * Convert a TNALog/EventLog raw event timestamp into milliseconds.
+ * The proto field is `timestamp` (uint32 Unix seconds). Earlier code looked at
+ * `event.datetime` which does not exist on the wire and produced 1970 dates
+ * for every enhanced event.
+ *
+ * @param {object} event
+ * @returns {number} milliseconds since epoch, or 0 when unknown
+ */
+function tnaEventTimeMs(event) {
+    if (!event) return 0;
+    const raw = event.timestamp ?? event.datetime;
+    if (typeof raw !== 'number' || raw <= 0) return 0;
+    // Some intermediaries already convert to ms; detect by magnitude.
+    return raw > 1e12 ? raw : raw * 1000;
+}
+
 class SupremaTNAService extends EventEmitter {
     constructor(connectionService, eventService) {
         super();
         this.connectionService = connectionService;
         this.eventService = eventService;
         this.tnaClient = null;
-        
+        // deviceId (string) -> { labels: string[], mode, key, isRequired, fetchedAt }
+        this.tnaConfigCache = new Map();
+
         this.logger = winston.createLogger({
             level: 'info',
             format: winston.format.combine(
@@ -91,6 +123,14 @@ class SupremaTNAService extends EventEmitter {
                         // Try to get config with toObject()
                         const config = response.toObject().config;
                         this.logger.info(`Retrieved T&A config from device ${deviceId}`);
+                        // Cache labels so we can resolve TNA key names on events.
+                        this.tnaConfigCache.set(String(deviceId), {
+                            mode: config?.mode ?? 0,
+                            key: config?.key ?? 0,
+                            isRequired: config?.isrequired ?? false,
+                            labels: Array.isArray(config?.labelsList) ? config.labelsList.slice(0, MAX_TNA_KEYS) : [],
+                            fetchedAt: Date.now(),
+                        });
                         resolve(config);
                     } catch (parseError) {
                         // If parsing fails, manually extract what we can
@@ -316,21 +356,26 @@ class SupremaTNAService extends EventEmitter {
                     filters.tnaKeys.includes(event.tnakey));
             }
 
-            // Filter by date range
+            // Filter by date range (uses normalized timestamp from enhanceTNAEvent)
             if (filters.startDate || filters.endDate) {
+                const startMs = filters.startDate ? new Date(filters.startDate).getTime() : null;
+                const endMs   = filters.endDate   ? new Date(filters.endDate).getTime()   : null;
                 filteredEvents = filteredEvents.filter(event => {
-                    const eventDate = new Date(event.datetime * 1000);
-                    if (filters.startDate && eventDate < new Date(filters.startDate)) return false;
-                    if (filters.endDate && eventDate > new Date(filters.endDate)) return false;
+                    const t = tnaEventTimeMs(event);
+                    if (!t) return false;
+                    if (startMs != null && t < startMs) return false;
+                    if (endMs   != null && t > endMs)   return false;
                     return true;
                 });
             }
 
-            // Filter by work shifts
+            // Filter by work shifts (uses event-local hour from normalized timestamp)
             if (filters.shifts && filters.shifts.length > 0) {
                 filteredEvents = filteredEvents.filter(event => {
-                    const eventHour = new Date(event.datetime * 1000).getHours();
-                    return filters.shifts.some(shift => 
+                    const t = tnaEventTimeMs(event);
+                    if (!t) return false;
+                    const eventHour = new Date(t).getHours();
+                    return filters.shifts.some(shift =>
                         eventHour >= shift.startHour && eventHour <= shift.endHour);
                 });
             }
@@ -370,18 +415,33 @@ class SupremaTNAService extends EventEmitter {
      */
     enhanceTNAEvent(event, deviceId) {
         const enhanced = { ...event };
-        
-        // Add readable timestamp (UTC from device)
-        enhanced.timestamp = new Date(event.datetime * 1000).toISOString();
-        enhanced.dateString = moment(event.datetime * 1000).format('YYYY-MM-DD');
-        enhanced.timeString = moment(event.datetime * 1000).format('HH:mm:ss');
-        
-        // Add T&A key label
-        enhanced.tnaLabel = this.getTNAKeyLabel(event.tnakey);
-        
-        // Add event type classification
-        enhanced.eventType = this.classifyTNAEventType(event.tnakey);
-        
+
+        // Normalize identifier types (proto fields are lowercased after toObject)
+        enhanced.userid   = event.userid != null ? String(event.userid) : '';
+        enhanced.deviceid = event.deviceid ?? deviceId;
+        enhanced.tnakey   = typeof event.tnakey === 'number' ? event.tnakey : 0;
+
+        // Add readable timestamp (UTC from device). Proto field is `timestamp`
+        // (Unix seconds) — earlier code used `event.datetime` which does not
+        // exist on the wire, producing 1970-01-01 for every event.
+        const ms = tnaEventTimeMs(event);
+        if (ms > 0) {
+            enhanced.timestamp  = new Date(ms).toISOString();
+            enhanced.dateString = moment(ms).format('YYYY-MM-DD');
+            enhanced.timeString = moment(ms).format('HH:mm:ss');
+        } else {
+            enhanced.timestamp  = null;
+            enhanced.dateString = null;
+            enhanced.timeString = null;
+        }
+
+        // Add T&A key label (resolved from cached TNAConfig.labels when available)
+        enhanced.tnaLabel = this.getTNAKeyLabel(enhanced.tnakey, deviceId);
+
+        // Add event type classification (generic — Suprema does not assign
+        // semantics like "clock_in" to TNA keys; that's an application concern).
+        enhanced.eventType = this.classifyTNAEventType(enhanced.tnakey);
+
         // Add device ID
         enhanced.deviceId = deviceId;
 
@@ -389,39 +449,39 @@ class SupremaTNAService extends EventEmitter {
     }
 
     /**
-     * Get T&A key label
-     * @param {number} tnaKey - T&A key number
-     * @returns {string} T&A key label
+     * Resolve a T&A key (1..16) to its human-readable label.
+     *
+     * Per Suprema docs (TNAConfig.labels), the label of each key is
+     * device-configured: `labels[0]` is KEY_1, `labels[1]` is KEY_2, etc. If we
+     * have a cached TNAConfig for the device, use that. Otherwise fall back to
+     * a generic "Key N". Suprema does not assign meanings like "Clock In" to
+     * specific keys — that mapping is an application concern.
+     *
+     * @param {number} tnaKey 1..16
+     * @param {string|number} [deviceId]
+     * @returns {string}
      */
-    getTNAKeyLabel(tnaKey) {
-        const defaultLabels = {
-            1: 'Clock In',
-            2: 'Clock Out', 
-            3: 'Break Start',
-            4: 'Break End',
-            5: 'Overtime Start',
-            6: 'Overtime End'
-        };
-
-        return defaultLabels[tnaKey] || `Key ${tnaKey}`;
+    getTNAKeyLabel(tnaKey, deviceId = null) {
+        if (!tnaKey || tnaKey < 1 || tnaKey > MAX_TNA_KEYS) return 'None';
+        if (deviceId != null) {
+            const cached = this.tnaConfigCache.get(String(deviceId));
+            const label = cached?.labels?.[tnaKey - 1];
+            if (label) return label;
+        }
+        return `Key ${tnaKey}`;
     }
 
     /**
-     * Classify T&A event type
-     * @param {number} tnaKey - T&A key number
-     * @returns {string} Event type
+     * Classify a T&A event by its TNA key. Suprema only guarantees that the
+     * key is an integer in [1, 16]; the meaning is device-configured. Return
+     * a stable identifier callers can match without baking in semantics.
+     *
+     * @param {number} tnaKey 0..16 (0 = no key selected)
+     * @returns {string}
      */
     classifyTNAEventType(tnaKey) {
-        const eventTypes = {
-            1: 'clock_in',
-            2: 'clock_out',
-            3: 'break_start',
-            4: 'break_end',
-            5: 'overtime_start',
-            6: 'overtime_end'
-        };
-
-        return eventTypes[tnaKey] || 'other';
+        if (!tnaKey || tnaKey < 1 || tnaKey > MAX_TNA_KEYS) return 'tna_none';
+        return `tna_key_${tnaKey}`;
     }
 
     /**
@@ -533,8 +593,11 @@ class SupremaTNAService extends EventEmitter {
                     (stats.dailyStatistics[dateKey].eventsByType[event.eventType] || 0) + 1;
 
                 // Hourly distribution
-                const hour = new Date(event.datetime * 1000).getHours();
-                stats.hourlyDistribution[hour]++;
+                const ms = tnaEventTimeMs(event);
+                if (ms > 0) {
+                    const hour = new Date(ms).getHours();
+                    stats.hourlyDistribution[hour]++;
+                }
             });
 
             // Convert Sets to counts in daily statistics
@@ -586,8 +649,10 @@ class SupremaTNAService extends EventEmitter {
             // Calculate work hours for each user-date combination
             Object.keys(eventsByUserDate).forEach(key => {
                 const [userId, date] = key.split('_');
-                const dayEvents = eventsByUserDate[key].sort((a, b) => a.datetime - b.datetime);
-                
+                const dayEvents = eventsByUserDate[key].sort(
+                    (a, b) => tnaEventTimeMs(a) - tnaEventTimeMs(b),
+                );
+
                 const dayHours = this.calculateDayWorkHours(dayEvents);
                 
                 workHours[userId].dailyHours[date] = dayHours;
@@ -621,7 +686,9 @@ class SupremaTNAService extends EventEmitter {
         let breakStart = null;
 
         dayEvents.forEach(event => {
-            const eventTime = new Date(event.datetime * 1000);
+            const ms = tnaEventTimeMs(event);
+            if (!ms) return;
+            const eventTime = new Date(ms);
 
             switch (event.eventType) {
                 case 'clock_in':
@@ -853,7 +920,8 @@ class SupremaTNAService extends EventEmitter {
             // Process logs
             for (const log of logs) {
                 const logUserId = log.userid || log.userId;
-                const logDate = log.dateString || new Date(log.datetime * 1000).toISOString().split('T')[0];
+                const ms = tnaEventTimeMs(log);
+                const logDate = log.dateString || (ms ? new Date(ms).toISOString().split('T')[0] : 'unknown');
                 
                 // Group by user
                 if (!summary.byUser[logUserId]) {

@@ -42,9 +42,6 @@ export const API_ENDPOINTS = {
   CARD_SCAN: '/api/cards/scan',
   CARD_BLACKLIST: '/api/cards/blacklist',
   
-  // Gate Events
-  GATE_EVENTS: '/api/gate-events',
-  
   // Employees
   EMPLOYEES: '/api/employees',
 };

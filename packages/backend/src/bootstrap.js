@@ -26,7 +26,6 @@ import SupremaDoorService from './services/doorService.js';
 import SupremaTNAService from './services/tnaService.js';
 import SupremaBiometricService from './services/biometricService.js';
 import SupremaTimeService from './services/timeService.js';
-import SyncService from './services/syncService.js';
 import EnrollmentService from './services/enrollmentService.js';
 import UserSyncService from './services/userSyncService.js';
 import ProcessService from './services/processService.js';
@@ -356,9 +355,6 @@ export async function bootstrap() {
         database
     };
 
-    const syncService = new SyncService(domainServices, { database, logger });
-    container.registerInstance('syncService', syncService);
-
     const enrollmentService = new EnrollmentService(
         userService,
         biometricService,
@@ -371,7 +367,7 @@ export async function bootstrap() {
         userService,
         connectionService,
         logger,
-        { prisma, biometricService }
+        { prisma, biometricService, enrollmentService }
     );
     container.registerInstance('userSyncService', userSyncService);
 
@@ -381,6 +377,8 @@ export async function bootstrap() {
     // ── 8. Infrastructure services ────────────────────────────────────────
     const deviceMonitoring = new DeviceMonitoringService(connectionService, logger);
     container.registerInstance('deviceMonitoringService', deviceMonitoring);
+    deviceMonitoring.start();
+
 
     const hrIntegration = new HRIntegrationService(domainServices, logger);
     container.registerInstance('hrIntegrationService', hrIntegration);
@@ -392,6 +390,7 @@ export async function bootstrap() {
             eventRepository: repositories.event,
             database,
             logger,
+            timeService,   // passed so the service can sync device time on connect
         },
         {
             intervalMs: parseInt(process.env.EVENT_SYNC_INTERVAL_MS) || 60_000,
@@ -430,6 +429,36 @@ export async function bootstrap() {
         trigger: config.database.cloudSyncTrigger,
     });
     container.registerInstance('cloudSyncService', cloudSync);
+
+    // ── 10. Auto-start background sync services ──────────────────────────
+    // Load persisted sync settings and apply them so eventReplication and
+    // cloudSync timers actually run at boot \u2014 not only after someone hits
+    // the settings API. Falls back to defaults when no row exists.
+    try {
+        const settings = await syncSettingsService.getSyncSettings({ initialize: true });
+        await syncSettingsService.applyToRuntime(settings, {
+            userSync: userSyncService,
+            eventReplication,
+            cloudSync,
+        });
+        logger.info('Sync settings applied at boot', {
+            deviceImport: settings.deviceImport.enabled,
+            dbToDevice: settings.dbToDevice.enabled,
+            eventReplication: settings.eventReplication.enabled,
+            cloudSync: settings.cloudSync.enabled,
+        });
+    } catch (error) {
+        logger.error('Failed to apply sync settings at boot:', error);
+    }
+
+    // Force-enable event replication unless explicitly disabled. The
+    // persisted settings default to `enabled: false`, which means a fresh
+    // install would never replicate events. Set EVENT_REPLICATION_ENABLED=false
+    // to opt out.
+    if (process.env.EVENT_REPLICATION_ENABLED !== 'false' && !eventReplication._started) {
+        eventReplication.start();
+        logger.info('Event replication service started (default ON)');
+    }
 
     logger.info('Application bootstrap complete', {
         environment: config.app.env,

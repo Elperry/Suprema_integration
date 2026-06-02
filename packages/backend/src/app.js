@@ -20,7 +20,6 @@ import doorRoutes from './routes/doorRoutes.js';
 import tnaRoutes from './routes/tnaRoutes.js';
 import biometricRoutes from './routes/biometricRoutes.js';
 import hrRoutes from './routes/hrRoutes.js';
-import gateEventRoutes from './routes/gateEventRoutes.js';
 import employeeRoutes from './routes/employeeRoutes.js';
 import cardRoutes from './routes/cardRoutes.js';
 import enrollmentRoutes from './routes/enrollmentRoutes.js';
@@ -51,7 +50,6 @@ function buildServicesObject(container) {
         tna: container.resolve('tnaService'),
         biometric: container.resolve('biometricService'),
         time: container.resolve('timeService'),
-        sync: container.resolve('syncService'),
         userSync: container.resolve('userSyncService'),
         cloudSync: container.resolve('cloudSyncService'),
         enrollment: container.resolve('enrollmentService'),
@@ -103,7 +101,6 @@ function setupRoutes(app, services) {
     app.use('/api/tna', tnaRoutes(services));
     app.use('/api/biometric', biometricRoutes(services));
     app.use('/api/hr', hrRoutes(services));
-    app.use('/api/gate-events', gateEventRoutes(services));
     app.use('/api/employees', employeeRoutes(services));
     app.use('/api/cards', cardRoutes(services));
     app.use('/api/enrollment', enrollmentRoutes(services));
@@ -130,7 +127,6 @@ function setupRoutes(app, services) {
                 tna: '/api/tna',
                 biometric: '/api/biometric',
                 hr: '/api/hr',
-                gateEvents: '/api/gate-events',
                 employees: '/api/employees',
                 cards: '/api/cards',
                 enrollment: '/api/enrollment',
@@ -200,7 +196,6 @@ function createHealthCheck(services) {
                     tna: gatewayConnected && !!services.tna,
                     biometric: gatewayConnected && !!services.biometric,
                     time: gatewayConnected && !!services.time,
-                    sync: !!services.sync,
                     enrollment: !!services.enrollment
                 }
             };

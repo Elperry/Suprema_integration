@@ -696,7 +696,6 @@ CREATE TABLE IF NOT EXISTS `device` (
   `direction` varchar(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'in',
   `deviceType` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
   `serialNumber` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `last_synced_event_id` int UNSIGNED NOT NULL DEFAULT '0',
   `last_replicated_event_id` int UNSIGNED NOT NULL DEFAULT '0',
   PRIMARY KEY (`id`),
   KEY `device_locationId_idx` (`locationId`),
@@ -707,37 +706,37 @@ CREATE TABLE IF NOT EXISTS `device` (
 -- Dumping data for table `device`
 --
 
-INSERT INTO `device` (`id`, `name`, `ip`, `username`, `password`, `loc`, `channel`, `last_event_sync`, `last_user_sync`, `port`, `isActive`, `status`, `useSSL`, `locationId`, `direction`, `deviceType`, `serialNumber`, `last_synced_event_id`, `last_replicated_event_id`) VALUES
-(2, 'Xpass_Gate 2.1---out', '10.10.2.113', NULL, NULL, NULL, NULL, '2026-05-18 08:17:15.234', '2026-03-19 19:04:00.445', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084682', 0, 0),
-(3, 'Scan Card_546084687', '10.10.2.120', NULL, NULL, NULL, NULL, '2026-05-18 08:18:03.834', '2026-03-19 19:04:00.449', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084687', 0, 0),
-(4, 'Xpass_Gate 3.2---out', '10.10.2.114', NULL, NULL, NULL, NULL, '2026-05-18 08:17:36.598', '2026-03-19 19:04:00.453', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084700', 0, 0),
-(5, 'Xpass_Gate 2.1---in', '10.10.2.121', NULL, NULL, NULL, NULL, '2026-05-18 08:18:22.347', '2026-03-19 19:04:00.456', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084701', 0, 0),
-(6, 'Xpass_Gate 3.3---in', '10.10.2.116', NULL, NULL, NULL, NULL, '2026-05-18 08:17:39.042', '2026-03-19 19:04:00.460', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084702', 0, 0),
-(7, 'Xpass_Gate 1.3---in', '10.10.2.105', NULL, NULL, NULL, NULL, '2026-05-18 08:18:15.119', '2026-03-19 19:04:00.463', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084703', 0, 0),
-(8, 'Xpass_Gate 1.1---in', '10.10.2.111', NULL, NULL, NULL, NULL, '2026-05-18 08:18:06.182', '2026-03-19 19:04:00.466', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084704', 0, 0),
-(9, 'Xpass_Gate 2.2---in', '10.10.2.104', NULL, NULL, NULL, NULL, '2026-05-18 08:17:15.977', '2026-03-19 19:04:00.470', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084705', 0, 0),
-(10, 'Xpass_Gate 3.2---in', '10.10.2.125', NULL, NULL, NULL, NULL, '2026-05-18 08:17:35.861', '2026-03-19 19:04:00.473', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084706', 0, 0),
-(11, 'Xpass_Gate 2.3---in', '10.10.2.119', NULL, NULL, NULL, NULL, '2026-05-18 08:17:20.020', '2026-03-19 19:04:00.476', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084707', 0, 0),
-(12, 'Xpass_Gate 1.3---out', '10.10.2.115', NULL, NULL, NULL, NULL, '2026-05-18 08:18:18.333', '2026-03-19 19:04:00.480', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084708', 0, 0),
-(13, 'Xpass_Gate 3.3---out', '10.10.2.123', NULL, NULL, NULL, NULL, '2026-05-18 08:17:42.251', '2026-03-19 19:04:00.483', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084709', 0, 0),
-(14, 'Xpass_Gate 2.5---out', '10.10.2.110', NULL, NULL, NULL, NULL, '2026-05-18 08:17:30.176', '2026-03-19 19:04:00.487', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084710', 0, 0),
-(15, 'Xpass_Gate 2.3---out', '10.10.2.102', NULL, NULL, NULL, NULL, '2026-05-18 08:17:21.580', '2026-03-19 19:04:00.490', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084711', 0, 0),
-(16, 'Xpass_Gate 2.4---out', '10.10.2.112', NULL, NULL, NULL, NULL, '2026-05-18 08:17:24.627', '2026-03-19 19:04:00.494', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084712', 0, 0),
-(17, 'Xpass_Gate 2.4---in', '10.10.2.122', NULL, NULL, NULL, NULL, '2026-05-18 08:17:23.206', '2026-03-19 19:04:00.497', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084713', 0, 0),
-(18, 'Xpass_Gate 1.1---out', '10.10.2.109', NULL, NULL, NULL, NULL, '2026-05-18 08:18:06.982', '2026-03-19 19:04:00.500', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084714', 0, 0),
-(19, 'Xpass_Gate 1.2---out', '10.10.2.118', NULL, NULL, NULL, NULL, '2026-05-18 08:18:12.181', '2026-03-19 19:04:00.504', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084715', 0, 0),
-(20, 'Xpass_Gate 3.1---out', '10.10.2.107', NULL, NULL, NULL, NULL, '2026-05-18 08:17:33.284', '2026-03-19 19:04:00.507', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084716', 0, 0),
-(21, 'Xpass_Gate 1.2---in', '10.10.2.103', NULL, NULL, NULL, NULL, '2026-05-18 08:18:09.570', '2026-03-19 19:04:00.511', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084717', 0, 0),
-(22, 'Xpass_Gate 2.2---out', '10.10.2.106', NULL, NULL, NULL, NULL, '2026-05-18 08:17:18.435', '2026-03-19 19:04:00.514', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084718', 0, 0),
-(23, 'Xpass_Gate 3.1---in', '10.10.2.117', NULL, NULL, NULL, NULL, '2026-05-18 08:17:32.479', '2026-03-19 19:04:00.518', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084719', 0, 0),
-(24, 'Xpass_Gate 2.5---in', '10.10.2.101', NULL, NULL, NULL, NULL, '2026-05-18 08:17:26.247', '2026-03-19 19:04:00.522', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084720', 0, 0),
-(25, 'Xpass_Gate 4.3---in', '10.10.2.130', NULL, NULL, NULL, NULL, '2026-05-18 08:17:53.451', '2026-03-19 19:04:00.525', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546166483', 0, 0),
-(26, 'Xpass_Gate 4.1---out', '10.10.2.126', NULL, NULL, NULL, NULL, '2026-05-18 08:17:49.491', '2026-03-19 19:04:00.529', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173324', 0, 0),
-(27, 'Xpass_Gate 4.1---in', '10.10.2.127', NULL, NULL, NULL, NULL, '2026-05-18 08:17:46.063', '2026-03-19 19:04:00.532', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173333', 0, 0),
-(28, 'Xpass_Gate 4.4---Out', '10.10.2.131', NULL, NULL, NULL, NULL, '2026-05-18 08:18:00.927', '2026-03-19 19:04:00.536', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173336', 0, 0),
-(29, 'Xpass_Gate 4.3---out', '10.10.2.132', NULL, NULL, NULL, NULL, '2026-05-18 08:17:56.037', '2026-03-19 19:04:00.539', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173337', 0, 0),
-(30, 'Xpass_Gate 4.2---out', '10.10.2.128', NULL, NULL, NULL, NULL, '2026-05-18 08:17:52.646', '2026-03-19 19:04:00.542', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173339', 0, 0),
-(31, 'Xpass_Gate 4.2---in', '10.10.2.129', NULL, NULL, NULL, NULL, '2026-05-18 08:17:50.253', '2026-03-19 19:04:00.546', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546174123', 0, 0);
+INSERT INTO `device` (`id`, `name`, `ip`, `username`, `password`, `loc`, `channel`, `last_event_sync`, `last_user_sync`, `port`, `isActive`, `status`, `useSSL`, `locationId`, `direction`, `deviceType`, `serialNumber`, `last_replicated_event_id`) VALUES
+(2, 'Xpass_Gate 2.1---out', '10.10.2.113', NULL, NULL, NULL, NULL, '2026-05-18 08:17:15.234', '2026-03-19 19:04:00.445', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084682', 0),
+(3, 'Scan Card_546084687', '10.10.2.120', NULL, NULL, NULL, NULL, '2026-05-18 08:18:03.834', '2026-03-19 19:04:00.449', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084687', 0),
+(4, 'Xpass_Gate 3.2---out', '10.10.2.114', NULL, NULL, NULL, NULL, '2026-05-18 08:17:36.598', '2026-03-19 19:04:00.453', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084700', 0),
+(5, 'Xpass_Gate 2.1---in', '10.10.2.121', NULL, NULL, NULL, NULL, '2026-05-18 08:18:22.347', '2026-03-19 19:04:00.456', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084701', 0),
+(6, 'Xpass_Gate 3.3---in', '10.10.2.116', NULL, NULL, NULL, NULL, '2026-05-18 08:17:39.042', '2026-03-19 19:04:00.460', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084702', 0),
+(7, 'Xpass_Gate 1.3---in', '10.10.2.105', NULL, NULL, NULL, NULL, '2026-05-18 08:18:15.119', '2026-03-19 19:04:00.463', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084703', 0),
+(8, 'Xpass_Gate 1.1---in', '10.10.2.111', NULL, NULL, NULL, NULL, '2026-05-18 08:18:06.182', '2026-03-19 19:04:00.466', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084704', 0),
+(9, 'Xpass_Gate 2.2---in', '10.10.2.104', NULL, NULL, NULL, NULL, '2026-05-18 08:17:15.977', '2026-03-19 19:04:00.470', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084705', 0),
+(10, 'Xpass_Gate 3.2---in', '10.10.2.125', NULL, NULL, NULL, NULL, '2026-05-18 08:17:35.861', '2026-03-19 19:04:00.473', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084706', 0),
+(11, 'Xpass_Gate 2.3---in', '10.10.2.119', NULL, NULL, NULL, NULL, '2026-05-18 08:17:20.020', '2026-03-19 19:04:00.476', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084707', 0),
+(12, 'Xpass_Gate 1.3---out', '10.10.2.115', NULL, NULL, NULL, NULL, '2026-05-18 08:18:18.333', '2026-03-19 19:04:00.480', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084708', 0),
+(13, 'Xpass_Gate 3.3---out', '10.10.2.123', NULL, NULL, NULL, NULL, '2026-05-18 08:17:42.251', '2026-03-19 19:04:00.483', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084709', 0),
+(14, 'Xpass_Gate 2.5---out', '10.10.2.110', NULL, NULL, NULL, NULL, '2026-05-18 08:17:30.176', '2026-03-19 19:04:00.487', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084710', 0),
+(15, 'Xpass_Gate 2.3---out', '10.10.2.102', NULL, NULL, NULL, NULL, '2026-05-18 08:17:21.580', '2026-03-19 19:04:00.490', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084711', 0),
+(16, 'Xpass_Gate 2.4---out', '10.10.2.112', NULL, NULL, NULL, NULL, '2026-05-18 08:17:24.627', '2026-03-19 19:04:00.494', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084712', 0),
+(17, 'Xpass_Gate 2.4---in', '10.10.2.122', NULL, NULL, NULL, NULL, '2026-05-18 08:17:23.206', '2026-03-19 19:04:00.497', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084713', 0),
+(18, 'Xpass_Gate 1.1---out', '10.10.2.109', NULL, NULL, NULL, NULL, '2026-05-18 08:18:06.982', '2026-03-19 19:04:00.500', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084714', 0),
+(19, 'Xpass_Gate 1.2---out', '10.10.2.118', NULL, NULL, NULL, NULL, '2026-05-18 08:18:12.181', '2026-03-19 19:04:00.504', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084715', 0),
+(20, 'Xpass_Gate 3.1---out', '10.10.2.107', NULL, NULL, NULL, NULL, '2026-05-18 08:17:33.284', '2026-03-19 19:04:00.507', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084716', 0),
+(21, 'Xpass_Gate 1.2---in', '10.10.2.103', NULL, NULL, NULL, NULL, '2026-05-18 08:18:09.570', '2026-03-19 19:04:00.511', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084717', 0),
+(22, 'Xpass_Gate 2.2---out', '10.10.2.106', NULL, NULL, NULL, NULL, '2026-05-18 08:17:18.435', '2026-03-19 19:04:00.514', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084718', 0),
+(23, 'Xpass_Gate 3.1---in', '10.10.2.117', NULL, NULL, NULL, NULL, '2026-05-18 08:17:32.479', '2026-03-19 19:04:00.518', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084719', 0),
+(24, 'Xpass_Gate 2.5---in', '10.10.2.101', NULL, NULL, NULL, NULL, '2026-05-18 08:17:26.247', '2026-03-19 19:04:00.522', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546084720', 0),
+(25, 'Xpass_Gate 4.3---in', '10.10.2.130', NULL, NULL, NULL, NULL, '2026-05-18 08:17:53.451', '2026-03-19 19:04:00.525', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546166483', 0),
+(26, 'Xpass_Gate 4.1---out', '10.10.2.126', NULL, NULL, NULL, NULL, '2026-05-18 08:17:49.491', '2026-03-19 19:04:00.529', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173324', 0),
+(27, 'Xpass_Gate 4.1---in', '10.10.2.127', NULL, NULL, NULL, NULL, '2026-05-18 08:17:46.063', '2026-03-19 19:04:00.532', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173333', 0),
+(28, 'Xpass_Gate 4.4---Out', '10.10.2.131', NULL, NULL, NULL, NULL, '2026-05-18 08:18:00.927', '2026-03-19 19:04:00.536', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173336', 0),
+(29, 'Xpass_Gate 4.3---out', '10.10.2.132', NULL, NULL, NULL, NULL, '2026-05-18 08:17:56.037', '2026-03-19 19:04:00.539', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173337', 0),
+(30, 'Xpass_Gate 4.2---out', '10.10.2.128', NULL, NULL, NULL, NULL, '2026-05-18 08:17:52.646', '2026-03-19 19:04:00.542', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546173339', 0),
+(31, 'Xpass_Gate 4.2---in', '10.10.2.129', NULL, NULL, NULL, NULL, '2026-05-18 08:17:50.253', '2026-03-19 19:04:00.546', 51211, 1, 'disconnected', 0, NULL, 'in', NULL, '546174123', 0);
 
 -- --------------------------------------------------------
 
@@ -1538,29 +1537,6 @@ CREATE TABLE IF NOT EXISTS `filter_presets` (
 -- --------------------------------------------------------
 
 --
--- Table structure for table `gateevents`
---
-
-DROP TABLE IF EXISTS `gateevents`;
-CREATE TABLE IF NOT EXISTS `gateevents` (
-  `id` int UNSIGNED NOT NULL AUTO_INCREMENT,
-  `employee_id` char(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `door_no` int UNSIGNED DEFAULT NULL,
-  `gate_id` int UNSIGNED DEFAULT NULL,
-  `loc` char(15) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `dir` char(5) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `etime` datetime(3) DEFAULT NULL,
-  `etime_truncated` varchar(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `d` date DEFAULT NULL,
-  `t` time DEFAULT NULL,
-  PRIMARY KEY (`id`),
-  KEY `etime` (`etime`),
-  KEY `gate_id` (`gate_id`),
-  KEY `index_foreignkey_gateevents_employee` (`employee_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
-
 --
 -- Table structure for table `locations`
 --

@@ -24,7 +24,6 @@ const TYPE_LABEL = {
   'user-sync-all':        'User Sync (All Devices)',
   'repair-all':           'Reconcile & Repair All',
   'event-sync-all':       'Event Sync (All Devices)',
-  'event-sync-all-to-db': 'Event Sync → Database',
   'import-csv':           'CSV Card Import',
   'hr-users-sync':        'HR User Sync',
   'sync-all':             'Sync All Devices',

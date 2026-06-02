@@ -48,8 +48,11 @@ async function runPostStartupTasks(container) {
         logger.error('Background device connection failed:', err.message)
     );
 
-    // 2. Sync time to all connected devices
-    await syncDeviceTime(container, syncSettings.deviceTime);
+    // 2. Sync time only after the initial connection sweep settles.
+    //    Sites with many unreachable devices can take well over 15s to finish
+    //    the first pass, so racing on a short timeout still syncs against an
+    //    empty connected-device set and effectively skips clock sync.
+    connectPromise.finally(() => syncDeviceTime(container, syncSettings.deviceTime));
 
     // 3. HR event integration
     const hrIntegration = container.resolve('hrIntegrationService');
@@ -152,15 +155,25 @@ async function syncDeviceTime(container, settings = null) {
 
         if (result.success) {
             logger.info(`✓ Time sync completed: ${result.devicesCount} devices synchronized`);
-            logger.info(`  Server time: ${result.serverTime}`);
-            logger.info(`  Timezone: ${result.timezone.description}`);
+            if (result.devicesCount > 0) {
+                logger.info(`  Server time: ${result.serverTime}`);
+                logger.info(`  Timezone: ${result.timezone?.description ?? 'unknown'}`);
+            } else if (result.message) {
+                logger.info(`  ${result.message}`);
+            }
         } else {
             logger.warn('Time sync completed with some errors:', result);
         }
 
         logger.info('═══════════════════════════════════════════════════════════');
     } catch (error) {
-        logger.error('Failed to sync device time (non-fatal):', error.message);
+        // Surface as much detail as possible. Earlier code logged only
+        // `error.message` which is empty when the rejection value is not a
+        // proper Error (string, plain object, undefined from an early reject).
+        const detail = error instanceof Error
+            ? { message: error.message, stack: error.stack, code: error.code, details: error.details }
+            : { value: error, type: typeof error };
+        logger.error('Failed to sync device time (non-fatal):', detail);
     }
 }
 

@@ -219,25 +219,27 @@ export default function Events() {
     setSseConnected(false)
   }
 
-  const loadEvents = useCallback(async (resetPage = false) => {
+  const loadEvents = useCallback(async (resetPage = false, overrideFilters = null) => {
     setLoading(true)
     setError(null)
     
     const currentPage = resetPage ? 1 : page
     if (resetPage) setPage(1)
     
+    const f = overrideFilters || filters
+    
     try {
       // Load from database - can filter by device or show all
       const res = await eventAPI.getFromDB({
         page: currentPage,
         pageSize,
-        deviceId: filters.deviceId || undefined,
-        eventType: filters.eventType || undefined,
-        userId: filters.userId || undefined,
-        authResult: filters.authResult || undefined,
-        doorId: filters.doorId || undefined,
-        startDate: filters.startDate || undefined,
-        endDate: filters.endDate || undefined
+        deviceId: f.deviceId || undefined,
+        eventType: f.eventType || undefined,
+        userId: f.userId || undefined,
+        authResult: f.authResult || undefined,
+        doorId: f.doorId || undefined,
+        startDate: f.startDate || undefined,
+        endDate: f.endDate || undefined
       })
       
       if (res?.data?.pagination) {
@@ -268,10 +270,8 @@ export default function Events() {
     setSuccessMessage(null)
     
     try {
-      const res = await eventAPI.syncAllToDB(1000)
-      setSuccessMessage(`Synced ${res.data.totalSynced} events from ${res.data.results?.length || 0} devices`)
-      // Reload events after sync
-      loadEvents(true)
+      const res = await eventAPI.syncAll()
+      setSuccessMessage(res.data?.message || 'Background event sync started')
     } catch (e) { 
       setError(e.response?.data?.message || e.message || 'Failed to sync events')
     } finally {
@@ -285,7 +285,7 @@ export default function Events() {
     setSuccessMessage(null)
     
     try {
-      const res = await eventAPI.sync(deviceId, null, 1000)
+      const res = await eventAPI.sync(deviceId)
       setSuccessMessage(`Synced ${res.data.synced} events from device`)
       loadEvents(true)
     } catch (e) { 
@@ -372,7 +372,7 @@ export default function Events() {
   }
 
   const clearFilters = () => {
-    setFilters({
+    const cleared = {
       deviceId: '',
       eventType: '',
       userId: '',
@@ -380,8 +380,9 @@ export default function Events() {
       startDate: '',
       endDate: '',
       authResult: ''
-    })
-    setTimeout(() => loadEvents(true), 0)
+    }
+    setFilters(cleared)
+    loadEvents(true, cleared)
   }
 
   const getEventTypeBadge = (eventType) => {

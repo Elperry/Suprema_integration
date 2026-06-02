@@ -87,19 +87,6 @@ export class EventRepository extends BaseRepository {
     }
 
     /**
-     * Find latest event for device
-     * 
-     * @param {number} deviceId - Device database ID
-     * @returns {Promise<Object|null>}
-     */
-    async findLatestByDevice(deviceId) {
-        return this.findOne(
-            { deviceId },
-            { orderBy: { supremaEventId: 'desc' } }
-        );
-    }
-
-    /**
      * Find the latest persisted event for every device in a single query.
      * Returns a Map<deviceId, { supremaEventId, timestamp }> for O(1) lookup
      * in health-status reporting — avoids N per-device round-trips.
