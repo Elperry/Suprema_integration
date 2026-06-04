@@ -73,10 +73,13 @@ export default function Events() {
     deviceId: '',
     eventType: '',
     userId: '',
+    userName: '',
     doorId: '',
     startDate: '',
     endDate: '',
-    authResult: ''
+    authResult: '',
+    description: '',
+    eventCode: '',
   })
 
   useEffect(() => { 
@@ -151,10 +154,13 @@ export default function Events() {
         deviceId: preset.filters.deviceId || '',
         eventType: preset.filters.eventType || '',
         userId: preset.filters.userId || '',
+        userName: preset.filters.userName || '',
         doorId: preset.filters.doorId || '',
         startDate: preset.filters.startDate || '',
         endDate: preset.filters.endDate || '',
-        authResult: preset.filters.authResult || ''
+        authResult: preset.filters.authResult || '',
+        description: preset.filters.description || '',
+        eventCode: preset.filters.eventCode || '',
       })
       setTimeout(() => loadEvents(true), 0)
       showNotification(`Applied preset "${preset.name}"`, 'success')
@@ -219,6 +225,25 @@ export default function Events() {
     setSseConnected(false)
   }
 
+  // datetime-local inputs produce timezone-naive strings (e.g. "2026-06-04T10:00").
+  // The DB stores UTC, so we must shift Cairo local time → UTC before sending to the API.
+  // Egypt is UTC+2 permanently (DST abolished 2011); Intl gives us the exact offset for
+  // any historical date, correctly covering pre-2011 summer (+3) and winter (+2) records.
+  const cairoLocalToUtcIso = (localDt) => {
+    if (!localDt) return undefined
+    // Parse as if it were UTC to get a Date object, then read the Cairo offset for that moment
+    const asUtc = new Date(localDt + 'Z')
+    const cairoOffsetMin = -new Intl.DateTimeFormat('en', {
+      timeZone: 'Africa/Cairo', timeZoneName: 'shortOffset'
+    }).formatToParts(asUtc).reduce((acc, p) => {
+      if (p.type !== 'timeZoneName') return acc
+      const m = p.value.match(/GMT([+-])(\d+)(?::(\d+))?/)
+      if (!m) return acc
+      return (m[1] === '+' ? -1 : 1) * (parseInt(m[2]) * 60 + parseInt(m[3] || '0'))
+    }, 0)
+    return new Date(asUtc.getTime() + cairoOffsetMin * 60000).toISOString()
+  }
+
   const loadEvents = useCallback(async (resetPage = false, overrideFilters = null) => {
     setLoading(true)
     setError(null)
@@ -236,10 +261,13 @@ export default function Events() {
         deviceId: f.deviceId || undefined,
         eventType: f.eventType || undefined,
         userId: f.userId || undefined,
+        userName: f.userName || undefined,
         authResult: f.authResult || undefined,
         doorId: f.doorId || undefined,
-        startDate: f.startDate || undefined,
-        endDate: f.endDate || undefined
+        startDate: cairoLocalToUtcIso(f.startDate),
+        endDate: cairoLocalToUtcIso(f.endDate),
+        description: f.description || undefined,
+        eventCode: f.eventCode || undefined,
       })
       
       if (res?.data?.pagination) {
@@ -376,10 +404,13 @@ export default function Events() {
       deviceId: '',
       eventType: '',
       userId: '',
+      userName: '',
       doorId: '',
       startDate: '',
       endDate: '',
-      authResult: ''
+      authResult: '',
+      description: '',
+      eventCode: '',
     }
     setFilters(cleared)
     loadEvents(true, cleared)
@@ -642,6 +673,39 @@ export default function Events() {
               value={filters.userId}
               onChange={(e) => setFilters({...filters, userId: e.target.value})}
               placeholder="Filter by User ID"
+              className="form-control"
+            />
+          </div>
+          
+          <div className="filter-item">
+            <label>User Name</label>
+            <input 
+              type="text" 
+              value={filters.userName}
+              onChange={(e) => setFilters({...filters, userName: e.target.value})}
+              placeholder="Filter by User Name"
+              className="form-control"
+            />
+          </div>
+          
+          <div className="filter-item">
+            <label>Description</label>
+            <input 
+              type="text" 
+              value={filters.description}
+              onChange={(e) => setFilters({...filters, description: e.target.value})}
+              placeholder="Search description"
+              className="form-control"
+            />
+          </div>
+          
+          <div className="filter-item">
+            <label>Event Code</label>
+            <input 
+              type="text" 
+              value={filters.eventCode}
+              onChange={(e) => setFilters({...filters, eventCode: e.target.value})}
+              placeholder="e.g. 4096 or 0x1000"
               className="form-control"
             />
           </div>

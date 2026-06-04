@@ -351,10 +351,13 @@ export const eventAPI = {
     if (params.eventType) query.append('eventType', params.eventType);
     if (params.exactUserId) query.append('exactUserId', params.exactUserId);
     if (params.userId) query.append('userId', params.userId);
+    if (params.userName) query.append('userName', params.userName);
     if (params.authResult) query.append('authResult', params.authResult);
     if (params.doorId) query.append('doorId', params.doorId);
     if (params.startDate) query.append('startDate', params.startDate);
     if (params.endDate) query.append('endDate', params.endDate);
+    if (params.description) query.append('description', params.description);
+    if (params.eventCode) query.append('eventCode', params.eventCode);
     return api.get(`/events/db?${query.toString()}`);
   },
   exportSyncedFromDB: (params = {}) => api.get('/events/db/export', { params, responseType: 'blob' }),

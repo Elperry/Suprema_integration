@@ -44,6 +44,16 @@ export default (services) => {
         if (query.endDate) {
             where.timestamp = { ...where.timestamp, lte: new Date(query.endDate) };
         }
+        if (query.description) {
+            where.description = { contains: query.description };
+        }
+        if (query.eventCode) {
+            const raw = String(query.eventCode).trim();
+            const code = raw.startsWith('0x') || raw.startsWith('0X')
+                ? parseInt(raw, 16)
+                : parseInt(raw, 10);
+            if (!isNaN(code)) where.eventCode = code;
+        }
 
         return where;
     };
@@ -247,43 +257,65 @@ export default (services) => {
                 eventType,
                 exactUserId,
                 userId,
+                userName,
                 authResult,
                 doorId,
                 startDate,
-                endDate
+                endDate,
+                description,
+                eventCode,
             } = req.query;
 
             const prisma = services.database.getPrisma();
-            const where = buildDbEventWhere({ deviceId, eventType, exactUserId, userId, authResult, doorId, startDate, endDate }, { includeStoredEventType: true });
+            const where = buildDbEventWhere({ deviceId, eventType, exactUserId, userId, authResult, doorId, startDate, endDate, description, eventCode }, { includeStoredEventType: true });
             const pageNumber = parseInt(page);
             const pageSizeNumber = parseInt(pageSize);
 
-            const events = await prisma.event.findMany({
-                where,
-                orderBy: { timestamp: 'desc' }
-            });
+            // If a userName filter is provided, resolve it to matching User.id values.
+            // event.userId stores User.id (local DB PK) as a string.
+            if (userName && userName.trim()) {
+                const matchingUsers = await prisma.user.findMany({
+                    where: { OR: [
+                        { name: { contains: userName.trim() } },
+                        { full_name: { contains: userName.trim() } },
+                    ]},
+                    select: { id: true }
+                });
+                if (matchingUsers.length === 0) {
+                    return res.json({
+                        success: true,
+                        data: [],
+                        pagination: { page: pageNumber, pageSize: pageSizeNumber, totalEvents: 0, totalPages: 0 }
+                    });
+                }
+                where.userId = { in: matchingUsers.map(u => String(u.id)) };
+            }
 
-            const filteredEvents = events
-                .map((event) => normalizeDbEvent(event));
+            const [totalEvents, rawEvents] = await Promise.all([
+                prisma.event.count({ where }),
+                prisma.event.findMany({
+                    where,
+                    orderBy: { timestamp: 'desc' },
+                    skip: (pageNumber - 1) * pageSizeNumber,
+                    take: pageSizeNumber,
+                })
+            ]);
 
-            const totalEvents = filteredEvents.length;
-            const paginatedEvents = filteredEvents.slice(
-                (pageNumber - 1) * pageSizeNumber,
-                pageNumber * pageSizeNumber
-            );
+            const paginatedEvents = rawEvents.map((event) => normalizeDbEvent(event));
 
-            // Enrich events with employee and device context for UI consumers.
+            // Enrich events with user name and device context for UI consumers.
+            // event.userId = User.id (local DB PK), set as the Suprema device user ID at enrolment time.
             const uniqueUserIds = [...new Set(paginatedEvents.map(e => e.userId).filter(id => id && /^\d+$/.test(id)))];
             const uniqueDeviceIds = [...new Set(paginatedEvents.map((event) => event.deviceId).filter((id) => Number.isInteger(id)))];
-            const employeeMap = {};
+            const userNameMap = {};
             const deviceMap = {};
             if (uniqueUserIds.length > 0) {
-                const employees = await prisma.employee.findMany({
+                const users = await prisma.user.findMany({
                     where: { id: { in: uniqueUserIds.map(id => parseInt(id)) } },
-                    select: { id: true, fullname: true, firstname: true, lastname: true }
+                    select: { id: true, name: true, full_name: true }
                 });
-                employees.forEach(emp => {
-                    employeeMap[String(emp.id)] = emp.fullname || [emp.firstname, emp.lastname].filter(Boolean).join(' ') || null;
+                users.forEach(u => {
+                    userNameMap[String(u.id)] = u.full_name || u.name || null;
                 });
             }
             if (uniqueDeviceIds.length > 0) {
@@ -302,7 +334,7 @@ export default (services) => {
             // Convert BigInt to string for JSON serialization
             const serializedEvents = paginatedEvents.map((event) => ({
                 ...event,
-                userName: employeeMap[event.userId] || null,
+                userName: userNameMap[event.userId] || null,
                 deviceName: deviceMap[event.deviceId]?.name || null,
                 deviceLocation: deviceMap[event.deviceId]?.location || null,
             }));

@@ -1993,16 +1993,21 @@ export default function Users() {
   }, [showCardModal, selectedUserForCard, users])
 
   const filteredUsers = users.filter(u => {
+    // In showAllUsers mode the backend has already applied search + pagination,
+    // so we must not re-filter here (it would corrupt pagination counts/selection).
+    if (showAllUsers) return true;
+
     const searchLower = searchTerm.toLowerCase()
     const deviceStatus = getCachedUserDeviceStatus(selectedDevice, u.userID)
 
-    if (showDriftOnly && !showAllUsers && !isDriftDeviceStatus(deviceStatus?.status)) {
+    if (showDriftOnly && !isDriftDeviceStatus(deviceStatus?.status)) {
       return false
     }
 
     if (!searchLower) return true;
     
     if (u.userID?.toLowerCase().includes(searchLower)) return true;
+    if (u.code?.toLowerCase().includes(searchLower)) return true;
     if (u.name?.toLowerCase().includes(searchLower)) return true;
 
     // Check device card arrays or pre-fetched cardData

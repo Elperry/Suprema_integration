@@ -258,11 +258,11 @@ class UserSyncService {
             return users;
         }
 
-        const isNumericSearch = /^\d+$/.test(term);
-
         return users.filter((user) => {
             if (String(user.userID || '').toLowerCase().includes(term)) return true;
+            if (String(user.userId ?? '').toLowerCase().includes(term)) return true;
             if (String(user.employeeId || '').toLowerCase().includes(term)) return true;
+            if (String(user.code || '').toLowerCase().includes(term)) return true;
             if (String(user.name || '').toLowerCase().includes(term)) return true;
             if (String(user.statusSummaryLabel || '').toLowerCase().includes(term)) return true;
 
@@ -271,7 +271,7 @@ class UserSyncService {
                 if (String(card.status || '').toLowerCase().includes(term)) return true;
                 if (String(card.cardData || '').toLowerCase().includes(term)) return true;
                 if (String(card.rawCardData || '').toLowerCase().includes(term)) return true;
-                if (isNumericSearch && String(card.cardDecimal || '').includes(term)) return true;
+                if (String(card.cardDecimal || '').includes(term)) return true;
                 return false;
             });
         });

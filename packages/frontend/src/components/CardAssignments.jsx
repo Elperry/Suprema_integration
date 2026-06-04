@@ -71,6 +71,27 @@ const parsePageParam = (value) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
+const normalizeSearchText = (value) => String(value ?? '').toLowerCase().trim()
+
+const getAssignmentSearchText = (assignment) => {
+  const assignedAt = assignment.assignedAt
+    ? new Date(assignment.assignedAt).toLocaleDateString()
+    : ''
+
+  return [
+    assignment.id,
+    assignment.employeeId,
+    assignment.employeeName,
+    decodeHex(assignment.card_data),
+    assignment.card_data,
+    assignment.status,
+    assignedAt,
+  ]
+    .filter(Boolean)
+    .map((value) => normalizeSearchText(value))
+    .join(' ')
+}
+
 export default function CardAssignments() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [assignments, setAssignments] = useState([])
@@ -531,12 +552,7 @@ export default function CardAssignments() {
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
   const displayed = searchText
-    ? assignments.filter(a =>
-        a.employeeId?.toLowerCase().includes(searchText.toLowerCase()) ||
-        a.employeeName?.toLowerCase().includes(searchText.toLowerCase()) ||
-        a.card_data?.toLowerCase().includes(searchText.toLowerCase()) ||
-        decodeHex(a.card_data).includes(searchText)
-      )
+    ? assignments.filter((assignment) => getAssignmentSearchText(assignment).includes(normalizeSearchText(searchText)))
     : assignments
 
   const statusBadge = (s) => {
