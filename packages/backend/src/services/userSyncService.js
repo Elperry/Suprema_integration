@@ -1722,7 +1722,12 @@ class UserSyncService {
             })
         ]);
 
-        const dbUsersById = new Map(dbUsers.map((user) => [String(user.userID), {
+        // Key both sides by the local user.id. That is the value used as the
+        // Suprema device user ID at enrollment (deviceUserId) and is what
+        // getUsersFromDevice returns as `userID` (the device header id).
+        // NOTE: the DB-side grouped user's `userID` is the HR employee_id, which
+        // does NOT match the device — use its `userId` (local PK) instead.
+        const dbUsersById = new Map(dbUsers.map((user) => [String(user.userId ?? user.userID), {
             ...user,
             normalizedCardSet: this.getNormalizedDatabaseCardSet(user)
         }]));
@@ -1818,6 +1823,22 @@ class UserSyncService {
      * @param {string|number} userId
      * @returns {Promise<Object>}
      */
+    /**
+     * Resolve a caller-supplied user identifier to the local user.id that is used
+     * as the Suprema device user ID. Accepts either the local user.id or the HR
+     * employee_id, so the reconciliation/repair UI works regardless of which it sends.
+     * @returns {Promise<{ localUser: object|null, deviceUserId: string }>}
+     */
+    async _resolveDeviceUserId(userId) {
+        const num = Number(userId);
+        let localUser = null;
+        if (!Number.isNaN(num)) {
+            localUser = await this.prisma.user.findUnique({ where: { id: num } })
+                || await this.prisma.user.findFirst({ where: { employee_id: num } });
+        }
+        return { localUser, deviceUserId: String(localUser?.id ?? userId) };
+    }
+
     async checkUserOnDevice(deviceId, userId) {
         const dbDevice = await this.getDbDevice(deviceId);
 
@@ -1825,17 +1846,22 @@ class UserSyncService {
             throw new Error(`Device ${deviceId} is not registered in the database`);
         }
 
-        const normalizedUserId = String(userId || '').trim();
-        if (!normalizedUserId) {
+        const rawUserId = String(userId || '').trim();
+        if (!rawUserId) {
             throw new Error('User ID is required');
         }
+
+        // Resolve to the local user.id (what the device stores), accepting employee_id too.
+        const { localUser } = await this._resolveDeviceUserId(rawUserId);
+        const normalizedUserId = String(localUser?.id ?? rawUserId);
 
         const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
 
         const [assignments, deviceUsers, userCards] = await Promise.all([
             this.prisma.cardAssignment.findMany({
                 where: {
-                    employeeId: normalizedUserId,
+                    // normalizedUserId is the local user.id (== device user ID)
+                    user_id: Number(normalizedUserId),
                     status: 'active',
                     enrollments: {
                         some: {
@@ -1849,6 +1875,7 @@ class UserSyncService {
                     { id: 'desc' }
                 ],
                 include: {
+                    user: true,
                     enrollments: {
                         where: {
                             deviceId: dbDevice.id,
@@ -1872,7 +1899,7 @@ class UserSyncService {
 
         const databaseCardDataList = [...new Set(
             assignments
-                .map((assignment) => this.normalizeCardData(assignment?.cardData))
+                .map((assignment) => this.normalizeCardData(assignment?.card_data))
                 .filter(Boolean)
         )];
         const deviceCardDataList = [...new Set(
@@ -1906,7 +1933,7 @@ class UserSyncService {
             userId: normalizedUserId,
             deviceId: dbDevice.id,
             deviceName: dbDevice.name,
-            employeeName: assignments[0]?.employeeName || deviceUser?.name || null,
+            employeeName: assignments[0]?.user?.name || deviceUser?.name || null,
             status,
             expectedOnDevice: assignments.length > 0,
             presentOnDevice: Boolean(deviceUser),
@@ -2104,10 +2131,13 @@ class UserSyncService {
         }
 
         const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
-        const normalizedUserId = String(userId);
+        // Resolve to the local user.id (what the device stores), accepting employee_id too.
+        const { localUser } = await this._resolveDeviceUserId(String(userId).trim());
+        const normalizedUserId = String(localUser?.id ?? userId);
         const assignments = await this.prisma.cardAssignment.findMany({
             where: {
-                employeeId: normalizedUserId,
+                // normalizedUserId is the local user.id (== device user ID)
+                user_id: Number(normalizedUserId),
                 status: 'active',
                 enrollments: {
                     some: {
@@ -2116,6 +2146,7 @@ class UserSyncService {
                     }
                 }
             },
+            include: { user: true },
             orderBy: [
                 { assignedAt: 'desc' },
                 { id: 'desc' }
@@ -2139,7 +2170,7 @@ class UserSyncService {
         if (!deviceUser) {
             await this.userService.enrollUsers(supremaDeviceId, [{
                 id: normalizedUserId,
-                name: assignments[0]?.employeeName || ''
+                name: assignments[0]?.user?.name || ''
             }]);
         }
 
