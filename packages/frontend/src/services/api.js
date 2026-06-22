@@ -336,9 +336,10 @@ export const eventAPI = {
   disableMonitoring: (deviceId) => api.post(`/events/monitoring/${deviceId}/disable`),
   enableMonitoringMulti: (deviceIds) => api.post('/events/monitoring/enable-multi', { deviceIds }),
   
-  // Sync - use longer timeout
-  sync: (deviceId) => syncApi.post(`/events/sync/${deviceId}`),
-  syncAll: () => syncApi.post('/events/sync-all'),
+  // Sync - use longer timeout. Pass fullResync=true to re-pull the device's
+  // entire event history from the start instead of only new events.
+  sync: (deviceId, fullResync = false) => syncApi.post(`/events/sync/${deviceId}`, { fullResync }),
+  syncAll: (fullResync = false) => syncApi.post('/events/sync-all', { fullResync }),
   getSyncStatus: (deviceId) => api.get(`/events/sync-status/${deviceId}`),
   getReplicationHealth: (params = {}) => api.get('/events/replication/health', { params }),
   

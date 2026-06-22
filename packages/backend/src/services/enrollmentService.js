@@ -821,31 +821,50 @@ class EnrollmentService {
                 this.logger.info(`User ${deviceUserId} already exists on device, updating card...`);
             }
 
-            this.logger.info(`User ${deviceUserId} created on device, now adding card...`);
+            // Gather every active card this user should have on THIS device:
+            // their existing active enrollments on this device plus the one being
+            // enrolled now. SetCard replaces the user's whole card list, so all of
+            // the user's cards must be sent together — otherwise the others vanish.
+            const existingActiveEnrollments = await this.prisma.deviceEnrollment.findMany({
+                where: { deviceId, deviceUserId, status: 'active' },
+                include: { cardAssignment: true }
+            });
 
-            // Then set the card for the user
-            const cardData = [{
-                userId: deviceUserId,
-                cardData: (() => {
-                    let hex = String(assignment.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
-                    if (hex.length % 2 === 1) hex = '0' + hex;
-                    return hex.toUpperCase();
-                })(),
-                cardType: this.getCardTypeCode('CSN'),
-                // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
-                cardSize: 32
-            }];
-            
+            const cardAssignmentsForUser = new Map();
+            for (const e of existingActiveEnrollments) {
+                if (e.cardAssignment && e.cardAssignment.status === 'active') {
+                    cardAssignmentsForUser.set(e.cardAssignment.id, e.cardAssignment);
+                }
+            }
+            // Include the assignment being enrolled now.
+            cardAssignmentsForUser.set(assignment.id, assignment);
+
+            const cardData = [];
+            const seenCardHex = new Set();
+            for (const ca of cardAssignmentsForUser.values()) {
+                let hex = String(ca.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
+                if (!hex) continue;
+                if (hex.length % 2 === 1) hex = '0' + hex;
+                hex = hex.toUpperCase();
+                if (seenCardHex.has(hex)) continue;
+                seenCardHex.add(hex);
+                cardData.push({
+                    userId: deviceUserId,
+                    cardData: hex,
+                    cardType: this.getCardTypeCode('CSN'),
+                    // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
+                    cardSize: 32
+                });
+            }
+
             await this.userService.setUserCards(supremaDeviceId, cardData);
-            
-            this.logger.info(`Successfully enrolled user ${deviceUserId} with card on device ${supremaDeviceId}`);
 
-            // Determine which enrollment record to update/create
-            let enrollment;
-            
-            if (existingEnrollment) {
-                // Update existing enrollment for this assignment
-                enrollment = await this.prisma.deviceEnrollment.update({
+            this.logger.info(`Successfully enrolled user ${deviceUserId} with ${cardData.length} card(s) on device ${supremaDeviceId}`);
+
+            // Upsert the enrollment record for THIS card assignment only. Each card
+            // the user holds has its own enrollment row, so we never repoint others.
+            const enrollment = existingEnrollment
+                ? await this.prisma.deviceEnrollment.update({
                     where: { id: existingEnrollment.id },
                     data: {
                         deviceUserId,
@@ -854,24 +873,8 @@ class EnrollmentService {
                         lastSyncAt: new Date()
                     },
                     include: { device: true, cardAssignment: true }
-                });
-            } else if (existingUserEnrollment) {
-                // User already on device with different assignment - update to new assignment
-                enrollment = await this.prisma.deviceEnrollment.update({
-                    where: { id: existingUserEnrollment.id },
-                    data: {
-                        cardAssignmentId: assignmentId,
-                        deviceUserId,
-                        status: 'active',
-                        enrolledAt: new Date(),
-                        lastSyncAt: new Date()
-                    },
-                    include: { device: true, cardAssignment: true }
-                });
-                this.logger.info(`Updated enrollment ${existingUserEnrollment.id} to use new card assignment ${assignmentId}`);
-            } else {
-                // Create new enrollment
-                enrollment = await this.prisma.deviceEnrollment.create({
+                })
+                : await this.prisma.deviceEnrollment.create({
                     data: {
                         deviceId,
                         cardAssignmentId: assignmentId,
@@ -880,7 +883,6 @@ class EnrollmentService {
                     },
                     include: { device: true, cardAssignment: true }
                 });
-            }
 
             this.logger.info(`Enrolled assignment ${assignmentId} on device ${deviceId}`);
             return enrollment;
@@ -1059,15 +1061,24 @@ class EnrollmentService {
     async syncToDevice(deviceId) {
         try {
             const enrollments = await this.prisma.deviceEnrollment.findMany({
-                where: { 
+                where: {
                     deviceId,
                     status: 'active'
                 },
-                include: { cardAssignment: true }
+                include: { cardAssignment: { include: { user: true } } }
             });
 
             const supremaDeviceId = await this.getSupremaDeviceId(deviceId);
             
+            // Group enrollments by device user so a user with multiple cards is
+            // pushed in a single SetCard call (SetCard replaces the whole list).
+            const enrollmentsByUser = new Map();
+            for (const enrollment of enrollments) {
+                const key = String(enrollment.deviceUserId);
+                if (!enrollmentsByUser.has(key)) enrollmentsByUser.set(key, []);
+                enrollmentsByUser.get(key).push(enrollment);
+            }
+
             const results = {
                 total: enrollments.length,
                 synced: 0,
@@ -1075,47 +1086,57 @@ class EnrollmentService {
                 errors: []
             };
 
-            for (const enrollment of enrollments) {
+            for (const [deviceUserId, userEnrollments] of enrollmentsByUser.entries()) {
                 try {
                     // IMPORTANT: Set numOfCard to 0 during initial enrollment
-                    // We will add the card separately using setUserCards
+                    // We will add the cards separately using setUserCards
                     // Setting numOfCard: 1 without providing card data causes "Invalid card data" error
                     const userData = {
-                        id: enrollment.deviceUserId,
-                        name: enrollment.cardAssignment.user?.name || `Employee ${enrollment.deviceUserId}`,
-                        numOfCard: 0  // Start with 0 cards, add card separately
+                        id: deviceUserId,
+                        name: userEnrollments[0].cardAssignment.user?.name || `Employee ${deviceUserId}`,
+                        numOfCard: 0  // Start with 0 cards, add cards separately
                     };
 
                     // Enroll user first (without cards)
                     await this.userService.enrollUsers(supremaDeviceId, [userData]);
-                    
-                    // Then set the card
-                    const cardData = [{
-                        userId: enrollment.deviceUserId,
-                        cardData: (() => {
-                            let hex = String(enrollment.cardAssignment.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
-                            if (hex.length % 2 === 1) hex = '0' + hex;
-                            return hex.toUpperCase();
-                        })(),
-                        cardType: this.getCardTypeCode('CSN'),
-                        // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
-                        cardSize: 32
-                    }];
 
-                    await this.userService.setUserCards(supremaDeviceId, cardData);
-                    
-                    await this.prisma.deviceEnrollment.update({
-                        where: { id: enrollment.id },
+                    // Then set ALL of this user's cards in one call
+                    const seenCardHex = new Set();
+                    const cardData = [];
+                    for (const enrollment of userEnrollments) {
+                        let hex = String(enrollment.cardAssignment.card_data || '').replace(/[^0-9A-Fa-f]/g, '');
+                        if (!hex) continue;
+                        if (hex.length % 2 === 1) hex = '0' + hex;
+                        hex = hex.toUpperCase();
+                        if (seenCardHex.has(hex)) continue;
+                        seenCardHex.add(hex);
+                        cardData.push({
+                            userId: deviceUserId,
+                            cardData: hex,
+                            cardType: this.getCardTypeCode('CSN'),
+                            // G-SDK: CSNCardData.size is ALWAYS 32 for CSN cards
+                            cardSize: 32
+                        });
+                    }
+
+                    if (cardData.length > 0) {
+                        await this.userService.setUserCards(supremaDeviceId, cardData);
+                    }
+
+                    await this.prisma.deviceEnrollment.updateMany({
+                        where: { id: { in: userEnrollments.map(e => e.id) } },
                         data: { lastSyncAt: new Date() }
                     });
 
-                    results.synced++;
+                    results.synced += userEnrollments.length;
                 } catch (error) {
-                    results.failed++;
-                    results.errors.push({
-                        enrollmentId: enrollment.id,
-                        error: error.message
-                    });
+                    results.failed += userEnrollments.length;
+                    for (const enrollment of userEnrollments) {
+                        results.errors.push({
+                            enrollmentId: enrollment.id,
+                            error: error.message
+                        });
+                    }
                 }
             }
 
@@ -1218,13 +1239,15 @@ class EnrollmentService {
                 const localUser = await this.prisma.user.findFirst({
                     where: { employee_id: parseInt(emp.employee_id) },
                 });
-                const cardAssignment = localUser
-                    ? await this.prisma.cardAssignment.findFirst({
+                const cards = localUser
+                    ? await this.prisma.cardAssignment.findMany({
                         where: { user_id: localUser.id, status: 'active' },
                         include: { enrollments: { include: { device: true } } },
+                        orderBy: { assignedAt: 'asc' },
                     })
-                    : null;
-                return { ...emp, hasCard: !!cardAssignment, cardAssignment };
+                    : [];
+                // cardAssignment kept (= first card) for backward compatibility.
+                return { ...emp, hasCard: cards.length > 0, cardCount: cards.length, cards, cardAssignment: cards[0] || null };
             }));
 
             return enriched;
@@ -1267,19 +1290,34 @@ class EnrollmentService {
                 const localUser = await this.prisma.user.findFirst({
                     where: { employee_id: parseInt(emp.employee_id) },
                 });
-                const cardAssignment = localUser
-                    ? await this.prisma.cardAssignment.findFirst({
+                const cards = localUser
+                    ? await this.prisma.cardAssignment.findMany({
                         where: { user_id: localUser.id, status: 'active' },
                         include: {
                             enrollments: { where: { status: 'active' }, include: { device: true } },
                         },
+                        orderBy: { assignedAt: 'asc' },
                     })
-                    : null;
+                    : [];
+                // Union of devices across all of the user's cards.
+                const enrolledDevices = [];
+                const seenDeviceIds = new Set();
+                for (const card of cards) {
+                    for (const e of card.enrollments || []) {
+                        if (e.device && !seenDeviceIds.has(e.device.id)) {
+                            seenDeviceIds.add(e.device.id);
+                            enrolledDevices.push(e.device);
+                        }
+                    }
+                }
                 return {
                     ...emp,
-                    hasCard: !!cardAssignment,
-                    cardAssignment,
-                    enrolledDevices: cardAssignment?.enrollments?.map(e => e.device) || [],
+                    hasCard: cards.length > 0,
+                    cardCount: cards.length,
+                    cards,
+                    // cardAssignment kept (= first card) for backward compatibility.
+                    cardAssignment: cards[0] || null,
+                    enrolledDevices,
                 };
             }));
 
@@ -1429,42 +1467,30 @@ class EnrollmentService {
 
             if (deviceDbId != null) {
                 // Upsert the device enrollment record without calling gRPC.
-                // Handle the two unique constraints (by assignment and by device-user) gracefully.
+                // Each card gets its own row keyed by (deviceId, cardAssignmentId);
+                // a user may hold multiple cards on the same device.
                 const dvUserId = String(deviceUserId);
 
-                const byDeviceUser = await tx.deviceEnrollment.findUnique({
+                await tx.deviceEnrollment.upsert({
                     where: {
-                        deviceId_deviceUserId: { deviceId: deviceDbId, deviceUserId: dvUserId }
+                        deviceId_cardAssignmentId: {
+                            deviceId: deviceDbId,
+                            cardAssignmentId: cardAssignment.id
+                        }
+                    },
+                    create: {
+                        deviceId: deviceDbId,
+                        cardAssignmentId: cardAssignment.id,
+                        deviceUserId: dvUserId,
+                        status: 'active',
+                        lastSyncAt: new Date()
+                    },
+                    update: {
+                        status: 'active',
+                        deviceUserId: dvUserId,
+                        lastSyncAt: new Date()
                     }
                 });
-
-                if (byDeviceUser) {
-                    await tx.deviceEnrollment.update({
-                        where: { id: byDeviceUser.id },
-                        data: { cardAssignmentId: cardAssignment.id, status: 'active', lastSyncAt: new Date() }
-                    });
-                } else {
-                    await tx.deviceEnrollment.upsert({
-                        where: {
-                            deviceId_cardAssignmentId: {
-                                deviceId: deviceDbId,
-                                cardAssignmentId: cardAssignment.id
-                            }
-                        },
-                        create: {
-                            deviceId: deviceDbId,
-                            cardAssignmentId: cardAssignment.id,
-                            deviceUserId: dvUserId,
-                            status: 'active',
-                            lastSyncAt: new Date()
-                        },
-                        update: {
-                            status: 'active',
-                            deviceUserId: dvUserId,
-                            lastSyncAt: new Date()
-                        }
-                    });
-                }
             }
 
             return cardAssignment;

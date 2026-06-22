@@ -1066,22 +1066,32 @@ class UserSyncService {
                 errors: []
             };
 
+            // A user may hold multiple cards (multiple assignments). enrollUserWithCard
+            // and updateUserCard always push the user's FULL active card set, so each
+            // user only needs to be handled once per sync run.
+            const handledUsers = new Set();
+
             // Process each card assignment from database
             for (const ca of cardAssignments) {
                 const userId = String(ca.user?.id ?? ca.user_id);
-                
+
                 try {
+                    // Always record the enrollment row for this specific card.
+                    if (dbDeviceId) {
+                        await this.updateEnrollmentRecord(dbDeviceId, ca.id, userId, 'active');
+                    }
+
+                    if (handledUsers.has(userId)) {
+                        continue; // Device cards for this user were already pushed.
+                    }
+                    handledUsers.add(userId);
+
                     if (!deviceUserIds.has(userId)) {
-                        // User not on device - add them
+                        // User not on device - add them (pushes all their cards)
                         await this.enrollUserWithCard(supremaDeviceId, ca);
                         stats.usersAdded++;
-                        
-                        // Update enrollment record
-                        if (dbDeviceId) {
-                            await this.updateEnrollmentRecord(dbDeviceId, ca.id, userId, 'active');
-                        }
                     } else {
-                        // User exists - update their card if needed
+                        // User exists - update their card set
                         await this.updateUserCard(supremaDeviceId, ca);
                         stats.usersUpdated++;
                         deviceUserIds.delete(userId); // Mark as processed
@@ -1139,6 +1149,39 @@ class UserSyncService {
      * @param {object} cardAssignment
      * @param {{ skipDuplicateCheck?: boolean }} [options]
      */
+    /**
+     * Build the userCardData array containing ALL of a user's active cards.
+     * SetCard replaces a user's whole card list, so every card the user holds
+     * must be sent together. `extra` (e.g. the assignment that triggered the
+     * sync) is merged in case it is not yet readable from the DB.
+     */
+    async buildActiveUserCardData(userId, extra = null) {
+        const normalizeHex = (value) => {
+            let hex = String(value || '').replace(/[^0-9A-Fa-f]/g, '');
+            if (!hex) return '';
+            if (hex.length % 2 === 1) hex = `0${hex}`;
+            return hex.toUpperCase();
+        };
+
+        const assignments = await this.prisma.cardAssignment.findMany({
+            where: { user_id: Number(userId), status: 'active' }
+        });
+
+        const seen = new Set();
+        const userCardData = [];
+        const pushCard = (rawCardData) => {
+            const hex = normalizeHex(rawCardData);
+            if (!hex || seen.has(hex)) return;
+            seen.add(hex);
+            userCardData.push({ userId: String(userId), cardData: hex });
+        };
+
+        for (const a of assignments) pushCard(a.card_data);
+        if (extra) pushCard(extra.card_data);
+
+        return userCardData;
+    }
+
     async enrollUserWithCard(deviceId, cardAssignment, options = {}) {
         try {
             const userId = String(cardAssignment.user?.id ?? cardAssignment.user_id);
@@ -1148,21 +1191,17 @@ class UserSyncService {
                 id: userId,
                 name: employeeName
             };
-            
+
             this.logger.info(`[EnrollUser] Creating user ${userId} on device ${deviceId}`);
             await this.userService.enrollUsers(deviceId, [userData]);
-            
-            // Then set their card
-            const cardData = cardAssignment.card_data;
-            const userCardData = [{
-                userId,
-                cardData
-            }];
 
-            this.logger.info(`[EnrollUser] Setting card for user ${userId}`);
+            // Then set ALL of the user's active cards (SetCard replaces the list)
+            const userCardData = await this.buildActiveUserCardData(userId, cardAssignment);
+
+            this.logger.info(`[EnrollUser] Setting ${userCardData.length} card(s) for user ${userId}`);
             await this.userService.setUserCards(deviceId, userCardData, options);
-            
-            this.logger.info(`[EnrollUser] Enrolled user ${userId} with card on device ${deviceId}`);
+
+            this.logger.info(`[EnrollUser] Enrolled user ${userId} with ${userCardData.length} card(s) on device ${deviceId}`);
         } catch (error) {
             const userId = String(cardAssignment.user?.id ?? cardAssignment.user_id);
             this.logger.error(`[EnrollUser] Error enrolling user ${userId}:`, error);
@@ -1176,14 +1215,12 @@ class UserSyncService {
     async updateUserCard(deviceId, cardAssignment) {
         try {
             const userId = String(cardAssignment.user?.id ?? cardAssignment.user_id);
-            const userCardData = [{
-                userId,
-                cardData: cardAssignment.card_data
-            }];
+            // Push ALL of the user's active cards (SetCard replaces the whole list)
+            const userCardData = await this.buildActiveUserCardData(userId, cardAssignment);
 
-            this.logger.info(`[UpdateCard] Updating card for user ${userId} on device ${deviceId}`);
+            this.logger.info(`[UpdateCard] Updating ${userCardData.length} card(s) for user ${userId} on device ${deviceId}`);
             await this.userService.setUserCards(deviceId, userCardData);
-            this.logger.info(`[UpdateCard] Card updated for user ${userId}`);
+            this.logger.info(`[UpdateCard] Cards updated for user ${userId}`);
         } catch (error) {
             const userId = String(cardAssignment.user?.id ?? cardAssignment.user_id);
             // Check for connection failures first
@@ -1221,57 +1258,27 @@ class UserSyncService {
         const now = new Date();
         const normalizedDeviceUserId = String(deviceUserId);
 
-        const byAssignment = await client.deviceEnrollment.findUnique({
+        // Each card has its own enrollment row keyed by (deviceId, cardAssignmentId).
+        // A user may hold several cards on a device, so we no longer repoint a
+        // single per-user row — we upsert this card's row independently.
+        return client.deviceEnrollment.upsert({
             where: {
                 deviceId_cardAssignmentId: {
                     deviceId: dbDeviceId,
                     cardAssignmentId
                 }
-            }
-        });
-
-        const byDeviceUser = await client.deviceEnrollment.findUnique({
-            where: {
-                deviceId_deviceUserId: {
-                    deviceId: dbDeviceId,
-                    deviceUserId: normalizedDeviceUserId
-                }
-            }
-        });
-
-        if (byDeviceUser && byDeviceUser.cardAssignmentId !== cardAssignmentId) {
-            if (byAssignment && byAssignment.id !== byDeviceUser.id) {
-                await client.deviceEnrollment.delete({ where: { id: byAssignment.id } });
-            }
-
-            return client.deviceEnrollment.update({
-                where: { id: byDeviceUser.id },
-                data: {
-                    cardAssignmentId,
-                    status,
-                    lastSyncAt: now
-                }
-            });
-        }
-
-        if (byAssignment) {
-            return client.deviceEnrollment.update({
-                where: { id: byAssignment.id },
-                data: {
-                    deviceUserId: normalizedDeviceUserId,
-                    status,
-                    lastSyncAt: now
-                }
-            });
-        }
-
-        return client.deviceEnrollment.create({
-            data: {
+            },
+            create: {
                 deviceId: dbDeviceId,
                 cardAssignmentId,
                 deviceUserId: normalizedDeviceUserId,
                 status,
                 enrolledAt: now,
+                lastSyncAt: now
+            },
+            update: {
+                deviceUserId: normalizedDeviceUserId,
+                status,
                 lastSyncAt: now
             }
         });
@@ -1418,7 +1425,12 @@ class UserSyncService {
             const candidates = [];
 
             for (const user of deviceUsers) {
-                if (!user.hasCard || !user.cardData) {
+                // A device user may hold multiple cards — import each of them.
+                const deviceCards = Array.isArray(user.cardsList) && user.cardsList.length > 0
+                    ? user.cardsList
+                    : (user.cardData ? [{ data: user.cardData }] : []);
+
+                if (deviceCards.length === 0) {
                     if ((user.numOfCard || 0) > 0) {
                         stats.invalidCards++;
                         stats.errors.push({
@@ -1430,22 +1442,24 @@ class UserSyncService {
                     continue;
                 }
 
-                const normalizedCardData = this.normalizeCardForStorage(user.cardData);
-                if (!normalizedCardData) {
-                    stats.invalidCards++;
-                    stats.errors.push({
-                        userId: user.userID,
-                        error: 'Device card data could not be normalized to storage hex'
-                    });
-                    stats.skipped++;
-                    continue;
-                }
+                for (const card of deviceCards) {
+                    const normalizedCardData = this.normalizeCardForStorage(card?.data ?? card?.cardData ?? card);
+                    if (!normalizedCardData) {
+                        stats.invalidCards++;
+                        stats.errors.push({
+                            userId: user.userID,
+                            error: 'Device card data could not be normalized to storage hex'
+                        });
+                        stats.skipped++;
+                        continue;
+                    }
 
-                candidates.push({
-                    ...user,
-                    userID: String(user.userID),
-                    cardData: normalizedCardData
-                });
+                    candidates.push({
+                        ...user,
+                        userID: String(user.userID),
+                        cardData: normalizedCardData
+                    });
+                }
             }
 
             const employeeIds = [...new Set(candidates.map(user => user.userID))];
@@ -1475,21 +1489,15 @@ class UserSyncService {
                 : [];
 
             const byCardData = new Map();
-            const activeByUserId = new Map();
             for (const assignment of existingAssignments) {
                 if (!byCardData.has(assignment.card_data)) {
                     byCardData.set(assignment.card_data, assignment);
-                }
-                const uid = String(assignment.user?.id || '');
-                if (uid && assignment.status === 'active' && !activeByUserId.has(uid)) {
-                    activeByUserId.set(uid, assignment);
                 }
             }
 
             for (const user of candidates) {
                 try {
                     const existingCard = byCardData.get(user.cardData);
-                    const existingUserCard = activeByUserId.get(user.userID);
                     const localUser = userById.get(user.userID);
 
                     if (existingCard) {
@@ -1514,12 +1522,6 @@ class UserSyncService {
                             stats.enrolled++;
                         }
                         stats.skipped++;
-                    } else if (existingUserCard && existingUserCard.card_data !== user.cardData) {
-                        stats.conflicts++;
-                        stats.errors.push({
-                            userId: user.userID,
-                            error: `User already has active card assignment ${existingUserCard.id}`
-                        });
                     } else if (!localUser) {
                         stats.skipped++;
                         stats.errors.push({
@@ -1536,7 +1538,6 @@ class UserSyncService {
                         });
 
                         byCardData.set(cardAssignment.card_data, cardAssignment);
-                        activeByEmployee.set(user.userID, cardAssignment);
 
                         stats.imported++;
                         if (dbDevice) stats.enrolled++;

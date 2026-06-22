@@ -552,8 +552,8 @@ export default function Enrollment() {
                   {employees.map(emp => (
                     <div 
                       key={emp.employee_id}
-                      className={`employee-item ${selectedEmployee?.employee_id === emp.employee_id ? 'selected' : ''} ${emp.hasCard ? 'has-card' : ''}`}
-                      onClick={() => !emp.hasCard && setSelectedEmployee(emp)}
+                      className={`employee-item ${selectedEmployee?.employee_id === emp.employee_id ? 'selected' : ''} `}
+                      onClick={() =>  setSelectedEmployee(emp)}
                     >
                       <div className="employee-info">
                         <span className="employee-name">{emp.name}</span>
@@ -561,10 +561,12 @@ export default function Enrollment() {
                         {emp.department && <span className="employee-dept">{emp.department}</span>}
                       </div>
                       <div className="employee-status">
-                        {emp.hasCard ? (
-                          <span className="badge badge-warning">🎫 Has Card</span>
+                        {(emp.cardCount ?? (emp.hasCard ? 1 : 0)) > 0 ? (
+                          <span className="badge badge-warning">
+                            🎫 {emp.cardCount ?? 1} card{(emp.cardCount ?? 1) > 1 ? 's' : ''}
+                          </span>
                         ) : (
-                          <span className="badge badge-success">✅ Available</span>
+                          <span className="badge badge-success">✅ No cards</span>
                         )}
                       </div>
                     </div>
@@ -581,6 +583,19 @@ export default function Enrollment() {
                 <div className="selected-employee">
                   <h4>✅ Selected: {selectedEmployee.name} (ID: {selectedEmployee.employee_id})</h4>
                   {selectedEmployee.department && <p>Department: {selectedEmployee.department}</p>}
+                  {selectedEmployee.cards?.length > 0 && (
+                    <div className="existing-cards">
+                      <strong>Existing cards ({selectedEmployee.cards.length}):</strong>
+                      <ul>
+                        {selectedEmployee.cards.map(c => (
+                          <li key={c.id}>
+                            <code className="card-number">{decodeHexToDecimal(c.card_data)}</code>
+                          </li>
+                        ))}
+                      </ul>
+                      <small>The scanned card will be added <em>in addition</em> to these.</small>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

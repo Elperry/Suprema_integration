@@ -843,14 +843,24 @@ class SupremaUserService extends EventEmitter {
                 }
             }
 
-            // STEP 2: Build the card data protobuf messages
-            const userCards = userCardData.map(data => {
-                const userCard = new userMessage.UserCard();
-                
-                // Log the exact userId being set
-                this.logger.info(`[setUserCards] Setting userId: ${data.userId} (type: ${typeof data.userId})`);
-                userCard.setUserid(String(data.userId));  // Ensure it's a string
-                
+            // STEP 2: Build the card data protobuf messages.
+            // Group cards by userId so a user holding multiple cards becomes ONE
+            // UserCard with multiple cards. SetCard replaces a user's entire card
+            // list, so all of a user's cards must be sent together in one UserCard.
+            const userCardMap = new Map();
+            const userCards = [];
+            for (const data of userCardData) {
+                const userIdKey = String(data.userId);
+                let userCard = userCardMap.get(userIdKey);
+                if (!userCard) {
+                    // Log the exact userId being set
+                    this.logger.info(`[setUserCards] Setting userId: ${data.userId} (type: ${typeof data.userId})`);
+                    userCard = new userMessage.UserCard();
+                    userCard.setUserid(userIdKey);  // Ensure it's a string
+                    userCardMap.set(userIdKey, userCard);
+                    userCards.push(userCard);
+                }
+
                 // Create CSNCardData protobuf message
                 const csnCardData = new cardMessage.CSNCardData();
                 
@@ -955,9 +965,7 @@ class SupremaUserService extends EventEmitter {
                 // Log the UserCard protobuf
                 const userCardObj = userCard.toObject();
                 this.logger.info(`[setUserCards] UserCard protobuf: ${JSON.stringify(userCardObj)}`);
-
-                return userCard;
-            });
+            }
 
             // Convert deviceId to number if it's a string
             const numericDeviceId = typeof deviceId === 'string' ? parseInt(deviceId, 10) : deviceId;

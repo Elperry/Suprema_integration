@@ -374,7 +374,7 @@ class EventReplicationService {
             devices = devices.filter((device) => wanted.has(String(device.id)));
         }
 
-        return this._syncDeviceList(devices, source);
+        return this._syncDeviceList(devices, source, { fromStart: options.fromStart === true });
     }
 
     async syncDeviceNow(dbDeviceId, options = {}) {
@@ -405,10 +405,10 @@ class EventReplicationService {
             };
         }
 
-        return this._syncDevice(deviceRecord.id, supremaId, deviceRecord, source);
+        return this._syncDevice(deviceRecord.id, supremaId, deviceRecord, source, { fromStart: options.fromStart === true });
     }
 
-    async _syncDeviceList(devices, source) {
+    async _syncDeviceList(devices, source, options = {}) {
         const tasks = [];
 
         for (const device of devices) {
@@ -426,7 +426,7 @@ class EventReplicationService {
                 continue;
             }
 
-            tasks.push(this._syncDevice(device.id, supremaId, device, source));
+            tasks.push(this._syncDevice(device.id, supremaId, device, source, options));
         }
 
         return Promise.all(tasks);
@@ -446,7 +446,7 @@ class EventReplicationService {
         await this._syncDevice(deviceRecord.id, supremaId, deviceRecord, 'reconnect');
     }
 
-    async _syncDevice(dbDeviceId, supremaId, deviceRecord, source = 'periodic') {
+    async _syncDevice(dbDeviceId, supremaId, deviceRecord, source = 'periodic', options = {}) {
         const lockKey = String(dbDeviceId);
         if (this._syncing.has(lockKey)) {
             return {
@@ -495,9 +495,12 @@ class EventReplicationService {
 
             this._recordAttempt(deviceRecord.id);
 
-            // FIX: Use independent replication cursor to avoid real-time race condition jump
+            // FIX: Use independent replication cursor to avoid real-time race condition jump.
+            // fromStart forces a full historical resync from event ID 0, ignoring the
+            // cursor — safe because inserts dedupe on (deviceId, supremaEventId).
+            const fromStart = options.fromStart === true;
             const cursorId = deviceRecord.last_replicated_event_id ? Number(deviceRecord.last_replicated_event_id) : 0;
-            const startEventId = cursorId > 0 ? cursorId + 1 : 0;
+            const startEventId = fromStart ? 0 : (cursorId > 0 ? cursorId + 1 : 0);
             let lastObservedEventId = cursorId;
 
             this.logger.info('[EventReplication] Syncing device', {
@@ -505,12 +508,18 @@ class EventReplicationService {
                 dbId: deviceRecord.id,
                 source,
                 startEventId,
+                fromStart,
             });
 
             let totalInserted = 0;
             let currentStartId = startEventId;
 
-            for (let batch = 0; batch < this.maxBatches; batch++) {
+            // A full resync may need many more batches than a routine catch-up.
+            // The loop still terminates naturally when the device returns a short
+            // batch; this cap is only a runaway backstop.
+            const batchCap = fromStart ? Math.max(this.maxBatches, 10000) : this.maxBatches;
+
+            for (let batch = 0; batch < batchCap; batch++) {
                 let events;
 
                 try {

@@ -130,7 +130,9 @@ model DeviceEnrollment {
   cardAssignment  CardAssignment @relation(fields: [cardAssignmentId], references: [id], onDelete: Cascade)
 
   @@unique([deviceId, cardAssignmentId])
-  @@unique([deviceId, deviceUserId])
+  // NOTE: intentionally NOT unique on [deviceId, deviceUserId] — a user may hold
+  // multiple cards, i.e. several enrollment rows for the same device user.
+  @@index([deviceId, deviceUserId])
   @@index([status])
   @@map("device_enrollments")
 }

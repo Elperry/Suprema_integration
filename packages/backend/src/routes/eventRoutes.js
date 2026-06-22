@@ -76,7 +76,7 @@ export default (services) => {
         supremaEventId: event.supremaEventId.toString()
     });
 
-    const runBackgroundEventSync = async ({ req, res, processType, description, source, deviceIds = null }) => {
+    const runBackgroundEventSync = async ({ req, res, processType, description, source, deviceIds = null, fromStart = false }) => {
         const ps = services.processService;
         const eventReplication = services.eventReplication;
 
@@ -114,7 +114,7 @@ export default (services) => {
                 ps.update(processId, { status: 'running' });
                 ps.log(processId, 'Delegating event sync to EventReplicationService…');
 
-                const results = await eventReplication.syncAllNow({ deviceIds: devices.map((device) => device.id), source });
+                const results = await eventReplication.syncAllNow({ deviceIds: devices.map((device) => device.id), source, fromStart });
 
                 for (const result of results) {
                     if (ps.isCancelled(processId)) {
@@ -1066,7 +1066,11 @@ export default (services) => {
     router.post('/sync/:deviceId', asyncHandler(async (req, res) => {
         try {
             const { deviceId } = req.params;
-            const result = await services.eventReplication.syncDeviceNow(parseInt(deviceId), { source: 'manual' });
+            // fullResync (alias fromStart) re-pulls the device's entire event history
+            // from event ID 0, not just events newer than the replication cursor.
+            const fromStart = req.body?.fullResync === true || req.body?.fromStart === true
+                || req.query?.fullResync === 'true' || req.query?.fromStart === 'true';
+            const result = await services.eventReplication.syncDeviceNow(parseInt(deviceId), { source: 'manual', fromStart });
 
             if (!result.success) {
                 const statusCode = result.error === 'Device not found' ? 404 : 409;
@@ -1099,12 +1103,17 @@ export default (services) => {
      * POST /api/events/sync-all
      */
     router.post('/sync-all', asyncHandler(async (req, res) => {
+        const fromStart = req.body?.fullResync === true || req.body?.fromStart === true
+            || req.query?.fullResync === 'true' || req.query?.fromStart === 'true';
         await runBackgroundEventSync({
             req,
             res,
             processType: 'event-sync-all',
-            description: 'Sync events from all devices -> database',
+            description: fromStart
+                ? 'Full resync of ALL events from all devices -> database'
+                : 'Sync events from all devices -> database',
             source: 'manual',
+            fromStart,
         });
     }));
 

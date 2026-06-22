@@ -292,15 +292,18 @@ export default function Events() {
     loadEvents()
   }, [page])
 
-  const handleSyncAll = async () => {
+  const handleSyncAll = async (fullResync = false) => {
+    if (fullResync && !window.confirm('Pull the ENTIRE event history from every device? This can take a while for devices with many events. Existing events are skipped (no duplicates).')) {
+      return
+    }
     setSyncing(true)
     setError(null)
     setSuccessMessage(null)
-    
+
     try {
-      const res = await eventAPI.syncAll()
+      const res = await eventAPI.syncAll(fullResync)
       setSuccessMessage(res.data?.message || 'Background event sync started')
-    } catch (e) { 
+    } catch (e) {
       setError(e.response?.data?.message || e.message || 'Failed to sync events')
     } finally {
       setSyncing(false)
@@ -475,16 +478,24 @@ export default function Events() {
         <div className="card-header">
           <h3>🔄 Event Synchronization</h3>
           <div className="btn-group">
-            <button 
-              onClick={handleSyncAll} 
+            <button
+              onClick={() => handleSyncAll(false)}
               className="btn btn-primary"
               disabled={syncing}
             >
-              {syncing ? '⏳ Syncing...' : '🔄 Sync All Devices'}
+              {syncing ? '⏳ Syncing...' : '🔄 Sync New Events'}
             </button>
-            <button 
-              onClick={() => loadEvents(true)} 
-              className="btn btn-secondary" 
+            <button
+              onClick={() => handleSyncAll(true)}
+              className="btn btn-warning"
+              disabled={syncing}
+              title="Re-pull the entire event history from every device (skips events already stored)"
+            >
+              {syncing ? '⏳ Syncing...' : '🗄️ Sync All History'}
+            </button>
+            <button
+              onClick={() => loadEvents(true)}
+              className="btn btn-secondary"
               disabled={loading}
             >
               🔃 Refresh

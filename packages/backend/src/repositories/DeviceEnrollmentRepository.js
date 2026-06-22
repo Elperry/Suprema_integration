@@ -79,17 +79,19 @@ export class DeviceEnrollmentRepository extends BaseRepository {
     }
 
     /**
-     * Find by device user ID
-     * 
+     * Find enrollments by device user ID.
+     * A user may hold multiple cards on a device, so this returns every matching
+     * enrollment row rather than a single one.
+     *
      * @param {number} deviceId - Device database ID
      * @param {string} deviceUserId - User ID on the device
-     * @returns {Promise<Object|null>}
+     * @returns {Promise<Array>}
      */
     async findByDeviceUserId(deviceId, deviceUserId) {
-        return this.findOne({
-            deviceId_deviceUserId: { deviceId, deviceUserId }
-        }, {
-            include: { device: true, cardAssignment: true }
+        return this.findMany({
+            where: { deviceId, deviceUserId },
+            include: { device: true, cardAssignment: true },
+            orderBy: { enrolledAt: 'desc' }
         });
     }
 
