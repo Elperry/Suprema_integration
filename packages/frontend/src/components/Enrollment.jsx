@@ -368,11 +368,25 @@ export default function Enrollment() {
 
   // Toggle device selection
   const toggleDeviceSelection = (deviceId) => {
-    setSelectedDevices(prev => 
+    setSelectedDevices(prev =>
       prev.includes(deviceId)
         ? prev.filter(d => d !== deviceId)
         : [...prev, deviceId]
     )
+  }
+
+  // Select all given devices (or clear if all already selected)
+  const toggleSelectAllDevices = (deviceIds) => {
+    const ids = deviceIds.map(String)
+    setSelectedDevices(prev => {
+      const allSelected = ids.length > 0 && ids.every(id => prev.includes(id))
+      if (allSelected) {
+        // Deselect this set, keep any others already selected
+        return prev.filter(id => !ids.includes(id))
+      }
+      // Add any missing ids
+      return [...new Set([...prev, ...ids])]
+    })
   }
 
   const getStatusBadge = (status) => {
@@ -608,7 +622,20 @@ export default function Enrollment() {
               
               {/* Device Selection */}
               <div className="form-group">
-                <label>Select Devices to Enroll On (Optional)</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <label>Select Devices to Enroll On (Optional)</label>
+                  {connectedDevices.length > 0 && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => toggleSelectAllDevices(connectedDevices.map(d => d.id))}
+                    >
+                      {connectedDevices.every(d => selectedDevices.includes(String(d.id)))
+                        ? '☐ Clear all'
+                        : `☑️ Select all (${connectedDevices.length})`}
+                    </button>
+                  )}
+                </div>
                 <div className="device-checkboxes">
                   {connectedDevices.map(d => (
                     <label key={d.id} className="checkbox-item">
@@ -830,7 +857,26 @@ export default function Enrollment() {
               </p>
               
               <div className="form-group">
-                <label>Select Devices:</label>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <label>Select Devices:</label>
+                  {(() => {
+                    const selectableIds = connectedDevices
+                      .filter(d => !selectedAssignment.enrollments?.some(e => e.deviceId === d.id && e.status === 'active'))
+                      .map(d => d.id)
+                    if (selectableIds.length === 0) return null
+                    return (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => toggleSelectAllDevices(selectableIds)}
+                      >
+                        {selectableIds.every(id => selectedDevices.includes(String(id)))
+                          ? '☐ Clear all'
+                          : `☑️ Select all (${selectableIds.length})`}
+                      </button>
+                    )
+                  })()}
+                </div>
                 <div className="device-checkboxes">
                   {connectedDevices.map(d => {
                     const isEnrolled = selectedAssignment.enrollments?.some(

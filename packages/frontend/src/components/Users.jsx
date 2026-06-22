@@ -561,6 +561,14 @@ export default function Users() {
     setBulkDevices(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id])
   }
 
+  const toggleAllBulkDevices = () => {
+    setBulkDevices(p => {
+      const allIds = connectedDevices.map(d => d.id)
+      const allSelected = allIds.length > 0 && allIds.every(id => p.includes(id))
+      return allSelected ? [] : allIds
+    })
+  }
+
   const handleBulkExecute = async () => {
     if (bulkDevices.length === 0) { setError('Select at least one device'); return }
     setBulkRunning(true)
@@ -3120,14 +3128,26 @@ export default function Users() {
                 <div className="device-checklist" style={{ maxHeight: 250, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 8 }}>
                   {connectedDevices.length === 0 ? (
                     <p style={{ color: '#94a3b8', textAlign: 'center', padding: 12 }}>No online devices available.</p>
-                  ) : connectedDevices.map(d => (
+                  ) : (
+                  <>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderRadius: 6, fontWeight: 600, borderBottom: '1px solid #e2e8f0', marginBottom: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={connectedDevices.length > 0 && connectedDevices.every(d => bulkDevices.includes(d.id))}
+                        onChange={toggleAllBulkDevices}
+                      />
+                      <span>Select all devices ({connectedDevices.length})</span>
+                    </label>
+                    {connectedDevices.map(d => (
                     <label key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', cursor: 'pointer', borderRadius: 6 }}>
                       <input type="checkbox" checked={bulkDevices.includes(d.id)} onChange={() => toggleBulkDevice(d.id)} />
                       <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />
                       <span>{d.name || d.ip}</span>
                       <span style={{ color: '#94a3b8', fontSize: 12, marginLeft: 'auto' }}>{d.ip}:{d.port}</span>
                     </label>
-                  ))}
+                    ))}
+                  </>
+                  )}
                 </div>
               )}
             </div>
