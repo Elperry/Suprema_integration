@@ -5,6 +5,7 @@
 
 import express from 'express';
 import { asyncHandler } from '../core/errors/index.js';
+import { matchesEmployeeSearch } from '../utils/employeeSearch.js';
 const router = express.Router();
 
 export default (services) => {
@@ -36,12 +37,8 @@ export default (services) => {
 
             // Server-side search filtering
             if (req.query.search) {
-                const term = req.query.search.toLowerCase();
-                employees = employees.filter(e =>
-                    (e.name || e.full_name || e.employee_name || '').toLowerCase().includes(term) ||
-                    (e.email || '').toLowerCase().includes(term) ||
-                    String(e.id || e.employee_id || '').toLowerCase().includes(term)
-                );
+                const term = req.query.search;
+                employees = employees.filter((employee) => matchesEmployeeSearch(employee, term));
             }
 
             const withCards = employees.filter((employee) => Boolean(employee.has_card || employee.card)).length;
