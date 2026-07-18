@@ -540,8 +540,9 @@ export default function Enrollment() {
                     type="text"
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
-                    placeholder="Search by name, ID, or department..."
+                    placeholder="Search by name, ID, code, or department..."
                     className="form-control"
+                    autoFocus
                   />
                 </div>
                 <button 
@@ -572,6 +573,7 @@ export default function Enrollment() {
                       <div className="employee-info">
                         <span className="employee-name">{emp.name}</span>
                         <span className="employee-id">ID: {emp.employee_id}</span>
+                        {emp.code && <span className="employee-id">Code: {emp.code}</span>}
                         {emp.department && <span className="employee-dept">{emp.department}</span>}
                       </div>
                       <div className="employee-status">
