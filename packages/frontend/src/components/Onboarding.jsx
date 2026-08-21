@@ -1,26 +1,21 @@
 import { useState, useEffect, useCallback } from 'react'
 import { enrollmentAPI, deviceAPI, doorAPI, userAPI } from '../services/api'
 import { ErrorBanner } from './shared'
+import EmployeeStep from './onboarding/EmployeeStep'
+import CardStep from './onboarding/CardStep'
+import DeviceStep from './onboarding/DeviceStep'
+import AccessStep from './onboarding/AccessStep'
+import ConfirmStep from './onboarding/ConfirmStep'
+import { decodeHexToDecimal } from './onboarding/cardFormat'
 import './Onboarding.css'
 
 const STEPS = [
   { id: 'employee', label: 'Select Employee', icon: '👤' },
-  { id: 'card', label: 'Assign Card', icon: '💳' },
+  { id: 'card', label: 'Assign Cards', icon: '💳' },
   { id: 'devices', label: 'Enroll on Devices', icon: '📱' },
   { id: 'access', label: 'Access Group', icon: '🚪' },
   { id: 'confirm', label: 'Confirm', icon: '✅' },
 ]
-
-const decodeHexToDecimal = (hexData) => {
-  try {
-    if (!hexData) return 'N/A'
-    let cleanHex = hexData.replace(/\s/g, '').toUpperCase()
-    if (cleanHex.length % 2 === 1) cleanHex = '0' + cleanHex
-    let significant = cleanHex.replace(/^0+/, '') || '0'
-    if (significant.length % 2 === 1) significant = '0' + significant
-    return BigInt('0x' + significant).toString()
-  } catch { return 'Error' }
-}
 
 export default function Onboarding() {
   const [currentStep, setCurrentStep] = useState(0)
@@ -39,7 +34,8 @@ export default function Onboarding() {
   const [selectedEmployee, setSelectedEmployee] = useState(null)
   const [selectedDevice, setSelectedDevice] = useState('')
   const [scannedCard, setScannedCard] = useState(null)
-  const [cardAssignment, setCardAssignment] = useState(null)
+  // All card assignments created during this onboarding session (one per card).
+  const [cardAssignments, setCardAssignments] = useState([])
   const [selectedDevices, setSelectedDevices] = useState([])
   const [selectedAccessGroup, setSelectedAccessGroup] = useState('')
   const [enrollmentResult, setEnrollmentResult] = useState(null)
@@ -118,9 +114,17 @@ export default function Onboarding() {
       setError(null)
       setScannedCard(null)
       const res = await enrollmentAPI.scanCard(selectedDevice, 15)
-      setScannedCard(res.data.data)
-      if (res.data.data.isAssigned) {
-        setError('This card is already assigned. Please use a different card.')
+      const card = res.data.data
+      setScannedCard(card)
+      if (card.isAssigned) {
+        const owner = card.existingAssignment?.user?.name
+        const isSameEmployee =
+          card.existingAssignment?.user?.employee_id === selectedEmployee?.employee_id
+        setError(
+          isSameEmployee
+            ? `This card is already assigned to ${selectedEmployee?.name}. Scan a different card to add another.`
+            : `This card is already assigned${owner ? ` to ${owner}` : ''}. Please use a different card.`
+        )
       }
     } catch (e) {
       setError(e.response?.data?.message || e.message || 'Failed to scan card')
@@ -129,7 +133,7 @@ export default function Onboarding() {
     }
   }
 
-  // Assign card
+  // Assign the scanned card — can be repeated to give the employee several cards.
   const handleAssignCard = async () => {
     if (!scannedCard || !selectedEmployee) return
     const cardData = scannedCard.fullData || scannedCard.csn || scannedCard.data || scannedCard.cardData
@@ -145,9 +149,11 @@ export default function Onboarding() {
         cardSize: 32,
         cardType: scannedCard.type || 'CSN',
       })
-      setCardAssignment(res.data.data)
-      setSuccess('Card assigned successfully!')
-      setCurrentStep(2) // Move to devices step
+      setCardAssignments(prev => [...prev, res.data.data])
+      setScannedCard(null)
+      // Devices must re-enroll to pick up the newly added card.
+      setEnrollmentResult(null)
+      setSuccess(`Card ${decodeHexToDecimal(cardData)} assigned! Scan another card or continue to devices.`)
     } catch (e) {
       setError(e.response?.data?.message || e.message || 'Failed to assign card')
     } finally {
@@ -155,24 +161,53 @@ export default function Onboarding() {
     }
   }
 
-  // Enroll on devices
+  // Enroll every assigned card on the selected devices. Each enroll call pushes
+  // the employee's full active card set to the device; per-assignment calls keep
+  // one DeviceEnrollment row per card in the database.
   const handleEnrollOnDevices = async () => {
-    if (!cardAssignment || selectedDevices.length === 0) return
-    try {
-      setLoading(true)
-      setError(null)
-      const res = await enrollmentAPI.enrollOnMultipleDevices(
-        selectedDevices.map(d => parseInt(d)),
-        cardAssignment.id
-      )
-      setEnrollmentResult(res.data.data)
-      setSuccess(`Enrolled on ${res.data.data.successful?.length || 0}/${selectedDevices.length} devices`)
-      setCurrentStep(3) // Move to access group
-    } catch (e) {
-      setError(e.response?.data?.message || e.message || 'Enrollment failed')
-    } finally {
-      setLoading(false)
+    if (cardAssignments.length === 0 || selectedDevices.length === 0) return
+    setLoading(true)
+    setError(null)
+    const deviceIds = selectedDevices.map(d => parseInt(d))
+    const deviceOk = new Map() // deviceId -> false if any card failed on it
+    const failures = []
+
+    for (const assignment of cardAssignments) {
+      let data = null
+      try {
+        const res = await enrollmentAPI.enrollOnMultipleDevices(deviceIds, assignment.id)
+        data = res.data?.data
+      } catch (e) {
+        data = e.response?.data?.data || null
+        if (!data) {
+          failures.push(e.response?.data?.message || e.message)
+          deviceIds.forEach(id => deviceOk.set(id, false))
+          continue
+        }
+      }
+      for (const entry of data?.successful || []) {
+        if (!deviceOk.has(entry.deviceId)) deviceOk.set(entry.deviceId, true)
+      }
+      for (const entry of data?.failed || []) {
+        deviceOk.set(entry.deviceId, false)
+        failures.push(`Device ${entry.deviceId}: ${entry.error}`)
+      }
     }
+
+    const successful = [...deviceOk].filter(([, ok]) => ok).map(([deviceId]) => ({ deviceId }))
+    const failed = [...deviceOk].filter(([, ok]) => !ok).map(([deviceId]) => ({ deviceId }))
+    setEnrollmentResult({ successful, failed })
+    setLoading(false)
+
+    if (successful.length === 0) {
+      setError(failures[0] || 'Enrollment failed on all devices')
+      return
+    }
+    if (failures.length > 0) {
+      setError(`Some enrollments failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '…' : ''}`)
+    }
+    setSuccess(`Enrolled ${cardAssignments.length} card(s) on ${successful.length}/${deviceIds.length} devices`)
+    setCurrentStep(3)
   }
 
   // Complete onboarding
@@ -208,7 +243,7 @@ export default function Onboarding() {
     setSelectedEmployee(null)
     setSelectedDevice('')
     setScannedCard(null)
-    setCardAssignment(null)
+    setCardAssignments([])
     setSelectedDevices([])
     setSelectedAccessGroup('')
     setEnrollmentResult(null)
@@ -225,21 +260,20 @@ export default function Onboarding() {
     )
   }
 
-  const connectedDevices = devices.filter(d => d.status === 'connected')
-  const canProceed = () => {
-    switch (currentStep) {
-      case 0: return !!selectedEmployee
-      case 1: return !!cardAssignment
-      case 2: return selectedDevices.length > 0
-      case 3: return true // access group is optional
-      default: return false
-    }
+  const selectEmployee = (emp) => {
+    setSelectedEmployee(emp)
+    // A different employee invalidates any cards/enrollments from a prior pick.
+    setCardAssignments([])
+    setScannedCard(null)
+    setEnrollmentResult(null)
   }
+
+  const connectedDevices = devices.filter(d => d.status === 'connected')
 
   return (
     <div className="page">
       <h2>🚀 Employee Onboarding</h2>
-      <p className="onboard-subtitle">Walk through a guided process to set up a new employee with card, device enrollment, and access control.</p>
+      <p className="onboard-subtitle">Walk through a guided process to set up a new employee with cards, device enrollment, and access control.</p>
 
       {/* Progress Steps */}
       <div className="onboard-progress">
@@ -262,252 +296,72 @@ export default function Onboarding() {
         </div>
       )}
 
-      {/* Step 0: Select Employee */}
       {currentStep === 0 && (
-        <div className="card onboard-card">
-          <h3>👤 Step 1: Select Employee</h3>
-          <p>Search for the employee you want to onboard.</p>
-
-          <div className="employee-search-row">
-            <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search by name, ID, or department..."
-                className="form-control"
-              />
-            </div>
-            <button className="btn btn-secondary" onClick={loadAllEmployees} disabled={loading}>
-              {loading ? '⏳' : '📋'} Load All
-            </button>
-          </div>
-
-          {employees.length > 0 && (
-            <div className="onboard-employee-list">
-              {employees.map(emp => (
-                <div
-                  key={emp.employee_id}
-                  className={`onboard-employee-item ${selectedEmployee?.employee_id === emp.employee_id ? 'selected' : ''} ${emp.hasCard ? 'has-card' : ''}`}
-                  onClick={() => !emp.hasCard && setSelectedEmployee(emp)}
-                >
-                  <div className="onboard-emp-info">
-                    <strong>{emp.name}</strong>
-                    <span className="onboard-emp-id">ID: {emp.employee_id}</span>
-                    {emp.department && <span className="onboard-emp-dept">{emp.department}</span>}
-                  </div>
-                  <div>
-                    {emp.hasCard ? (
-                      <span className="badge badge-warning">Already has card</span>
-                    ) : selectedEmployee?.employee_id === emp.employee_id ? (
-                      <span className="badge badge-success">✓ Selected</span>
-                    ) : (
-                      <span className="badge badge-secondary">Available</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {selectedEmployee && (
-            <div className="onboard-selected-summary">
-              <strong>Selected:</strong> {selectedEmployee.name} (ID: {selectedEmployee.employee_id})
-              {selectedEmployee.department && ` — ${selectedEmployee.department}`}
-            </div>
-          )}
-
-          <div className="onboard-actions">
-            <button className="btn btn-primary" disabled={!canProceed()} onClick={() => setCurrentStep(1)}>
-              Next: Assign Card →
-            </button>
-          </div>
-        </div>
+        <EmployeeStep
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          employees={employees}
+          loading={loading}
+          onLoadAll={loadAllEmployees}
+          selectedEmployee={selectedEmployee}
+          onSelect={selectEmployee}
+          onNext={() => setCurrentStep(1)}
+        />
       )}
 
-      {/* Step 1: Scan & Assign Card */}
       {currentStep === 1 && (
-        <div className="card onboard-card">
-          <h3>💳 Step 2: Assign Card</h3>
-          <p>Scan a card on a connected device, then assign it to <strong>{selectedEmployee?.name}</strong>.</p>
-
-          <div className="onboard-scan-row">
-            <select
-              value={selectedDevice}
-              onChange={e => setSelectedDevice(e.target.value)}
-              className="form-control"
-              style={{ maxWidth: 300 }}
-            >
-              <option value="">-- Select scanning device --</option>
-              {connectedDevices.map(d => (
-                <option key={d.id} value={d.id}>🟢 {d.name} ({d.ip})</option>
-              ))}
-            </select>
-            <button className="btn btn-primary" onClick={handleScanCard} disabled={!selectedDevice || scanning}>
-              {scanning ? '📡 Scanning...' : '🔍 Scan Card'}
-            </button>
-          </div>
-
-          {scanning && (
-            <div className="onboard-scanning">
-              <div className="onboard-scan-pulse"></div>
-              <p>Waiting for card... Place card on the reader.</p>
-            </div>
-          )}
-
-          {scannedCard && !scannedCard.isAssigned && (
-            <div className="onboard-scanned-card">
-              <h4>📇 Card Detected</h4>
-              <p><strong>Number:</strong> <code>{decodeHexToDecimal(scannedCard.csn || scannedCard.data)}</code></p>
-              <p><strong>Type:</strong> {scannedCard.type || 'CSN'}</p>
-              <button className="btn btn-primary" onClick={handleAssignCard} disabled={loading}>
-                {loading ? 'Assigning...' : `Assign to ${selectedEmployee?.name}`}
-              </button>
-            </div>
-          )}
-
-          {cardAssignment && (
-            <div className="onboard-success-banner">
-              ✅ Card assigned to {selectedEmployee?.name}
-            </div>
-          )}
-
-          <div className="onboard-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(0)}>← Back</button>
-            <button className="btn btn-primary" disabled={!cardAssignment} onClick={() => setCurrentStep(2)}>
-              Next: Devices →
-            </button>
-          </div>
-        </div>
+        <CardStep
+          selectedEmployee={selectedEmployee}
+          connectedDevices={connectedDevices}
+          selectedDevice={selectedDevice}
+          setSelectedDevice={setSelectedDevice}
+          scanning={scanning}
+          scannedCard={scannedCard}
+          onScan={handleScanCard}
+          onAssign={handleAssignCard}
+          cardAssignments={cardAssignments}
+          loading={loading}
+          onBack={() => setCurrentStep(0)}
+          onNext={() => setCurrentStep(2)}
+        />
       )}
 
-      {/* Step 2: Enroll on Devices */}
       {currentStep === 2 && (
-        <div className="card onboard-card">
-          <h3>📱 Step 3: Enroll on Devices</h3>
-          <p>Select which devices should recognize <strong>{selectedEmployee?.name}</strong>'s card.</p>
-
-          {connectedDevices.length === 0 ? (
-            <div className="bio-empty" style={{ padding: '30px' }}>
-              <p>No connected devices available.</p>
-            </div>
-          ) : (
-            <div className="onboard-device-grid">
-              {connectedDevices.map(d => (
-                <label key={d.id} className={`onboard-device-item ${selectedDevices.includes(String(d.id)) ? 'selected' : ''}`}>
-                  <input
-                    type="checkbox"
-                    checked={selectedDevices.includes(String(d.id))}
-                    onChange={() => toggleDeviceSelection(String(d.id))}
-                  />
-                  <div className="onboard-device-info">
-                    <strong>{d.name}</strong>
-                    <span>{d.ip}:{d.port}</span>
-                  </div>
-                </label>
-              ))}
-            </div>
-          )}
-
-          <p className="onboard-hint">{selectedDevices.length} device(s) selected</p>
-
-          {!enrollmentResult && (
-            <button
-              className="btn btn-primary"
-              onClick={handleEnrollOnDevices}
-              disabled={selectedDevices.length === 0 || loading}
-            >
-              {loading ? 'Enrolling...' : `Enroll on ${selectedDevices.length} Device(s)`}
-            </button>
-          )}
-
-          {enrollmentResult && (
-            <div className="onboard-success-banner">
-              ✅ Enrolled on {enrollmentResult.successful?.length || 0} device(s)
-              {enrollmentResult.failed?.length > 0 && (
-                <span className="onboard-fail-note"> ({enrollmentResult.failed.length} failed)</span>
-              )}
-            </div>
-          )}
-
-          <div className="onboard-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(1)}>← Back</button>
-            <button className="btn btn-primary" disabled={selectedDevices.length === 0} onClick={() => setCurrentStep(3)}>
-              Next: Access Group →
-            </button>
-          </div>
-        </div>
+        <DeviceStep
+          selectedEmployee={selectedEmployee}
+          connectedDevices={connectedDevices}
+          selectedDevices={selectedDevices}
+          onToggleDevice={toggleDeviceSelection}
+          cardAssignments={cardAssignments}
+          enrollmentResult={enrollmentResult}
+          loading={loading}
+          onEnroll={handleEnrollOnDevices}
+          onBack={() => setCurrentStep(1)}
+          onNext={() => setCurrentStep(3)}
+        />
       )}
 
-      {/* Step 3: Access Group (Optional) */}
       {currentStep === 3 && (
-        <div className="card onboard-card">
-          <h3>🚪 Step 4: Access Group (Optional)</h3>
-          <p>Assign an access group to control which doors <strong>{selectedEmployee?.name}</strong> can access.</p>
-
-          {accessGroups.length > 0 ? (
-            <div className="form-group">
-              <label>Select Access Group</label>
-              <select
-                value={selectedAccessGroup}
-                onChange={e => setSelectedAccessGroup(e.target.value)}
-                className="form-control"
-              >
-                <option value="">-- No access group (skip) --</option>
-                {accessGroups.map(ag => (
-                  <option key={ag.id || ag.ID} value={ag.id || ag.ID}>
-                    {ag.name || ag.Name || `Group ${ag.id || ag.ID}`}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <div className="onboard-info-banner">
-              ℹ️ No access groups configured on the selected device. You can set these up later from the Doors & Schedules page.
-            </div>
-          )}
-
-          <div className="onboard-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(2)}>← Back</button>
-            <button className="btn btn-primary" onClick={handleComplete} disabled={loading}>
-              {loading ? 'Completing...' : 'Complete Onboarding ✅'}
-            </button>
-          </div>
-        </div>
+        <AccessStep
+          selectedEmployee={selectedEmployee}
+          accessGroups={accessGroups}
+          selectedAccessGroup={selectedAccessGroup}
+          setSelectedAccessGroup={setSelectedAccessGroup}
+          loading={loading}
+          onBack={() => setCurrentStep(2)}
+          onComplete={handleComplete}
+        />
       )}
 
-      {/* Step 4: Confirmation */}
       {currentStep === 4 && onboardingComplete && (
-        <div className="card onboard-card onboard-complete">
-          <div className="onboard-complete-icon">🎉</div>
-          <h3>Onboarding Complete!</h3>
-          <p><strong>{selectedEmployee?.name}</strong> has been fully set up.</p>
-
-          <div className="onboard-summary">
-            <div className="onboard-summary-item">
-              <span className="onboard-summary-label">Employee</span>
-              <span>{selectedEmployee?.name} (ID: {selectedEmployee?.employee_id})</span>
-            </div>
-            <div className="onboard-summary-item">
-              <span className="onboard-summary-label">Card</span>
-              <span>{cardAssignment ? decodeHexToDecimal(cardAssignment.cardData) : '—'}</span>
-            </div>
-            <div className="onboard-summary-item">
-              <span className="onboard-summary-label">Devices</span>
-              <span>{enrollmentResult?.successful?.length || selectedDevices.length} enrolled</span>
-            </div>
-            <div className="onboard-summary-item">
-              <span className="onboard-summary-label">Access Group</span>
-              <span>{selectedAccessGroup ? `Group #${selectedAccessGroup}` : 'None'}</span>
-            </div>
-          </div>
-
-          <div className="onboard-actions" style={{ justifyContent: 'center' }}>
-            <button className="btn btn-primary" onClick={resetWizard}>
-              🚀 Onboard Another Employee
-            </button>
-          </div>
-        </div>
+        <ConfirmStep
+          selectedEmployee={selectedEmployee}
+          cardAssignments={cardAssignments}
+          enrollmentResult={enrollmentResult}
+          selectedDevices={selectedDevices}
+          selectedAccessGroup={selectedAccessGroup}
+          onReset={resetWizard}
+        />
       )}
     </div>
   )

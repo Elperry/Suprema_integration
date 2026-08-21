@@ -387,3 +387,24 @@
     flex-direction: column;
   }
 }
+
+/* Multi-card support */
+.onboard-card-chip {
+  display: inline-block;
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin: 2px 4px 2px 0;
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+.onboard-existing-cards {
+  margin-top: 8px;
+  font-size: 0.9em;
+}
+
+.onboard-existing-cards .onboard-hint {
+  margin: 4px 0 0;
+}

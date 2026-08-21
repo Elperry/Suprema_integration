@@ -11,6 +11,7 @@
 
 import winston from 'winston';
 import { encodeDecimalToHex, normalizeToHex, validateCardData } from '../core/utils/cardUtils.js';
+import { resolveSupremaDeviceId } from '../utils/deviceResolver.js';
 
 // PrismaClient is no longer created at module level — it is injected via
 // constructor options to avoid duplicate connections.
@@ -1339,28 +1340,9 @@ class EnrollmentService {
      * @returns {Promise<number>} Suprema device ID
      */
     async getSupremaDeviceId(dbDeviceId) {
-        // Check if it's already a Suprema device ID (large number)
-        if (parseInt(dbDeviceId) > 100000) {
-            return parseInt(dbDeviceId);
-        }
-
-        const connectedDevices = await this.connectionService.getConnectedDevices();
-        const devices = await this.connectionService.getAllDevicesFromDB();
-        const dbDevice = devices.find(d => d.id === parseInt(dbDeviceId));
-
-        if (!dbDevice) {
-            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
-        }
-
-        // Find matching connected device by IP
-        for (const device of connectedDevices) {
-            const info = device.toObject ? device.toObject() : device;
-            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
-                return info.deviceid;
-            }
-        }
-
-        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected`);
+        // Shared resolver: lenient gateway-list matching plus a one-shot
+        // reconnect when the device's session dropped but the DB status is stale.
+        return resolveSupremaDeviceId(dbDeviceId, this.connectionService);
     }
 
     /**

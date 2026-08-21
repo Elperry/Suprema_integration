@@ -69,16 +69,13 @@ const DEFAULT_LOCAL_TO_CLOUD_TABLES = Object.freeze([
         cloudOmitFields: ['cloudSyncedAt'],
         ignoreCompareFields: ['cloudSyncedAt', 'createdAt', 'updatedAt'],
         jsonFields: ['rawData'],
-        // Event log is append-only on cloud: never delete cloud rows that
-        // are missing locally (local table is a short-lived buffer that
-        // gets pruned after replication).
+        // Event log is append-only on cloud: the replication cursor is the
+        // cloud MAX(id) — only local rows with id > MAX(id) are pushed, so
+        // the shared autoincrement `id` guarantees unique records. Cloud
+        // rows are never deleted.
         appendOnly: true,
-        // Use cloudSyncedAt as the local replication cursor:
-        //   - WHERE cloudSyncedAt IS NULL  → rows not yet pushed to cloud
-        //   - After a successful push, SET cloudSyncedAt = NOW() locally
-        // This keeps the cursor entirely in the local (source) DB so the
-        // service never needs to query the cloud to know where it left off.
-        localCursorField: 'cloudSyncedAt',
+        // Large table — allow extra time on slow cloud connections.
+        timeoutMs: 120_000,
     },
     {
         model: 'auditLog',
@@ -714,21 +711,6 @@ class CloudSyncService {
                     : await applyPromise;
                 totalUpserted += upserted;
                 totalUnchanged += plan.unchanged;
-
-                // For cursor-based tables (localCursorField), stamp the local rows
-                // that were just successfully pushed to cloud.  Failure here is
-                // non-fatal: the rows keep cloudSyncedAt = NULL and will be
-                // re-pushed next cycle (idempotent ON DUPLICATE KEY UPDATE).
-                if (plan.localIds && plan.localIds.length > 0) {
-                    try {
-                        await this._markLocalRowsSynced(plan);
-                    } catch (cursorErr) {
-                        this.logger.warn(
-                            `[CloudSync:${plan.spec.label}] cursor update failed` +
-                            ` (rows will retry next cycle): ${cursorErr.message}`
-                        );
-                    }
-                }
             } catch (error) {
                 this._notifyOnConnectivityError(error);
                 const code = error.code;
@@ -768,39 +750,10 @@ class CloudSyncService {
     }
 
     async _buildMirrorPlan(spec) {
-        // ── Local-cursor path (e.g. events.cloudSyncedAt) ──────────────────
-        // When a spec declares `localCursorField`, the replication cursor lives
-        // entirely in the local (source) DB.  Rows where the field IS NULL have
-        // not yet been pushed to cloud; rows where it has a value are already
-        // replicated and are skipped.  After a successful cloud upsert the
-        // caller stamps those rows with the current timestamp.
-        if (spec.localCursorField) {
-            const localRows = await this.localPrisma[spec.model].findMany({
-                where:   { [spec.localCursorField]: null },
-                orderBy: { id: 'asc' },
-            });
-
-            const rowsToUpsert = localRows.map(row =>
-                this._prepareRecordForWrite(spec, row, { omitFields: spec.cloudOmitFields })
-            );
-
-            return {
-                spec,
-                rowsToUpsert,
-                // Keep track of the originating local IDs so the apply stage
-                // can update the cursor field on success.
-                localIds: localRows.map(r => r.id),
-                staleIds: [],
-                localCount: localRows.length,
-                cloudCount: 0,
-                unchanged: 0,
-                skipDeletes: true,
-            };
-        }
-
-        // ── Cloud-cursor path (append-only: audit_logs, enrollment_logs) ───
-        // Derives the cursor by querying MAX(id) on the cloud side.  Suitable
-        // for tables that have no local tracking column.
+        // ── Cloud-cursor path (append-only: events, audit_logs, enrollment_logs)
+        // Derives the cursor by querying MAX(id) on the cloud side; only
+        // local rows with id > MAX(id) are pushed, so the shared `id`
+        // column guarantees each record is replicated exactly once.
         if (spec.appendOnly) {
             // Fast-path for logs/events: cursor-based fetch
             const maxCloud = await this.cloudPrisma[spec.model].aggregate({
@@ -904,7 +857,13 @@ class CloudSyncService {
      * INSERT so only the columns present in the row payload are written.
      */
     async _rawUpsertCloud(plan) {
-        const { spec, rowsToUpsert, localCount, cloudCount, unchanged } = plan;
+        const { spec, localCount, cloudCount, unchanged } = plan;
+        // Always write lower ids first so a mid-run failure never leaves
+        // id gaps below the cloud MAX(id) cursor (append-only tables
+        // resume from MAX(id) and would silently skip such gaps).
+        const rowsToUpsert = [...plan.rowsToUpsert].sort((a, b) =>
+            this._compareIds(a.id, b.id)
+        );
         const tableName = spec.label;
         // Use the column set of the first row; all rows from
         // _prepareRecordForWrite share the same key shape.
@@ -1004,6 +963,12 @@ class CloudSyncService {
 
     _normalizeId(value) {
         return typeof value === 'bigint' ? value.toString() : String(value);
+    }
+
+    _compareIds(a, b) {
+        const left = typeof a === 'bigint' ? a : BigInt(a ?? 0);
+        const right = typeof b === 'bigint' ? b : BigInt(b ?? 0);
+        return left < right ? -1 : left > right ? 1 : 0;
     }
 
     _recordsEqual(spec, left, right) {
@@ -1144,28 +1109,6 @@ class CloudSyncService {
             chunks.push(items.slice(index, index + size));
         }
         return chunks;
-    }
-
-    /**
-     * After a successful cloud upsert for a `localCursorField` spec, stamp
-     * the source rows in the local DB so they are excluded from the next cycle.
-     *
-     * Batch-updates in chunks of 500 to stay within MySQL's `IN (...)` limit.
-     * Each chunk is an independent UPDATE so a partial failure leaves already-
-     * stamped rows intact and only un-stamped rows are re-pushed next cycle.
-     */
-    async _markLocalRowsSynced(plan) {
-        const { spec, localIds } = plan;
-        const syncedAt = new Date();
-        for (const batch of this._chunk(localIds, 500)) {
-            await this.localPrisma[spec.model].updateMany({
-                where: { id: { in: batch } },
-                data:  { [spec.localCursorField]: syncedAt },
-            });
-        }
-        this.logger.info(
-            `[CloudSync:${spec.label}] ${localIds.length} local row(s) marked as cloud-synced`
-        );
     }
 }
 

@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import winston from 'winston';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
+import { endpointMatches, findGatewayDevice } from '../utils/deviceResolver.js';
 
 // Create require function for CommonJS modules
 const require = createRequire(import.meta.url);
@@ -1019,33 +1020,48 @@ class SupremaConnectionService extends EventEmitter {
      * Connect to device using database configuration with retry logic
      */
     async connectToDeviceFromDB(deviceRecord) {
-        // Check if device is already connected in local map
+        // Snapshot the gateway's live sessions — the authoritative source.
+        // null means the check itself failed (gateway briefly unreachable).
+        let gatewayDevices = null;
+        try {
+            gatewayDevices = await this.getConnectedDevices();
+        } catch (err) {
+            this.logger.warn(`Could not check gateway for existing connections: ${err.message}`);
+        }
+
+        // Check if device is already connected in local map — but only trust
+        // the local entry when the gateway still holds the session, otherwise
+        // a stale map entry would short-circuit the reconnect we need.
         const existingConnection = Array.from(this.connectedDevices.entries()).find(
-            ([id, device]) => device.ip === deviceRecord.ip && device.port === deviceRecord.port
+            ([id, device]) => device && endpointMatches({ ipaddr: device.ip, port: device.port }, deviceRecord)
         );
-        
+
         if (existingConnection) {
             const [deviceId] = existingConnection;
-            this.logger.info(`Device ${deviceRecord.name} is already connected (local) with ID ${deviceId}`);
-            
-            // Ensure database status is updated
-            if (this.database) {
-                await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
+            const stillLive = gatewayDevices === null || findGatewayDevice(gatewayDevices, deviceRecord);
+
+            if (stillLive) {
+                this.logger.info(`Device ${deviceRecord.name} is already connected (local) with ID ${deviceId}`);
+
+                // Ensure database status is updated
+                if (this.database) {
+                    await this.database.updateDevice(deviceRecord.id, { status: 'connected' });
+                }
+
+                return deviceId;
             }
-            
-            return deviceId;
+
+            this.logger.warn(
+                `Device ${deviceRecord.name} local entry is stale (no gateway session) — reconnecting`
+            );
+            this.connectedDevices.delete(deviceId);
         }
-        
+
         // Also check the gateway for existing connections (in case device was connected externally)
-        try {
-            const gatewayDevices = await this.getConnectedDevices();
-            const gatewayDevice = gatewayDevices.find(d => {
-                const info = d.toObject ? d.toObject() : d;
-                return info.ipaddr === deviceRecord.ip && info.port === deviceRecord.port;
-            });
-            
-            if (gatewayDevice) {
-                const info = gatewayDevice.toObject ? gatewayDevice.toObject() : gatewayDevice;
+        if (gatewayDevices) {
+            const info = findGatewayDevice(gatewayDevices, deviceRecord);
+
+            if (info) {
                 const deviceId = info.deviceid;
                 this.logger.info(`Device ${deviceRecord.name} is already connected (gateway) with ID ${deviceId}`);
                 
@@ -1070,10 +1086,8 @@ class SupremaConnectionService extends EventEmitter {
                 
                 return deviceId;
             }
-        } catch (err) {
-            this.logger.warn(`Could not check gateway for existing connections: ${err.message}`);
         }
-        
+
         const maxRetries = 1;
         const retryDelay = 2000; // 2 seconds between retries
         
@@ -1279,21 +1293,75 @@ class SupremaConnectionService extends EventEmitter {
      */
     async syncDeviceStatus() {
         try {
-            if (!this.database) {
-                return;
-            }
-
-            const dbDevices = await this.database.getAllDevices();
-            
-            for (const device of dbDevices) {
-                const isActuallyConnected = this.connectedDevices.has(device.id);
-                
-                // Log connection status (no isConnected field in DB to update)
-                this.logger.debug(`Device ${device.name} connection status: ${isActuallyConnected}`);
-            }
+            await this.reconcileDeviceStatus();
         } catch (error) {
             this.logger.error('Failed to sync device status:', error);
         }
+    }
+
+    /**
+     * Reconcile DB device statuses against the live gateway device list.
+     *
+     * The DB `status` column can go stale: the disconnect stream only updates
+     * rows it can map (deviceDbIdMap is in-memory and lost on restart), so a
+     * dropped device can stay 'connected' in the DB forever — the UI shows it
+     * as connected and autoReconnectDevices() never picks it up. This method
+     * uses the gateway list as the source of truth and fixes both directions.
+     *
+     * @returns {Promise<{markedDisconnected: number, markedConnected: number}>}
+     */
+    async reconcileDeviceStatus() {
+        const result = { markedDisconnected: 0, markedConnected: 0 };
+        if (!this.database || !this.connClient) return result;
+
+        const [gatewayDevices, dbDevices] = await Promise.all([
+            this.getConnectedDevices(),
+            this.database.getAllDevices(),
+        ]);
+
+        this.deviceDbIdMap = this.deviceDbIdMap || new Map();
+
+        for (const device of dbDevices) {
+            if (device.isActive === false) continue;
+
+            const info = findGatewayDevice(gatewayDevices, device);
+
+            if (!info && device.status === 'connected') {
+                // Stale 'connected': no live gateway session for this endpoint.
+                await this.database.updateDevice(device.id, { status: 'disconnected' });
+                for (const [supremaId, entry] of this.connectedDevices.entries()) {
+                    if (entry && endpointMatches({ ipaddr: entry.ip, port: entry.port }, device)) {
+                        this.connectedDevices.delete(supremaId);
+                        this.emit('device:disconnected', { deviceId: supremaId });
+                    }
+                }
+                result.markedDisconnected++;
+                this.logger.warn(
+                    `Reconcile: ${device.name} (${device.ip}) has no gateway session — marked disconnected`
+                );
+            } else if (info && device.status !== 'connected') {
+                // Stale 'disconnected': the gateway still holds a live session.
+                await this.database.updateDevice(device.id, { status: 'connected' });
+                this.connectedDevices.set(info.deviceid, {
+                    id: info.deviceid,
+                    ip: device.ip,
+                    port: device.port,
+                    connectedAt: new Date(),
+                    status: 'connected'
+                });
+                this.deviceDbIdMap.set(info.deviceid.toString(), device.id);
+                result.markedConnected++;
+                this.logger.info(
+                    `Reconcile: ${device.name} (${device.ip}) has a gateway session — marked connected`
+                );
+            } else if (info) {
+                // In sync and connected — make sure the id mapping survives restarts
+                // so the disconnect stream can update the DB later.
+                this.deviceDbIdMap.set(info.deviceid.toString(), device.id);
+            }
+        }
+
+        return result;
     }
 
     /**
@@ -1309,6 +1377,14 @@ class SupremaConnectionService extends EventEmitter {
      */
     async autoReconnectDevices() {
         if (!this.database) return;
+
+        // First fix any stale DB statuses so devices whose session silently
+        // dropped (while the DB still said 'connected') are picked up below.
+        try {
+            await this.reconcileDeviceStatus();
+        } catch (error) {
+            this.logger.warn(`Auto-reconnect: status reconciliation failed: ${error.message}`);
+        }
 
         let failedDevices;
         try {

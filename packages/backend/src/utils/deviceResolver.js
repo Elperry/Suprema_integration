@@ -28,16 +28,57 @@ export function extractUserIdFromEvent(event) {
 }
 
 /**
+ * Compare a gateway device entry against a DB device row by network endpoint.
+ * Lenient on types: IPs are trimmed strings, ports compared numerically, so a
+ * DB row edited by hand (string port, stray whitespace) still matches.
+ *
+ * @param {Object} gatewayInfo - Plain object from the gateway device list
+ * @param {Object} dbDevice - Device row with `ip` and `port`
+ * @returns {boolean}
+ */
+export function endpointMatches(gatewayInfo, dbDevice) {
+    if (!gatewayInfo || !dbDevice) return false;
+    return (
+        String(gatewayInfo.ipaddr ?? '').trim() === String(dbDevice.ip ?? '').trim() &&
+        Number(gatewayInfo.port) === Number(dbDevice.port)
+    );
+}
+
+/**
+ * Find a DB device's entry in the gateway device list.
+ *
+ * @param {Array} gatewayDevices - Result of connectionService.getConnectedDevices()
+ * @param {Object} dbDevice - Device row with `ip` and `port`
+ * @returns {Object|null} Plain gateway info object, or null when absent
+ */
+export function findGatewayDevice(gatewayDevices, dbDevice) {
+    for (const device of gatewayDevices) {
+        const info = device.toObject ? device.toObject() : device;
+        if (endpointMatches(info, dbDevice)) {
+            return info;
+        }
+    }
+    return null;
+}
+
+/**
  * Resolve a database device ID to a Suprema device ID by looking up the
  * connected device list.  Large numbers (>100000) are assumed to already
  * be Suprema device IDs.
- * 
+ *
+ * When the device has no live gateway session (e.g. its DB status went
+ * stale after a drop), a single reconnect via
+ * connectionService.connectToDeviceFromDB() is attempted before failing,
+ * so callers self-heal instead of erroring on stale state.
+ *
  * @param {string|number} dbDeviceId - Database or Suprema device ID
  * @param {Object} connectionService - Connection service instance
+ * @param {{ reconnect?: boolean }} [options] - Set reconnect:false to skip the self-heal attempt
  * @returns {Promise<number>} Suprema device ID
- * @throws {Error} If device not found or not connected
+ * @throws {Error} If device not found, or not connected and reconnection failed
  */
-export async function resolveSupremaDeviceId(dbDeviceId, connectionService) {
+export async function resolveSupremaDeviceId(dbDeviceId, connectionService, options = {}) {
+    const { reconnect = true } = options;
     const parsedId = parseInt(dbDeviceId, 10);
 
     if (isNaN(parsedId)) {
@@ -57,10 +98,20 @@ export async function resolveSupremaDeviceId(dbDeviceId, connectionService) {
         throw new Error(`Device with ID ${parsedId} not found in database`);
     }
 
-    for (const device of connectedDevices) {
-        const info = device.toObject ? device.toObject() : device;
-        if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
-            return info.deviceid;
+    const match = findGatewayDevice(connectedDevices, dbDevice);
+    if (match) {
+        return match.deviceid;
+    }
+
+    // No live session on the gateway — try to re-establish it once.
+    if (reconnect && typeof connectionService.connectToDeviceFromDB === 'function') {
+        try {
+            return await connectionService.connectToDeviceFromDB(dbDevice);
+        } catch (reconnectError) {
+            throw new Error(
+                `Device ${dbDevice.name} (${dbDevice.ip}) is not connected and ` +
+                `reconnection failed: ${reconnectError.message}`
+            );
         }
     }
 
@@ -69,4 +120,4 @@ export async function resolveSupremaDeviceId(dbDeviceId, connectionService) {
     );
 }
 
-export default { extractUserIdFromEvent, resolveSupremaDeviceId };
+export default { extractUserIdFromEvent, resolveSupremaDeviceId, endpointMatches, findGatewayDevice };

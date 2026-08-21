@@ -6,6 +6,7 @@
  */
 
 import { decodeHexToDecimal, normalizeToHex } from '../core/utils/cardUtils.js';
+import { resolveSupremaDeviceId } from '../utils/deviceResolver.js';
 
 // PrismaClient is injected via constructor to avoid duplicate connections.
 
@@ -1019,24 +1020,9 @@ class UserSyncService {
      * @private
      */
     async _resolveSupremaId(dbDeviceId) {
-        const parsedId = parseInt(dbDeviceId, 10);
-        if (isNaN(parsedId)) throw new Error(`Invalid device ID: ${dbDeviceId}`);
-        if (parsedId > 100000) return parsedId; // already a Suprema ID
-
-        const [connectedDevices, dbDevices] = await Promise.all([
-            this.connectionService.getConnectedDevices(),
-            this.connectionService.getAllDevicesFromDB(),
-        ]);
-        const dbDevice = dbDevices.find((d) => d.id === parsedId);
-        if (!dbDevice) throw new Error(`Device ${parsedId} not found in database`);
-
-        for (const device of connectedDevices) {
-            const info = device.toObject ? device.toObject() : device;
-            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
-                return info.deviceid;
-            }
-        }
-        throw new Error(`Device ${dbDevice.name} (${dbDevice.ip}) is not connected`);
+        // Shared resolver: matches the gateway list leniently and attempts a
+        // one-shot reconnect when the device has no live session (stale status).
+        return resolveSupremaDeviceId(dbDeviceId, this.connectionService);
     }
 
     /**
@@ -2276,26 +2262,7 @@ class UserSyncService {
     }
 
     async getSupremaDeviceId(dbDeviceId) {
-        if (parseInt(dbDeviceId) > 100000) {
-            return parseInt(dbDeviceId);
-        }
-        
-        const connectedDevices = await this.connectionService.getConnectedDevices();
-        const dbDevices = await this.connectionService.getAllDevicesFromDB();
-        const dbDevice = dbDevices.find(d => d.id === parseInt(dbDeviceId));
-        
-        if (!dbDevice) {
-            throw new Error(`Device with ID ${dbDeviceId} not found in database`);
-        }
-        
-        for (const device of connectedDevices) {
-            const info = device.toObject ? device.toObject() : device;
-            if (info.ipaddr === dbDevice.ip && info.port === dbDevice.port) {
-                return info.deviceid;
-            }
-        }
-        
-        throw new Error(`Device ${dbDevice.name} is not connected`);
+        return resolveSupremaDeviceId(dbDeviceId, this.connectionService);
     }
 
     async getDbDevice(deviceIdOrSupremaId) {
