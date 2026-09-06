@@ -14,6 +14,7 @@
  */
 
 import { CircuitBreaker, CircuitOpenError, isConnectivityError } from '../core/utils/circuitBreaker.js';
+import { TableFingerprint } from './cloudSync/TableFingerprint.js';
 
 // Per-table wall-clock budget for the apply step.  If a single table's
 // upsert batch takes longer than this, the Promise is rejected so the
@@ -150,6 +151,10 @@ class CloudSyncService {
             : 50;
         this._timer = null;
         this._running = false;
+
+        // Skips the full cloud read for tables whose aggregates prove nothing
+        // changed since the last cycle (CLOUD_SYNC_FINGERPRINT=false disables).
+        this._fingerprint = new TableFingerprint({ localPrisma, cloudPrisma, logger });
 
         // Circuit breaker around all cloud DB I/O. Connectivity errors
         // (P1001/P1002/P1008/P1017/P2024, ECONNRESET/ETIMEDOUT/..., or
@@ -782,6 +787,29 @@ class CloudSyncService {
             };
         }
 
+        // ── Fingerprint short-circuit ───────────────────────────────────────
+        // Two tiny aggregate queries (COUNT / MAX(id) / CRC over the compared
+        // columns) decide whether the full read below is needed at all. That
+        // read ships every row over the WAN - 20k+ for device_enrollments,
+        // 5-10 s per cycle - and almost always finds nothing to do.
+        const fingerprint = await this._fingerprint.unchanged({
+            table: this._getModelTableName(spec.model),
+            fields: this._fingerprintFields(spec),
+            label: spec.label,
+        });
+        if (fingerprint) {
+            return {
+                spec,
+                rowsToUpsert: [],
+                staleIds: [],
+                localCount: fingerprint.rowCount,
+                cloudCount: fingerprint.rowCount,
+                unchanged: fingerprint.rowCount,
+                skipDeletes: true,
+                fingerprintMatch: true,
+            };
+        }
+
         const cloudSelect = this._buildCloudSelect(spec);
         const [localRows, cloudRows] = await Promise.all([
             this.localPrisma[spec.model].findMany({ orderBy: { id: 'asc' } }),
@@ -1043,6 +1071,28 @@ class CloudSyncService {
         // Always include the primary key
         select.id = true;
         return select;
+    }
+
+    /** Physical table name for a Prisma model (@@map, else the model name). */
+    _getModelTableName(modelName) {
+        const dataModel = this.localPrisma?._runtimeDataModel;
+        if (!dataModel || !dataModel.models) return null;
+
+        const pascal = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+        const key = dataModel.models[pascal] ? pascal : (dataModel.models[modelName] ? modelName : null);
+        if (!key) return null;
+        return dataModel.models[key].dbName || key;
+    }
+
+    /** The columns _recordsEqual() compares, i.e. every scalar minus the ignored ones. */
+    _fingerprintFields(spec) {
+        const fields = this._getModelScalarFields(spec.model);
+        if (!fields) return [];
+        const ignore = new Set([
+            ...(spec.ignoreCompareFields || []),
+            ...(spec.cloudOmitFields || []),
+        ]);
+        return fields.filter(f => !ignore.has(f));
     }
 
     _getModelScalarFields(modelName) {
