@@ -72,3 +72,7 @@ audit/
 docs/
 memories/
 biostar/
+
+# Database dumps never belong in git (2026-10-25: employee and card dumps were public)
+*.sql
+!packages/backend/prisma/migrations/**/*.sql

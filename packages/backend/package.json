@@ -9,7 +9,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "setup": "node setup.js",
-    "test": "jest",
+    "test": "node --test src/",
     "test:watch": "jest --watch",
     "test:api": "node test-api.js",
     "test:api-verbose": "node test-api.js --verbose",
