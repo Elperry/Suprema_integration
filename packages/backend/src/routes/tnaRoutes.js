@@ -3,6 +3,7 @@
  * REST API endpoints for T&A configuration and attendance management
  */
 
+import { schoolToday, cairoDayRange } from '../services/tna/tnaRules.js';
 import express from 'express';
 import { toCsv, toExcelTable } from '../utils/csv.js';
 import { asyncHandler } from '../core/errors/index.js';
@@ -30,16 +31,16 @@ export default (services) => {
                 format: fmt = 'json',
             } = req.query;
 
-            const targetDate = date || new Date().toISOString().slice(0, 10);
-            const dayStart = new Date(`${targetDate}T00:00:00`);
-            const dayEnd = new Date(`${targetDate}T23:59:59.999`);
+            // School days are Africa/Cairo days, whatever the PC clock zone is.
+            const targetDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : schoolToday();
+            const { start: dayStart, end: dayEnd } = cairoDayRange(targetDate);
 
             const where = {
                 timestamp: { gte: dayStart, lte: dayEnd },
                 authResult: 'success',
             };
             if (deviceId) where.deviceId = parseInt(deviceId);
-            if (userId) where.userId = { contains: userId };
+            if (userId) where.userId = String(userId).trim(); // exact: user 12 must not match 112
 
             const events = await prisma.event.findMany({
                 where,
@@ -135,7 +136,7 @@ export default (services) => {
                 authResult: 'success',
             };
             if (deviceId) where.deviceId = parseInt(deviceId);
-            if (userId) where.userId = { contains: userId };
+            if (userId) where.userId = String(userId).trim(); // exact: user 12 must not match 112
 
             const events = await prisma.event.findMany({
                 where,

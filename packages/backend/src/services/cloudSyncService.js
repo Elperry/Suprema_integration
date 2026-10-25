@@ -25,6 +25,7 @@ import { CloudIdentityMap } from './cloudSync/CloudIdentityMap.js';
 import { EventPusher } from './cloudSync/EventPusher.js';
 import { EmployeePuller } from './cloudSync/EmployeePuller.js';
 import { TempAccessPuller } from './cloudSync/TempAccessPuller.js';
+import { schoolToday } from './tna/tnaRules.js';
 
 const CIRCUIT_FAILURE_THRESHOLD = Math.max(1, Number(process.env.CLOUD_SYNC_CIRCUIT_FAILURE_THRESHOLD ?? 3));
 const CIRCUIT_OPEN_MS = Math.max(0, Number(process.env.CLOUD_SYNC_CIRCUIT_OPEN_MS ?? 60_000));
@@ -47,7 +48,7 @@ class CloudSyncService {
         intervalMs = 5 * 60 * 1000, trigger = 'both',
         eventsSince = process.env.CLOUD_SYNC_EVENTS_SINCE || null,
         visitorProvisioner = null,
-        today = cairoToday,
+        today = () => schoolToday(),
         employeeMinPrunePct = Number(process.env.CLOUD_SYNC_EMPLOYEE_MIN_PRUNE_PCT ?? 50),
     }) {
         this.cloudPrisma = cloudPrisma ?? null;
@@ -232,11 +233,6 @@ class CloudSyncService {
 function normalizeTrigger(trigger) {
     const value = String(trigger || 'both').trim().toLowerCase();
     return ['disabled', 'startup', 'interval', 'both'].includes(value) ? value : 'both';
-}
-
-/** Today's date at the school, 'YYYY-MM-DD' (DST-aware). */
-export function cairoToday(now = new Date()) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
 }
 
 export default CloudSyncService;

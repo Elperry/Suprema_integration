@@ -3,6 +3,7 @@
  * Thin startup — all wiring lives in bootstrap.js, Express setup in app.js.
  */
 
+import { DeviceClockKeeper } from './src/services/time/DeviceClockKeeper.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -146,12 +147,21 @@ async function syncDeviceTime(container, settings = null) {
         if (useSystemTimezone) {
             logger.info('Using system timezone for device sync');
             result = await timeService.syncWithSystemTimezone();
-        } else {
+        } else if (process.env.DEVICE_TIMEZONE === 'fixed') {
             const timezoneOffset = settings
                 ? settings.timezoneOffsetSeconds
                 : parseInt(process.env.DEVICE_TIMEZONE_OFFSET) || 0;
-            logger.info(`Using configured timezone offset: ${timezoneOffset}s (${timezoneOffset / 3600}h)`);
+            logger.info(`Using fixed timezone offset: ${timezoneOffset}s (${timezoneOffset / 3600}h)`);
             result = await timeService.syncAllDevices(timezoneOffset);
+        } else {
+            // Default: follow the school's zone (Africa/Cairo), DST included,
+            // re-applied on reconnect and whenever the offset changes.
+            const keeper = new DeviceClockKeeper({
+                timeService, connectionService: container.resolve('connectionService'), logger,
+            });
+            container.registerInstance('deviceClockKeeper', keeper);
+            await keeper.start();
+            result = { success: true, devicesCount: -1, message: `devices follow ${keeper.timeZone}` };
         }
 
         if (result.success) {

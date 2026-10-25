@@ -21,6 +21,7 @@ class DeviceMonitoringService {
      * Intervals are configurable via environment variables.
      */
     start() {
+        if (this.syncTimer || this.reconnectTimer) return; // already running
         const syncInterval = parseInt(process.env.DEVICE_SYNC_INTERVAL) || 300000; // 5 min
         this.syncTimer = setInterval(async () => {
             try {

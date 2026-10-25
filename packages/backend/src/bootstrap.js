@@ -376,7 +376,7 @@ export async function bootstrap() {
     // ── 8. Infrastructure services ────────────────────────────────────────
     const deviceMonitoring = new DeviceMonitoringService(connectionService, logger);
     container.registerInstance('deviceMonitoringService', deviceMonitoring);
-    deviceMonitoring.start();
+    // Started once, by index.js runPostStartupTasks.
 
 
     const hrIntegration = new HRIntegrationService(domainServices, logger);
@@ -450,14 +450,9 @@ export async function bootstrap() {
         logger.error('Failed to apply sync settings at boot:', error);
     }
 
-    // Force-enable event replication unless explicitly disabled. The
-    // persisted settings default to `enabled: false`, which means a fresh
-    // install would never replicate events. Set EVENT_REPLICATION_ENABLED=false
-    // to opt out.
-    if (process.env.EVENT_REPLICATION_ENABLED !== 'false' && !eventReplication._started) {
-        eventReplication.start();
-        logger.info('Event replication service started (default ON)');
-    }
+    // Event replication is started by index.js from the persisted settings
+    // (default ON via EVENT_REPLICATION_ENABLED), so an operator's "disabled"
+    // is honoured instead of being overridden here.
 
     logger.info('Application bootstrap complete', {
         environment: config.app.env,

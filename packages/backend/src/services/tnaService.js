@@ -10,6 +10,7 @@ import { createRequire } from 'module';
 // Create require function for CommonJS modules
 const require = createRequire(import.meta.url);
 import moment from 'moment';
+import { parseTnaKeyMap, tnaAction } from './tna/tnaRules.js';
 
 // Import protobuf services (these would come from the G-SDK)
 const tnaService = require('../../biostar/service/tna_grpc_pb');
@@ -53,6 +54,7 @@ class SupremaTNAService extends EventEmitter {
         this.tnaClient = null;
         // deviceId (string) -> { labels: string[], mode, key, isRequired, fetchedAt }
         this.tnaConfigCache = new Map();
+        this._tnaKeyMap = parseTnaKeyMap(process.env.TNA_KEY_MAP);
 
         this.logger = winston.createLogger({
             level: 'info',
@@ -690,7 +692,8 @@ class SupremaTNAService extends EventEmitter {
             if (!ms) return;
             const eventTime = new Date(ms);
 
-            switch (event.eventType) {
+            // Devices report 'tna_key_N'; TNA_KEY_MAP says what each key means here.
+            switch (tnaAction(event.eventType, this._tnaKeyMap)) {
                 case 'clock_in':
                     if (!currentSession) {
                         currentSession = {

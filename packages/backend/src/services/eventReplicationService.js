@@ -12,6 +12,8 @@
  * errors are logged but never bubble up to crash the process.
  */
 
+import { mapEventToRow } from './events/eventRow.js';
+
 class EventReplicationService {
     /**
      * @param {Object} deps
@@ -664,45 +666,13 @@ class EventReplicationService {
     }
 
     _mapEventToRow(event, dbDeviceId) {
-        try {
-            const eventId = event.id ?? event.eventid ?? event.eventId;
-            if (eventId == null) return null;
-
-            let timestamp;
-            if (event.timestamp) {
-                timestamp = new Date(event.timestamp);
-                if (isNaN(timestamp.getTime())) timestamp = new Date();
-            } else {
-                timestamp = new Date();
-            }
-
-            let authResult = null;
-            const code = event.eventcode ?? event.eventCode;
-            // Compute authResult for any underlying authentication event
-            // (0x1000-0x1FFF), even when our eventType was promoted to
-            // 'attendance' because a TNA key was selected on the swipe.
-            const isAuthCode = typeof code === 'number' && code >= 0x1000 && code < 0x2000;
-            if (event.eventType === 'authentication' || isAuthCode) {
-                const successCodes = [0x1000, 0x1100, 0x1200, 0x1300, 0x1400, 0x1500, 0x1600, 0x1700];
-                authResult = successCodes.includes(code) ? 'success' : 'fail';
-            }
-
-            return {
-                deviceId: dbDeviceId,
-                supremaEventId: BigInt(eventId),
-                eventCode: event.eventcode ?? event.eventCode ?? 0,
-                eventType: event.eventType ?? 'other',
-                subType: event.subcode != null ? String(event.subcode) : null,
-                userId: event.userid ?? event.userId ?? null,
-                doorId: event.doorid ?? event.doorId ?? null,
-                description: event.description ?? null,
-                authResult,
-                timestamp,
-                rawData: event,
-            };
-        } catch {
-            return null;
+        const row = mapEventToRow(event, dbDeviceId);
+        if (!row) {
+            this.logger.warn('[EventReplication] Dropped an event without a usable id or device time', {
+                deviceId: dbDeviceId, eventId: event?.id ?? event?.eventid ?? null,
+            });
         }
+        return row;
     }
 
     _maxEventId(events) {

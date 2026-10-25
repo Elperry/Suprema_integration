@@ -12,6 +12,7 @@ const require = createRequire(import.meta.url);
 
 // Import protobuf services for time management
 const timeService = require('../../biostar/service/time_grpc_pb');
+import { offsetMinutes } from './tna/tnaRules.js';
 const timeMessage = require('../../biostar/service/time_pb');
 
 class SupremaTimeService extends EventEmitter {
@@ -21,10 +22,11 @@ class SupremaTimeService extends EventEmitter {
         this.database = database;
         this.timeClient = null;
         
-        // Default timezone offset in seconds
-        // Egypt timezone: UTC+2 = 7200 seconds
-        // Can be overridden via DEVICE_TIMEZONE_OFFSET environment variable
-        this.defaultTimezoneOffset = parseInt(process.env.DEVICE_TIMEZONE_OFFSET) || 7200; // Egypt UTC+2
+        // Fallback offset when a caller passes none: the school zone's offset
+        // right now (DST-aware), unless DEVICE_TIMEZONE_OFFSET pins one.
+        this.defaultTimezoneOffset = process.env.DEVICE_TIMEZONE_OFFSET
+            ? parseInt(process.env.DEVICE_TIMEZONE_OFFSET, 10)
+            : offsetMinutes(new Date()) * 60;
         
         this.logger = winston.createLogger({
             level: 'info',
