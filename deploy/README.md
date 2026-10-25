@@ -90,10 +90,18 @@ npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/
 ```
 
 - **Exit 0 (no difference):** continue.
-- **Exit 2 (difference):** stop. Print the SQL with `--script` instead of `--exit-code` and read it.
-  - Apply it only if every statement is additive (`ADD COLUMN`, `CREATE INDEX`, `CREATE TABLE`): `npx prisma db execute --file <that sql> --schema prisma/schema.prisma`.
-  - Re-run the diff until it exits 0.
+- **Exit 2 (difference):** stop. Print the SQL with `--script` instead of `--exit-code`, then split it with `node scripts/gate-cutover.mjs plan-sql <diff.sql> <apply.sql>`.
+  - The additive statements (`ADD COLUMN`, `CREATE INDEX`, `CREATE TABLE`) go to `apply.sql`. Apply them with `npx prisma db execute --file apply.sql --schema prisma/schema.prisma`.
+  - Foreign-key-only lines are set aside: they are neither applied nor blocking. PCs built with `db push` can lack foreign keys, the app resolves relations in code, and adding a key can fail on old orphan rows.
+  - Anything else (exit 4) is a drop, change or rename. A person reads it first.
   - Never `db push`.
+
+`scripts/gate-cutover.mjs` also does the other scripted steps:
+- `check`: read-only report on both databases;
+- `rotate-cloud`: the PC changes its own cloud password;
+- `write-env`: builds `backend.env` from the old `.env`.
+
+The Imperial window script that drives it lives in the school's runbook.
 
 ```bash
 for m in 0_init 20260518130000_add_system_settings 20260530000000_create_employee \
