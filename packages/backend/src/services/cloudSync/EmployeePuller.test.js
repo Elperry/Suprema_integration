@@ -27,8 +27,9 @@ function fakeLocal(existing = [], users = []) {
     return local;
 }
 
+// The shape of the live `employee` view (it also carries passwords, bank and salary).
 const cloudEmployee = (id, extra = {}) => ({
-    id, fullname: `Emp ${id}`, displayname: `E${id}`, email: `e${id}@school`, code: `C${id}`,
+    id, displayname: `Emp ${id}`, code: `C${id}`, username: `e${id}@school`, departmentid: 4,
     userpassword: 'secret', bankaccount: '123', salary: 9000, ...extra,
 });
 
@@ -68,7 +69,7 @@ test('every employee without a local user gets one', async () => {
     const local = fakeLocal([], [{ employee_id: 1 }]);
     await new EmployeePuller({ cloud, local, logger: silent }).run();
     assert.deepEqual(local.users.map(u => u.employee_id), [1, 2]);
-    assert.deepEqual(local.users[1], { code: 'C2', name: 'E2', full_name: 'Emp 2', employee_id: 2 });
+    assert.deepEqual(local.users[1], { code: 'C2', name: 'Emp 2', full_name: 'Emp 2', employee_id: 2 });
 });
 
 test('existing users take their code and names from the employee cache every cycle', async () => {
@@ -76,4 +77,13 @@ test('existing users take their code and names from the employee cache every cyc
     const local = fakeLocal([], [{ employee_id: 1 }]);
     await new EmployeePuller({ cloud, local, logger: silent }).run();
     assert.equal(local.refreshed, 1);
+});
+
+test('only the needed columns are read from the cloud view (never SELECT *)', async () => {
+    const cloud = new MemoryCloudStore({ employee: [cloudEmployee(1)] });
+    await new EmployeePuller({ cloud, local: fakeLocal(), logger: silent }).run();
+    const [read] = cloud.ops('findAll');
+    assert.deepEqual(read.columns, [
+        'id', 'displayname', 'code', 'ssn', 'username', 'officialemail', 'jobtitle', 'company_id', 'departmentid', 'suspend',
+    ]);
 });

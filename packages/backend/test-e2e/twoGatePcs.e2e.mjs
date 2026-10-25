@@ -30,8 +30,18 @@ async function fresh(db) {
 const T = iso => new Date(iso);
 const since = T('2026-10-26T00:00:00Z');
 
+// The cloud `employee` is a view over HR in production, with HR's column names
+// and its secrets (userpassword, bank, salary). Recreate that shape here.
 async function seedCloud(cloud) {
-    await cloud.employee.createMany({ data: [{ id: 1001, fullname: 'Mona Ali' }, { id: 1002, fullname: 'Omar Said' }] });
+    // Live cloud `user` has no unique key on employee_id (only the gate PCs' own schema does).
+    await cloud.$executeRawUnsafe('ALTER TABLE `user` DROP INDEX `user_employee_id_key`');
+    await cloud.$executeRawUnsafe('DROP TABLE `employee`');
+    await cloud.$executeRawUnsafe(`CREATE TABLE \`employee\` (
+        id INT UNSIGNED PRIMARY KEY, displayname VARCHAR(255), code VARCHAR(100), ssn VARCHAR(50),
+        username VARCHAR(255), officialemail VARCHAR(255), jobtitle VARCHAR(255), company_id INT,
+        departmentid INT, suspend VARCHAR(10), userpassword VARCHAR(255), bankaccount VARCHAR(64))`);
+    await addEmployee(cloud, 1001, 'Mona Ali', 'C1');
+    await addEmployee(cloud, 1002, 'Omar Said', 'C2');
     await cloud.user.create({ data: { id: 900, code: 'C1', name: 'Mona', full_name: 'Mona Ali', employee_id: 1001 } });
     await cloud.device.create({ data: { id: 40, name: 'Gate 1', ip: '10.10.2.113', serialNumber: '546084682', direction: 'in' } });
     await cloud.$executeRawUnsafe('ALTER TABLE `user` AUTO_INCREMENT = 31828');
@@ -39,6 +49,13 @@ async function seedCloud(cloud) {
         id: 500, deviceId: 40, supremaEventId: 1n, eventCode: 4867, eventType: 'attendance',
         userId: '900', timestamp: T('2026-10-20T06:00:00Z'),
     } });
+}
+
+function addEmployee(cloud, id, name, code) {
+    return cloud.$executeRawUnsafe(
+        'INSERT INTO `employee` (id, displayname, code, username, suspend, userpassword, bankaccount) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id, name, code, `e${id}@school.test`, 'no', 'plain-secret', 'EG00123',
+    );
 }
 
 async function seedPc(pc, { users, device, cards, events }) {
@@ -79,12 +96,16 @@ try {
         localPrisma: pc, cloudPrisma: cloud, logger: silent, trigger: 'interval', eventsSince: since,
         employeeMinPrunePct: 0,
     });
-    await sync(gate1)._cycle();
-    await sync(gate2)._cycle();
-    await sync(gate1)._cycle();
+    // One long-lived process per PC, as on the gate PCs: their memories go stale.
+    const [pc1, pc2] = [sync(gate1), sync(gate2)];
+    await pc1._cycle();
+    await pc2._cycle();
+    await addEmployee(cloud, 1003, 'Hana Adel', 'C3');   // a new hire, seen by both PCs
+    await pc1._cycle();
+    await pc2._cycle();
 
     const users = await cloud.user.findMany({ orderBy: { employee_id: 'asc' } });
-    assert.deepEqual(users.map(u => u.employee_id), [1001, 1002], 'one cloud user per employee');
+    assert.deepEqual(users.map(u => u.employee_id), [1001, 1002, 1003], 'one cloud user per employee, new hire once');
     assert.equal(users[0].id, 900, 'existing cloud user kept');
     const omar = users[1].id;
     assert.ok(omar >= 31828, 'new user id assigned by the cloud');
@@ -103,6 +124,10 @@ try {
     assert.equal(await cloud.deviceEnrollment.count(), 3);
     for (const pc of [gate1, gate2]) {
         assert.equal(await pc.event.count({ where: { cloudSyncedAt: null } }), 0, 'local backlog drained');
+        const cached = await pc.employee.findMany();
+        assert.equal(cached.length, 3, 'employee cache filled from the view');
+        assert.equal(JSON.stringify(cached).includes('plain-secret'), false, 'no password reached the gate PC');
+        assert.equal(JSON.stringify(cached).includes('EG00123'), false, 'no bank account reached the gate PC');
     }
     console.log('E2E PASS: two gate PCs, one cloud, no deletes, translated ids, history intact');
 } finally {

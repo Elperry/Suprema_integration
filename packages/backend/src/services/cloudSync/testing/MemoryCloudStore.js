@@ -30,7 +30,7 @@ export class MemoryCloudStore {
     }
 
     async findAll(table, columns) {
-        this.calls.push({ op: 'findAll', table });
+        this.calls.push({ op: 'findAll', table, columns });
         return this._table(table).map(row => pick(row, columns));
     }
 
