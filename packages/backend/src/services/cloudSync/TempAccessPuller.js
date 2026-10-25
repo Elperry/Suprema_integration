@@ -30,7 +30,7 @@ export class TempAccessPuller {
     }
 
     async run() {
-        const stats = { provisioned: 0, failed: 0, alreadyDone: 0 };
+        const stats = { provisioned: 0, failed: 0, alreadyDone: 0, skipped: 0 };
         if (!this.provisioner) {
             if (!this._warnedNoProvisioner) {
                 this.logger.warn('[CloudSync:tempaccess] no visitor provisioner configured; visitor QR codes are not pulled');
@@ -48,6 +48,12 @@ export class TempAccessPuller {
         for (const row of rows) {
             if (done.has(row.id)) {
                 stats.alreadyDone++;
+                continue;
+            }
+            if (!hasQrCode(row.qrcode)) {
+                // VisitorInvitationService stores the row, then its code: never
+                // enrol a visitor as user "0" or ack a visit that has no code yet.
+                stats.skipped++;
                 continue;
             }
             const visitor = {
@@ -71,10 +77,16 @@ export class TempAccessPuller {
             stats.provisioned++;
         }
         this.logger.info(
-            `[CloudSync:tempaccess] provisioned=${stats.provisioned}, failed=${stats.failed}, alreadyDone=${stats.alreadyDone}`
+            `[CloudSync:tempaccess] provisioned=${stats.provisioned}, failed=${stats.failed}, alreadyDone=${stats.alreadyDone}, skipped=${stats.skipped}`
         );
         return stats;
     }
+}
+
+function hasQrCode(value) {
+    if (value === null || value === undefined || String(value).trim() === '') return false;
+    const n = Number(value);
+    return !Number.isFinite(n) || Math.trunc(n) > 0;
 }
 
 /** The QR text: tempaccess.qrcode is a DOUBLE column; never let 400111 become "400111.0" or 4.00111e5. */

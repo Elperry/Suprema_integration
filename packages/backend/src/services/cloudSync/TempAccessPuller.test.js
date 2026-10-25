@@ -74,3 +74,18 @@ test('without a provisioner nothing is pulled or acked', async () => {
     assert.equal(stats.provisioned, 0);
     assert.equal(cloud.calls.length, 0);
 });
+
+test('a visit whose QR code is not written yet is skipped and left pending, never provisioned as "0"', async () => {
+    const cloud = new MemoryCloudStore({ tempaccess: [
+        { id: 11, person_name: 'A', date: '2026-10-26 10:00:00', qrcode: null, email: 'a@x', done: 0 },
+        { id: 12, person_name: 'B', date: '2026-10-26 10:00:00', qrcode: 0, email: 'b@x', done: 0 },
+        { id: 13, person_name: 'C', date: '2026-10-26 10:00:00', qrcode: '', email: 'c@x', done: 0 },
+    ] });
+    const provisioner = fakeProvisioner();
+    const local = fakeLocal();
+    const stats = await new TempAccessPuller({ cloud, local, provisioner, logger: silent, today: () => '2026-10-26' }).run();
+    assert.deepEqual(provisioner.calls, []);
+    assert.equal(cloud.ops('updateById').length, 0, 'not acked: the next run picks it up once the code exists');
+    assert.equal(local.rows.size, 0);
+    assert.equal(stats.skipped, 3);
+});
