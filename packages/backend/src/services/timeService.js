@@ -22,11 +22,7 @@ class SupremaTimeService extends EventEmitter {
         this.database = database;
         this.timeClient = null;
         
-        // Fallback offset when a caller passes none: the school zone's offset
-        // right now (DST-aware), unless DEVICE_TIMEZONE_OFFSET pins one.
-        this.defaultTimezoneOffset = process.env.DEVICE_TIMEZONE_OFFSET
-            ? parseInt(process.env.DEVICE_TIMEZONE_OFFSET, 10)
-            : offsetMinutes(new Date()) * 60;
+        this.now = () => new Date();
         
         this.logger = winston.createLogger({
             level: 'info',
@@ -413,6 +409,18 @@ class SupremaTimeService extends EventEmitter {
         const hours = Math.abs(offsetSeconds) / 3600;
         const sign = offsetSeconds >= 0 ? '+' : '-';
         return `UTC${sign}${hours}`;
+    }
+
+    /**
+     * Fallback offset (seconds) when a caller passes none: the school zone's
+     * offset at the moment of the call (DST-aware), unless
+     * DEVICE_TIMEZONE_OFFSET pins one. Computed per call: a process started
+     * in summer must not push UTC+3 to the terminals after 29 October.
+     */
+    get defaultTimezoneOffset() {
+        return process.env.DEVICE_TIMEZONE_OFFSET
+            ? parseInt(process.env.DEVICE_TIMEZONE_OFFSET, 10)
+            : offsetMinutes(this.now()) * 60;
     }
 
     /**
