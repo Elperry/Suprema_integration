@@ -59,6 +59,16 @@ export class LocalSource {
         return rows.map(row => String(row.id));
     }
 
+    /** Every event from `since` (synced or not), for the read-only backlog check. */
+    eventsSince({ since, afterId = 0, limit }) {
+        return this.prisma.event.findMany({
+            where: { timestamp: { gte: since }, id: { gt: afterId } },
+            orderBy: { id: 'asc' },
+            take: limit,
+            select: { id: true, deviceId: true, supremaEventId: true, timestamp: true },
+        });
+    }
+
     markEventsSynced(ids, at) {
         return this.prisma.event.updateMany({ where: { id: { in: ids } }, data: { cloudSyncedAt: at } });
     }

@@ -13,6 +13,9 @@ import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 import CloudSyncService from '../src/services/cloudSyncService.js';
+import { EventBacklog } from '../src/services/cloudSync/EventBacklog.js';
+import { CloudStore } from '../src/services/cloudSync/CloudStore.js';
+import { LocalSource } from '../src/services/cloudSync/LocalSource.js';
 
 const base = process.env.E2E_MYSQL;
 if (!base) throw new Error('Set E2E_MYSQL, e.g. mysql://root@127.0.0.1:3306');
@@ -96,6 +99,11 @@ try {
         localPrisma: pc, cloudPrisma: cloud, logger: silent, trigger: 'interval', eventsSince: since,
         employeeMinPrunePct: 0,
     });
+    const backlog = pc => new EventBacklog({ cloud: new CloudStore(cloud), local: new LocalSource(pc) }).report({ since });
+    const before = await backlog(gate1);
+    assert.equal(before.missing, 2, 'backlog check: both gate 1 swipes are missing before the sync');
+    assert.equal(before.earliestMissing.toISOString(), '2026-10-26T06:00:00.000Z');
+
     // One long-lived process per PC, as on the gate PCs: their memories go stale.
     const [pc1, pc2] = [sync(gate1), sync(gate2)];
     await pc1._cycle();
@@ -124,6 +132,7 @@ try {
     assert.equal(await cloud.deviceEnrollment.count(), 3);
     for (const pc of [gate1, gate2]) {
         assert.equal(await pc.event.count({ where: { cloudSyncedAt: null } }), 0, 'local backlog drained');
+        assert.equal((await backlog(pc)).missing, 0, 'backlog check agrees: nothing missing');
         const cached = await pc.employee.findMany();
         assert.equal(cached.length, 3, 'employee cache filled from the view');
         assert.equal(JSON.stringify(cached).includes('plain-secret'), false, 'no password reached the gate PC');

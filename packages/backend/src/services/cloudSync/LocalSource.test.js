@@ -80,3 +80,14 @@ test('user code and names follow the employee cache; ids are never touched', asy
     assert.match(raw, /UPDATE `user` u JOIN `employee` e ON e\.id = u\.employee_id/);
     assert.doesNotMatch(raw, /u\.id\s*=|employee_id\s*=\s*[^u]/, 'never sets id or employee_id');
 });
+
+test('events since (backlog check): every event from `since`, synced or not, after the cursor', async () => {
+    const prisma = fakePrisma();
+    const since = new Date('2026-10-12T00:00:00Z');
+    await new LocalSource(prisma).eventsSince({ since, afterId: 7, limit: 1000 });
+    assert.deepEqual(prisma.calls[0].arg, {
+        where: { timestamp: { gte: since }, id: { gt: 7 } },
+        orderBy: { id: 'asc' }, take: 1000,
+        select: { id: true, deviceId: true, supremaEventId: true, timestamp: true },
+    });
+});
