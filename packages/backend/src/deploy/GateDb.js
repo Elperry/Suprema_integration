@@ -6,12 +6,21 @@
  *                          new one never leaves the PC and the old code's .env
  *                          stops working
  *   withPassword           the same URL with another password
+ *   newCloudPassword       random, meets the server's MEDIUM password policy,
+ *                          and needs no escaping in a URL or an SQL literal
  *
  * `connect(url)` returns a Prisma-like client ($queryRawUnsafe,
  * $executeRawUnsafe, $disconnect). Nothing here prints a password: error text
  * is masked before it is returned.
  */
+import crypto from 'node:crypto';
+
 const LOCAL_TABLES = ['user', 'card_assignments', 'device_enrollments', 'employee', 'tempaccess', 'device'];
+
+/** 192 random bits as hex, plus a fixed tail for the policy's upper-case, digit and special-character rules. */
+export function newCloudPassword() {
+    return `${crypto.randomBytes(24).toString('hex')}Kx-7`;
+}
 
 export function withPassword(url, password) {
     const u = new URL(url);
@@ -100,16 +109,16 @@ export class GateDbProbe {
 }
 
 export class CloudPasswordRotation {
-    /** @param {{connect: Function, randomHex: () => string}} deps */
-    constructor({ connect, randomHex }) {
+    /** @param {{connect: Function, generatePassword?: () => string}} deps */
+    constructor({ connect, generatePassword = newCloudPassword }) {
         this.connect = connect;
-        this.randomHex = randomHex;
+        this.generatePassword = generatePassword;
     }
 
     /** @returns {Promise<{url: string, verified: boolean}>} */
     async rotate(currentUrl) {
-        const password = this.randomHex();
-        if (!/^[0-9a-f]{32,}$/.test(String(password))) throw new Error('the generated password must be plain hex');
+        const password = this.generatePassword();
+        if (!/^[A-Za-z0-9-]{32,}$/.test(String(password))) throw new Error('the generated password must be 32+ URL-safe characters (letters, digits, -)');
         const next = withPassword(currentUrl, password);
 
         const current = this.connect(currentUrl);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CloudPasswordRotation, GateDbProbe, withPassword } from './GateDb.js';
+import { CloudPasswordRotation, GateDbProbe, withPassword, newCloudPassword } from './GateDb.js';
 
 const OLD_URL = 'mysql://suprema_hr:p%40ss%23old@db.example:3306/ice_hikv?connection_limit=5';
 const NEW_PW = 'b'.repeat(48);
@@ -37,7 +37,7 @@ test('withPassword swaps only the password and keeps user, host, schema and para
 
 test('rotation changes the password on the current connection, then proves the new one', async () => {
     const { connect, log } = fakeConnect();
-    const result = await new CloudPasswordRotation({ connect, randomHex: () => NEW_PW }).rotate(OLD_URL);
+    const result = await new CloudPasswordRotation({ connect, generatePassword: () => NEW_PW }).rotate(OLD_URL);
     assert.equal(result.verified, true);
     assert.equal(new URL(result.url).password, NEW_PW);
     assert.equal(log[0].url, OLD_URL);
@@ -47,21 +47,35 @@ test('rotation changes the password on the current connection, then proves the n
 
 test('a failed ALTER leaves the old password in place and throws', async () => {
     const { connect } = fakeConnect({ fail: { [`ALTER USER USER() IDENTIFIED BY '${NEW_PW}'`]: true } });
-    await assert.rejects(new CloudPasswordRotation({ connect, randomHex: () => NEW_PW }).rotate(OLD_URL), /password was not changed/);
+    await assert.rejects(new CloudPasswordRotation({ connect, generatePassword: () => NEW_PW }).rotate(OLD_URL), /password was not changed/);
 });
 
 test('a failed check after the change still returns the new URL, marked unverified', async () => {
     const newUrl = withPassword(OLD_URL, NEW_PW);
     const { connect } = fakeConnect({ fail: { [newUrl]: true } });
-    const result = await new CloudPasswordRotation({ connect, randomHex: () => NEW_PW }).rotate(OLD_URL);
+    const result = await new CloudPasswordRotation({ connect, generatePassword: () => NEW_PW }).rotate(OLD_URL);
     assert.equal(result.verified, false);
     assert.equal(result.url, newUrl);
 });
 
-test('rotation refuses a generated password that is not plain hex', async () => {
+test('rotation refuses a generated password with characters a URL or SQL literal would need escaped', async () => {
     const { connect, log } = fakeConnect();
-    await assert.rejects(new CloudPasswordRotation({ connect, randomHex: () => "x'; DROP" }).rotate(OLD_URL), /hex/);
+    await assert.rejects(new CloudPasswordRotation({ connect, generatePassword: () => "x'; DROP" + 'a'.repeat(40) }).rotate(OLD_URL), /URL-safe/);
     assert.equal(log.length, 0);
+});
+
+test('a new cloud password meets the server policy (MEDIUM) and needs no escaping', () => {
+    for (let i = 0; i < 50; i++) {
+        const pw = newCloudPassword();
+        assert.ok(pw.length >= 40, 'long');
+        assert.match(pw, /[A-Z]/);
+        assert.match(pw, /[a-z]/);
+        assert.match(pw, /[0-9]/);
+        assert.match(pw, /[^A-Za-z0-9]/);
+        assert.match(pw, /^[A-Za-z0-9-]+$/);
+        assert.equal(new URL(withPassword(OLD_URL, pw)).password, pw);
+    }
+    assert.notEqual(newCloudPassword(), newCloudPassword());
 });
 
 test('the local probe reports counts as numbers and keeps going past a missing table', async () => {

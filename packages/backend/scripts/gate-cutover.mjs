@@ -13,7 +13,6 @@
  *                                    CLOUD_SYNC_EVENTS_SINCE, NEW_CLOUD_DATABASE_URL)
  */
 import fs from 'node:fs';
-import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { PrismaClient } from '@prisma/client';
 import { GateEnvMigration } from '../src/deploy/GateEnvMigration.js';
@@ -47,7 +46,7 @@ async function main() {
             return report.local.ok && report.cloud.ok ? 0 : 1;
         }
         case 'rotate-cloud': {
-            const rotation = new CloudPasswordRotation({ connect, randomHex: () => crypto.randomBytes(24).toString('hex') });
+            const rotation = new CloudPasswordRotation({ connect });
             const { url, verified } = await rotation.rotate(process.env.CLOUD_DATABASE_URL);
             process.stdout.write(url + '\n');
             return verified ? 0 : 3;
