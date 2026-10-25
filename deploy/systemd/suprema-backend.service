@@ -1,0 +1,19 @@
+[Unit]
+Description=Suprema HR integration (gate PC backend + operator UI on 127.0.0.1)
+After=network-online.target mysql.service suprema-gateway.service
+Wants=network-online.target
+Requires=suprema-gateway.service
+
+[Service]
+Type=simple
+User=gate
+WorkingDirectory=/opt/suprema/packages/backend
+EnvironmentFile=/etc/suprema/backend.env
+ExecStart=/usr/bin/node index.js
+Restart=always
+RestartSec=10
+# Swipes are buffered in the local DB while the backend restarts.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

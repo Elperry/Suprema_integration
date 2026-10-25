@@ -37,6 +37,7 @@ import EventReplicationService from './services/eventReplicationService.js';
 import AuditService from './services/auditService.js';
 import CloudSyncService from './services/cloudSyncService.js';
 import { schemaAction } from './core/schemaGuard.js';
+import { SupremaVisitorProvisioner } from './services/visitors/SupremaVisitorProvisioner.js';
 import SyncSettingsService from './services/syncSettingsService.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -426,6 +427,15 @@ export async function bootstrap() {
         logger,
         intervalMs: config.database.cloudSyncIntervalMs,
         trigger: config.database.cloudSyncTrigger,
+        // Off until proven on the simulator and one terminal (deploy/README.md).
+        visitorProvisioner: process.env.VISITOR_QR_PROVISIONING === 'true'
+            ? new SupremaVisitorProvisioner({
+                userService: container.resolve('userService'),
+                biometricService: container.resolve('biometricService'),
+                connectionService: container.resolve('connectionService'),
+                logger,
+            })
+            : null,
     });
     container.registerInstance('cloudSyncService', cloudSync);
 

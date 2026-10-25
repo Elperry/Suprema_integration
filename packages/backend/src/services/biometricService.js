@@ -1022,16 +1022,35 @@ class SupremaBiometricService extends EventEmitter {
     }
 
     /**
-     * Set QR code configuration on device
-     * Note: This is a placeholder - actual implementation depends on device capabilities
-     * @param {string|number} deviceId - Device ID
-     * @param {Object} qrConfig - QR configuration
-     * @returns {Promise<boolean>}
+     * Set QR code configuration on a device (card.SetQRConfig).
+     * @param {string|number} deviceId - Suprema device ID
+     * @param {{useQRCode?: boolean, enabled?: boolean, scanTimeout?: number,
+     *          bypassData?: boolean, treatAsCSN?: boolean}} qrConfig
+     * @returns {Promise<{success: boolean}>}
      */
-    async setQRConfig(deviceId, qrConfig) {
-        // QR code configuration may not be available on all devices
-        this.logger.warn('setQRConfig: QR configuration is not supported on all devices');
-        return { success: false, message: 'QR configuration not implemented for this device' };
+    async setQRConfig(deviceId, qrConfig = {}) {
+        if (!this.cardClient || !this.cardClient.setQRConfig) {
+            throw new Error('Card service not connected');
+        }
+        const config = new cardMessage.QRConfig();
+        config.setUseqrcode(Boolean(qrConfig.useQRCode ?? qrConfig.enabled ?? true));
+        if (qrConfig.scanTimeout) config.setScantimeout(Number(qrConfig.scanTimeout));
+        config.setBypassdata(Boolean(qrConfig.bypassData));
+        config.setTreatascsn(Boolean(qrConfig.treatAsCSN));
+
+        const req = new cardMessage.SetQRConfigRequest();
+        req.setDeviceid(Number(deviceId));
+        req.setConfig(config);
+        return new Promise((resolve, reject) => {
+            this.cardClient.setQRConfig(req, (err) => {
+                if (err) {
+                    this.logger.error(`setQRConfig failed on device ${deviceId}: ${err.message}`);
+                    reject(err);
+                    return;
+                }
+                resolve({ success: true });
+            });
+        });
     }
 
     /**
