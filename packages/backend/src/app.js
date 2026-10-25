@@ -11,6 +11,10 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import { v4 as uuidv4 } from 'uuid';
+import { createApiAuth, redactResponses, parseOrigins } from './middleware/apiSecurity.js';
+import { createRateLimiter } from './middleware/rateLimiter.js';
+import { mountFrontend } from './middleware/frontend.js';
+import { fileURLToPath } from 'node:url';
 
 // Routes
 import deviceRoutes from './routes/deviceRoutes.js';
@@ -68,7 +72,7 @@ function setupMiddleware(app, config, logger) {
     app.use(helmet());
 
     app.use(cors({
-        origin: config.server.corsOrigin,
+        origin: parseOrigins(config.server.corsOrigin),
         credentials: true
     }));
 
@@ -76,8 +80,12 @@ function setupMiddleware(app, config, logger) {
         stream: { write: (msg) => logger.info(msg.trim()) }
     }));
 
-    app.use(express.json({ limit: '50mb' }));
-    app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+    app.use(express.json({ limit: '10mb' }));
+    app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+    // Every /api call: no secret in any response, rate limited, token required.
+    app.use('/api', redactResponses, createRateLimiter({ windowMs: 60000, maxRequests: Number(process.env.RATE_LIMIT_MAX_REQUESTS || 600) }),
+        createApiAuth({ token: config.server.apiToken, logger }));
 
     // Attach unique request ID
     app.use((req, res, next) => {
@@ -227,6 +235,8 @@ export function createApp(container) {
 
     setupMiddleware(app, config, logger);
     setupRoutes(app, services);
+    const uiDir = process.env.FRONTEND_DIST || fileURLToPath(new URL('../../frontend/dist', import.meta.url));
+    if (mountFrontend(app, uiDir)) logger.info(`Operator UI served from ${uiDir}`);
     setupErrorHandling(app, logger);
 
     return app;

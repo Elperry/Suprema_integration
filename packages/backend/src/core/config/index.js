@@ -33,7 +33,6 @@ export function getEnvironment() {
  * @returns {boolean}
  */
 export function isProduction() {
-    return true;
     return getEnvironment() === ENVIRONMENTS.PRODUCTION;
 }
 
@@ -42,7 +41,6 @@ export function isProduction() {
  * @returns {boolean}
  */
 export function isDevelopment() {
-    return false;
     return getEnvironment() === ENVIRONMENTS.DEVELOPMENT;
 }
 
@@ -91,9 +89,11 @@ const configSchema = {
     
     // Server
     server: {
-        host: process.env.HOST || '0.0.0.0',
+        // Local only by default: the API can revoke cards and change sync settings.
+        host: process.env.HOST || '127.0.0.1',
         port: parseInteger(process.env.PORT, 3000),
-        corsOrigin: process.env.CORS_ORIGIN || '*',
+        corsOrigin: process.env.CORS_ORIGIN || '',
+        apiToken: process.env.API_TOKEN || '',
         trustProxy: parseBoolean(process.env.TRUST_PROXY, false)
     },
     

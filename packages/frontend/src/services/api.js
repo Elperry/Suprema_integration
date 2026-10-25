@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { API_CONFIG, API_ENDPOINTS } from '../config/constants';
 import { DEVICE_OFFLINE_MESSAGE, GATEWAY_OFFLINE_MESSAGE, isDeviceUnavailableMessage, isGatewayUnavailableMessage } from '../utils/gatewayErrors';
+import { getApiToken, askForApiToken } from './apiToken';
 
 /**
  * Parse API error and return user-friendly message
@@ -62,6 +63,11 @@ const setupInterceptors = (axiosInstance) => {
   axiosInstance.interceptors.response.use(
     (response) => response,
     (error) => {
+      // Missing or wrong API token: ask once, then retry the same request.
+      if (error.response?.status === 401 && error.config && !error.config.__tokenRetried && askForApiToken()) {
+        error.config.__tokenRetried = true;
+        return axiosInstance.request(error.config);
+      }
       // Enhanced error with parsed message
       error.userMessage = parseApiError(error);
       
@@ -84,7 +90,7 @@ const setupInterceptors = (axiosInstance) => {
   axiosInstance.interceptors.request.use(
     (config) => {
       // Add auth token if available
-      const token = localStorage.getItem('auth_token');
+      const token = getApiToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }

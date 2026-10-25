@@ -21,8 +21,9 @@ async function main() {
 
     // Start HTTP server
     const port = config.server.port;
-    const server = app.listen(port, () => {
-        logger.info(`Suprema HR Integration Server running on port ${port}`);
+    const host = config.server.host;
+    const server = app.listen(port, host, () => {
+        logger.info(`Suprema HR Integration Server listening on ${host}:${port}`);
         logger.info(`API documentation available at http://localhost:${port}/api`);
         logger.info(`Health check available at http://localhost:${port}/health`);
     });
