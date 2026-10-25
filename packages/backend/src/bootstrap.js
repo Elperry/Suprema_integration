@@ -36,6 +36,7 @@ import HRIntegrationService from './services/hrIntegrationService.js';
 import EventReplicationService from './services/eventReplicationService.js';
 import AuditService from './services/auditService.js';
 import CloudSyncService from './services/cloudSyncService.js';
+import { schemaAction } from './core/schemaGuard.js';
 import SyncSettingsService from './services/syncSettingsService.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -96,7 +97,7 @@ async function isSchemaMissing(databaseUrl, expectedTables) {
 }
 
 /**
- * Run `prisma db push` to create/update the local schema.
+ * Check the local schema at startup (see core/schemaGuard.js).
  * Idempotent: when the DB already matches schema.prisma, Prisma exits quickly
  * without altering anything. Skipped when AUTO_SCHEMA_SYNC=false.
  *
@@ -143,16 +144,18 @@ async function ensureSchema(logger) {
         clientStale = true;
     }
 
-    if (!missing && !clientStale) {
+    const action = schemaAction({ missing, clientStale });
+    if (action === 'none') {
         logger.debug('Schema check: all expected tables present, generated client up to date');
         return;
     }
-
-    if (missing) {
-        logger.info('Schema missing or out of date — running prisma db push...');
-    } else {
-        logger.info('Generated Prisma client is stale — running prisma generate...');
+    if (action === 'refuse') {
+        throw new Error(
+            'Local database schema is incomplete. Run `npx prisma migrate deploy` in packages/backend ' +
+            '(see deploy/README.md); startup no longer runs `prisma db push --accept-data-loss`.'
+        );
     }
+    logger.info('Generated Prisma client is stale — running prisma generate...');
 
     let prismaBin = null;
     let dir = backendRoot;
@@ -172,11 +175,7 @@ async function ensureSchema(logger) {
         return;
     }
 
-    // `db push` (without --skip-generate) implicitly runs `generate`, so we
-    // only need a standalone `generate` when the DB is fine but the client is stale.
-    const args = missing
-        ? ['db', 'push', '--accept-data-loss']
-        : ['generate'];
+    const args = ['generate'];
 
     await new Promise((resolve) => {
         const child = spawn(
