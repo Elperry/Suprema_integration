@@ -150,3 +150,15 @@ test("a failed registry push never sends a new hire's swipe up unattributed", as
     cloud.updateById = realUpdate;
     assert.equal(cloud.tables.events.some(e => e.supremaEventId === 1003 && e.userId === null), false);
 });
+
+test('a new employee pushed by the other PC after our first read is not inserted twice', async () => {
+    const { cloud, pc1, pc2 } = scenario();
+    const svc1 = service(cloud, pc1);
+    await svc1._cycle();                       // PC1 loads and pushes Mona and Omar
+    const users2 = await pc2.users();
+    users2.push({ id: 3, code: 'C3', name: 'Hana', full_name: 'Hana', employee_id: 1003 });
+    await service(cloud, pc2)._cycle();        // PC2 inserts Hana
+    (await pc1.users()).push({ id: 5, code: 'C3', name: 'Hana', full_name: 'Hana', employee_id: 1003 });
+    await svc1._cycle();                       // same PC1 process: its memory never saw Hana
+    assert.equal(cloud.tables.user.filter(u => u.employee_id === 1003).length, 1);
+});

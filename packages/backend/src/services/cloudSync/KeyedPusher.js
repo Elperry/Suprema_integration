@@ -14,8 +14,12 @@
  *   - nothing is ever deleted from the cloud.
  *
  * The cloud table is read once and remembered (key -> cloud row); later
- * cycles compare against that memory and write only differences. reset()
- * forgets it, e.g. after a connectivity failure.
+ * cycles compare against that memory and write only differences. Another PC
+ * writes into the same table, so a key the memory lacks is looked up in the
+ * cloud before it is inserted, and a duplicate-key refusal (the other PC won
+ * the race) is absorbed by learning that row. When one key has several cloud
+ * rows (old duplicates) the lowest id wins, so every PC picks the same one.
+ * reset() forgets everything, e.g. after a failed push.
  *
  * A spec is:
  *   table      cloud table name
@@ -24,6 +28,9 @@
  *   toCloud    localRow -> object|null  cloud-shaped row without id; null = skip
  *   updatable  columns a push may change on an existing cloud row
  *   immutable  columns whose difference is a conflict
+ *   equal      { column: (cloudValue, wanted) -> bool }  optional comparison for an immutable column
+ *   lookup     { column, scope? }  how to find rows by natural key in the cloud
+ *              (WHERE column IN (...), grouped by `scope` when the key has two parts)
  */
 export class KeyedPusher {
     constructor(spec, cloudStore, logger, { batchSize = 100 } = {}) {
@@ -32,12 +39,12 @@ export class KeyedPusher {
         this.logger = logger;
         this.batchSize = batchSize;
         this.byKey = null;
-        this.maxId = 0;
+        this.byId = new Map();
     }
 
     reset() {
         this.byKey = null;
-        this.maxId = 0;
+        this.byId = new Map();
     }
 
     /** Cloud id of the row a local row maps to, or null. */
@@ -49,6 +56,11 @@ export class KeyedPusher {
     /** Cloud row for a natural key, or null. */
     cloudRowForKey(key) {
         return this.byKey ? (this.byKey.get(key) || null) : null;
+    }
+
+    /** Any cloud row this pusher has seen, by cloud id, or null. */
+    cloudRowById(id) {
+        return this.byId.get(String(id)) || null;
     }
 
     async load() {
@@ -65,7 +77,7 @@ export class KeyedPusher {
     async push(localRows) {
         await this.load();
         const stats = { inserted: 0, updated: 0, unchanged: 0, skipped: 0, conflicts: [] };
-        const toInsert = [];
+        const pending = [];
 
         for (const local of localRows) {
             const cloudShaped = this.spec.toCloud(local);
@@ -75,26 +87,22 @@ export class KeyedPusher {
                 continue;
             }
             const existing = this._match(keys);
-            if (!existing) {
-                toInsert.push({ keys, row: cloudShaped });
-                continue;
-            }
-            const conflict = this._immutableDiff(existing, cloudShaped);
-            if (conflict) {
-                stats.conflicts.push({ key: keys[0], cloudId: existing.id, ...conflict });
-                continue;
-            }
-            const changes = this._updatableDiff(existing, cloudShaped);
-            if (Object.keys(changes).length === 0) {
-                stats.unchanged++;
-                continue;
-            }
-            await this.cloud.updateById(this.spec.table, existing.id, changes);
-            Object.assign(existing, changes);
-            stats.updated++;
+            if (existing) await this._reconcile(existing, cloudShaped, keys, stats);
+            else pending.push({ keys, row: cloudShaped });
         }
 
-        stats.inserted = await this._insert(toInsert);
+        if (pending.length > 0) {
+            // Another PC may have inserted some of these since our first read.
+            await this._learn(pending);
+            const toInsert = [];
+            for (const item of pending) {
+                const existing = this._match(item.keys);
+                if (existing) await this._reconcile(existing, item.row, item.keys, stats);
+                else toInsert.push(item);
+            }
+            stats.inserted = await this._insert(toInsert);
+        }
+
         if (stats.conflicts.length > 0) {
             this.logger.warn(
                 `[CloudSync:${this.spec.table}] ${stats.conflicts.length} conflict(s) left untouched: ` +
@@ -104,6 +112,22 @@ export class KeyedPusher {
         return stats;
     }
 
+    async _reconcile(existing, wanted, keys, stats) {
+        const conflict = this._immutableDiff(existing, wanted);
+        if (conflict) {
+            stats.conflicts.push({ key: keys[0], cloudId: existing.id, ...conflict });
+            return;
+        }
+        const changes = this._updatableDiff(existing, wanted);
+        if (Object.keys(changes).length === 0) {
+            stats.unchanged++;
+            return;
+        }
+        await this.cloud.updateById(this.spec.table, existing.id, changes);
+        Object.assign(existing, changes);
+        stats.updated++;
+    }
+
     async _insert(pending) {
         // Two local rows with one key (should not happen) insert once.
         const unique = new Map();
@@ -111,17 +135,52 @@ export class KeyedPusher {
             if (!unique.has(item.keys[0])) unique.set(item.keys[0], item);
         }
         const items = [...unique.values()];
+        let inserted = 0;
         for (let i = 0; i < items.length; i += this.batchSize) {
             const batch = items.slice(i, i + this.batchSize);
-            await this.cloud.insertMany(this.spec.table, batch.map(item => item.row));
+            try {
+                inserted += await this.cloud.insertMany(this.spec.table, batch.map(item => item.row));
+            } catch (error) {
+                if (!isDuplicateKeyError(error)) throw error;
+                inserted += await this._insertOneByOne(batch);
+            }
         }
-        if (items.length > 0) {
-            // Learn the ids the cloud assigned (one indexed read above the
-            // highest id already known), so callers can translate.
-            const fresh = await this.cloud.findAbove(this.spec.table, this.maxId, this.spec.columns);
-            for (const row of fresh) this._remember(row);
+        // Learn the ids the cloud assigned (and the rows another PC won), so callers can translate.
+        if (items.length > 0) await this._learn(items);
+        return inserted;
+    }
+
+    async _insertOneByOne(batch) {
+        let inserted = 0;
+        for (const item of batch) {
+            try {
+                inserted += await this.cloud.insertMany(this.spec.table, [item.row]);
+            } catch (error) {
+                if (!isDuplicateKeyError(error)) throw error;
+            }
         }
-        return items.length;
+        return inserted;
+    }
+
+    /** Reads the cloud rows for these items' natural keys and remembers them. */
+    async _learn(items) {
+        const { column, scope } = this.spec.lookup;
+        const { table, columns } = this.spec;
+        const rows = [];
+        if (!scope) {
+            rows.push(...await this.cloud.findIn(table, column, distinct(items.map(item => item.row[column])), columns));
+        } else {
+            const byScope = new Map();
+            for (const item of items) {
+                const scopeValue = item.row[scope];
+                if (!byScope.has(scopeValue)) byScope.set(scopeValue, []);
+                byScope.get(scopeValue).push(item.row[column]);
+            }
+            for (const [scopeValue, values] of byScope) {
+                rows.push(...await this.cloud.findInScoped(table, scope, scopeValue, column, distinct(values), columns));
+            }
+        }
+        for (const row of rows) this._remember(row);
     }
 
     _match(keys) {
@@ -133,14 +192,18 @@ export class KeyedPusher {
     }
 
     _remember(row) {
-        for (const key of this.spec.keysOf(row)) this.byKey.set(key, row);
-        this.maxId = Math.max(this.maxId, Number(row.id) || 0);
+        this.byId.set(String(row.id), row);
+        for (const key of this.spec.keysOf(row)) {
+            const current = this.byKey.get(key);
+            if (!current || Number(row.id) <= Number(current.id)) this.byKey.set(key, row);
+        }
     }
 
     _immutableDiff(cloudRow, wanted) {
         for (const column of this.spec.immutable || []) {
             if (!(column in wanted)) continue;
-            if (!sameValue(cloudRow[column], wanted[column])) {
+            const equal = this.spec.equal?.[column] ?? sameValue;
+            if (!equal(cloudRow[column], wanted[column])) {
                 return { column, cloud: cloudRow[column], local: wanted[column] };
             }
         }
@@ -155,6 +218,17 @@ export class KeyedPusher {
         }
         return changes;
     }
+}
+
+/** MySQL 1062 as Prisma raw queries report it (P2010 + meta.code), or a P2002. */
+export function isDuplicateKeyError(error) {
+    if (!error) return false;
+    return error.code === 'P2002' || String(error.meta?.code) === '1062' || error.errno === 1062
+        || /Duplicate entry/i.test(String(error.message || ''));
+}
+
+function distinct(values) {
+    return [...new Set(values.filter(value => value !== null && value !== undefined).map(String))];
 }
 
 /** Equality across the shapes MySQL hands back (Date, bigint, 0/1 booleans, numeric strings). */

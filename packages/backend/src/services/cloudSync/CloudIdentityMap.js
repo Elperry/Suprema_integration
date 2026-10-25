@@ -8,6 +8,9 @@
  *   local device -> serialNumber  -> cloud device
  *   local card   -> card_data     -> cloud card (only if it belongs to the same person)
  *
+ * "Same person" compares employee ids, so a card held by an older duplicate
+ * cloud user row of the same employee still counts.
+ *
  * The user ID enrolled on a terminal is the local user.id, so a device user
  * id translates exactly like a local user id. Every lookup answers null when
  * there is no safe cloud match; callers then leave the row pending.
@@ -18,7 +21,7 @@ export class CloudIdentityMap {
      * @param {object[]} o.localUsers    { id, employee_id }
      * @param {object[]} o.localDevices  { id, serialNumber }
      * @param {object[]} o.localCards    { id, user_id, card_data }
-     * @param {{cloudRowForKey(key:string): object|null}} o.users / o.devices / o.cards  the pushers
+     * @param {{cloudRowForKey(key:string): object|null, cloudRowById(id): object|null}} o.users / o.devices / o.cards  the pushers
      */
     constructor({ localUsers, localDevices, localCards, users, devices, cards }) {
         this.usersById = new Map(localUsers.map(u => [Number(u.id), u]));
@@ -58,6 +61,16 @@ export class CloudIdentityMap {
         const row = this.cards.cloudRowForKey(`card:${card.card_data}`);
         if (!row) return null;
         const owner = this.cloudUserId(card.user_id);
-        return owner !== null && String(owner) === String(row.user_id) ? row.id : null;
+        return owner !== null && this.sameCloudUser(owner, row.user_id) ? row.id : null;
+    }
+
+    /** Two cloud user ids are one person: the same row, or rows of the same employee. */
+    sameCloudUser(a, b) {
+        if (a === null || a === undefined || b === null || b === undefined) return false;
+        if (String(a) === String(b)) return true;
+        const left = this.users.cloudRowById(a);
+        const right = this.users.cloudRowById(b);
+        if (!left || !right || left.employee_id === null || left.employee_id === undefined) return false;
+        return String(left.employee_id) === String(right.employee_id);
     }
 }

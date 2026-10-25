@@ -76,6 +76,7 @@ class CloudSyncService {
             cloudUserIdForDeviceUser: id => this.identity?.cloudUserIdForDeviceUser(id) ?? null,
             cloudDeviceId: id => this.identity?.cloudDeviceId(id) ?? null,
             cloudCardId: id => this.identity?.cloudCardId(id) ?? null,
+            sameCloudUser: (a, b) => this.identity?.sameCloudUser(a, b) ?? false,
         };
         this.pushers = {
             users: new KeyedPusher(userSpec(), cloud, logger),

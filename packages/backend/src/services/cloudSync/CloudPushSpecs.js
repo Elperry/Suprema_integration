@@ -25,6 +25,7 @@ export function userSpec() {
         }),
         updatable: ['code', 'name', 'full_name'],
         immutable: ['employee_id'],
+        lookup: { column: 'employee_id' },
     };
 }
 
@@ -46,10 +47,14 @@ export function deviceSpec() {
         } : null),
         updatable: ['name', 'ip', 'port', 'isActive', 'direction', 'deviceType'],
         immutable: [],
+        lookup: { column: 'serialNumber' },
     };
 }
 
-/** @param {{cloudUserId: (localUserId:number) => number|null}} ctx */
+/**
+ * @param {{cloudUserId: (localUserId:number) => number|null,
+ *          sameCloudUser: (a:number, b:number) => boolean}} ctx
+ */
 export function cardSpec(ctx) {
     return {
         table: 'card_assignments',
@@ -70,7 +75,10 @@ export function cardSpec(ctx) {
         },
         updatable: ['status', 'revokedAt', 'notes'],
         // A card the cloud already holds for another person is never moved.
+        // Two cloud user rows of one employee (old duplicates) are one person.
         immutable: ['user_id'],
+        equal: { user_id: (cloudValue, wanted) => ctx.sameCloudUser(cloudValue, wanted) },
+        lookup: { column: 'card_data' },
     };
 }
 
@@ -99,5 +107,6 @@ export function enrollmentSpec(ctx) {
         },
         updatable: ['status'],
         immutable: [],
+        lookup: { scope: 'deviceId', column: 'cardAssignmentId' },
     };
 }
