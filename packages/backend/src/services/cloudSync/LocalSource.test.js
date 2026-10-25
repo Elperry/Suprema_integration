@@ -17,6 +17,7 @@ function fakePrisma(answers = {}) {
         cardAssignment: model('cardAssignment'), deviceEnrollment: model('deviceEnrollment'),
         employee: model('employee'), tempAccess: model('tempAccess'),
         async $transaction(ops) { return Promise.all(ops); },
+        async $executeRawUnsafe(sql, ...params) { calls.push({ raw: sql, params }); return 3; },
     };
     return prisma;
 }
@@ -62,4 +63,13 @@ test('employees without a user: only those whose id no user references', async (
     });
     const missing = await new LocalSource(prisma).employeesWithoutUser();
     assert.deepEqual(missing.map(e => e.id), [2]);
+});
+
+test('user code and names follow the employee cache; ids are never touched', async () => {
+    const prisma = fakePrisma();
+    const changed = await new LocalSource(prisma).refreshUsersFromEmployees();
+    assert.equal(changed, 3);
+    const { raw } = prisma.calls[0];
+    assert.match(raw, /UPDATE `user` u JOIN `employee` e ON e\.id = u\.employee_id/);
+    assert.doesNotMatch(raw, /u\.id\s*=|employee_id\s*=\s*[^u]/, 'never sets id or employee_id');
 });

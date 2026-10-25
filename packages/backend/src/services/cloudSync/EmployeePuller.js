@@ -40,6 +40,7 @@ export class EmployeePuller {
 
         const removed = await this._prune(employees.map(e => e.id));
         const usersCreated = await this._provisionUsers();
+        await this.local.refreshUsersFromEmployees();
         this.logger.info(`Employee pull: ${employees.length} upserted, ${removed} stale removed, ${usersCreated} user(s) created`);
         return { upserted: employees.length, removed, usersCreated };
     }

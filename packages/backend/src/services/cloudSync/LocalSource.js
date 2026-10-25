@@ -91,6 +91,20 @@ export class LocalSource {
         return this.prisma.user.createMany({ data: rows, skipDuplicates: true });
     }
 
+    /**
+     * Existing users take their code and names from the employee cache
+     * (HR edits an employee code; the cloud user row follows on the next
+     * push). Never touches user.id - it is the user ID on the terminals.
+     */
+    refreshUsersFromEmployees() {
+        return this.prisma.$executeRawUnsafe(
+            "UPDATE `user` u JOIN `employee` e ON e.id = u.employee_id SET "
+            + "u.code = COALESCE(NULLIF(e.code, ''), u.code), "
+            + "u.name = COALESCE(NULLIF(e.displayname, ''), NULLIF(e.fullname, ''), u.name), "
+            + "u.full_name = COALESCE(NULLIF(e.fullname, ''), NULLIF(e.displayname, ''), u.full_name)"
+        );
+    }
+
     // ── visitors (local tempaccess is a cache of cloud rows, keyed by cloud id) ─
 
     async provisionedIds(ids) {

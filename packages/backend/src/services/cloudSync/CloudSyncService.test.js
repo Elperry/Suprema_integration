@@ -25,6 +25,7 @@ function gatePc({ users, devices, cards, enrollments, events }) {
         async deleteEmployeesNotIn() {},
         async employeesWithoutUser() { return []; },
         async createUsers() {},
+        async refreshUsersFromEmployees() { return 0; },
         async provisionedIds() { return []; },
         async recordProvisioned() {},
     };

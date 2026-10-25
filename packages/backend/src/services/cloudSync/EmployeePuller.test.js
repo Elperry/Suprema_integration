@@ -21,6 +21,8 @@ function fakeLocal(existing = [], users = []) {
             return [...local.employees.values()].filter(e => !have.has(e.id));
         },
         async createUsers(rows) { local.users.push(...rows); },
+        refreshed: 0,
+        async refreshUsersFromEmployees() { local.refreshed++; return 0; },
     };
     return local;
 }
@@ -67,4 +69,11 @@ test('every employee without a local user gets one', async () => {
     await new EmployeePuller({ cloud, local, logger: silent }).run();
     assert.deepEqual(local.users.map(u => u.employee_id), [1, 2]);
     assert.deepEqual(local.users[1], { code: 'C2', name: 'E2', full_name: 'Emp 2', employee_id: 2 });
+});
+
+test('existing users take their code and names from the employee cache every cycle', async () => {
+    const cloud = new MemoryCloudStore({ employee: [cloudEmployee(1)] });
+    const local = fakeLocal([], [{ employee_id: 1 }]);
+    await new EmployeePuller({ cloud, local, logger: silent }).run();
+    assert.equal(local.refreshed, 1);
 });
