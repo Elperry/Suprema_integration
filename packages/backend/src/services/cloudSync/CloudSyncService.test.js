@@ -16,8 +16,11 @@ function gatePc({ users, devices, cards, enrollments, events }) {
         async devices() { return data.devices; },
         async cards() { return data.cards; },
         async enrollments() { return data.enrollments; },
-        async pendingEvents({ since: s, limit }) {
-            return pc.events.filter(e => e.cloudSyncedAt === null && e.timestamp >= s).slice(0, limit);
+        async pendingEvents({ since: s, limit, afterId = 0 }) {
+            return pc.events.filter(e => e.cloudSyncedAt === null && e.timestamp >= s && e.id > afterId).slice(0, limit);
+        },
+        async existingUserIds(ids) {
+            return ids.filter(id => data.users.some(u => String(u.id) === String(id)));
         },
         async markEventsSynced(ids, at) { for (const e of pc.events) if (ids.includes(e.id)) e.cloudSyncedAt = at; },
         async upsertEmployees(rows) { for (const r of rows) pc.employees.set(r.id, r); },
@@ -118,4 +121,32 @@ test('a disabled trigger runs nothing on start', () => {
     assert.equal(svc.isEnabled(), false);
     svc.start();
     assert.equal(svc.getRuntimeStatus().running, false);
+});
+
+test('a page of untranslatable events does not end the cycle: later swipes still go up', async () => {
+    const { cloud, pc1 } = scenario();
+    pc1.events = [ev(1, 9, '3', 5001), ev(2, 2, '3', 5002)].map(e => ({ cloudSyncedAt: null, ...e }));
+    const svc = new CloudSyncService({
+        cloudStore: cloud, localSource: pc1, logger: silent, trigger: 'interval',
+        eventsSince: since, eventBatchSize: 1, today: () => '2026-10-26',
+    });
+    await svc._cycle();
+    assert.deepEqual(cloud.tables.events.filter(e => e.id !== 500).map(e => e.supremaEventId), [5002]);
+});
+
+test("a failed registry push never sends a new hire's swipe up unattributed", async () => {
+    const { cloud, pc1 } = scenario();
+    await service(cloud, pc1)._cycle();
+    // A new hire appears locally, then the next registry push fails part-way
+    // (e.g. the cloud account lacks a column grant).
+    pc1.events.push({ cloudSyncedAt: null, ...ev(3, 2, '5', 1003) });
+    const users = await pc1.users();
+    users.push({ id: 5, code: 'C3', name: 'Hana', full_name: 'Hana', employee_id: 1003 });
+    const svc = service(cloud, pc1);
+    const realUpdate = cloud.updateById.bind(cloud);
+    cloud.updateById = async () => { throw new Error('UPDATE command denied'); };
+    (await pc1.devices())[0].name = 'Gate 1 renamed';
+    await svc._cycle();
+    cloud.updateById = realUpdate;
+    assert.equal(cloud.tables.events.some(e => e.supremaEventId === 1003 && e.userId === null), false);
 });

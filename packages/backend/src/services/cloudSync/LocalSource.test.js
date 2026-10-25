@@ -22,14 +22,21 @@ function fakePrisma(answers = {}) {
     return prisma;
 }
 
-test('pending events: unsynced, not before `since`, oldest first, limited', async () => {
+test('pending events: unsynced, not before `since`, after the cursor, oldest first, limited', async () => {
     const prisma = fakePrisma();
     const since = new Date('2026-10-26T00:00:00Z');
-    await new LocalSource(prisma).pendingEvents({ since, limit: 500 });
+    await new LocalSource(prisma).pendingEvents({ since, limit: 500, afterId: 42 });
     assert.deepEqual(prisma.calls[0], {
         model: 'event', method: 'findMany',
-        arg: { where: { cloudSyncedAt: null, timestamp: { gte: since } }, orderBy: { id: 'asc' }, take: 500 },
+        arg: { where: { cloudSyncedAt: null, timestamp: { gte: since }, id: { gt: 42 } }, orderBy: { id: 'asc' }, take: 500 },
     });
+});
+
+test('existing user ids: a fresh read of the local user table, answered as strings', async () => {
+    const prisma = fakePrisma({ 'user.findMany': [{ id: 6 }] });
+    const found = await new LocalSource(prisma).existingUserIds(['6', '7']);
+    assert.deepEqual(prisma.calls[0].arg, { where: { id: { in: [6, 7] } }, select: { id: true } });
+    assert.deepEqual(found, ['6']);
 });
 
 test('synced events are stamped by id', async () => {

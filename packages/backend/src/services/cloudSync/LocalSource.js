@@ -45,12 +45,18 @@ export class LocalSource {
 
     // ── events ──────────────────────────────────────────────────────────────
 
-    pendingEvents({ since, limit }) {
+    pendingEvents({ since, limit, afterId = 0 }) {
         return this.prisma.event.findMany({
-            where: { cloudSyncedAt: null, timestamp: { gte: since } },
+            where: { cloudSyncedAt: null, timestamp: { gte: since }, id: { gt: afterId } },
             orderBy: { id: 'asc' },
             take: limit,
         });
+    }
+
+    /** Which of these device user ids are local users right now (not a cached snapshot). */
+    async existingUserIds(ids) {
+        const rows = await this.prisma.user.findMany({ where: { id: { in: ids.map(Number) } }, select: { id: true } });
+        return rows.map(row => String(row.id));
     }
 
     markEventsSynced(ids, at) {

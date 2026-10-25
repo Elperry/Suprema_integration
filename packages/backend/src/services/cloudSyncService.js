@@ -50,6 +50,7 @@ class CloudSyncService {
         visitorProvisioner = null,
         today = () => schoolToday(),
         employeeMinPrunePct = Number(process.env.CLOUD_SYNC_EMPLOYEE_MIN_PRUNE_PCT ?? 50),
+        eventBatchSize = 1000,
     }) {
         this.cloudPrisma = cloudPrisma ?? null;
         this.cloud = cloudStore ?? (cloudPrisma ? new CloudStore(cloudPrisma) : null);
@@ -63,10 +64,10 @@ class CloudSyncService {
             name: 'cloud-sync', failureThreshold: CIRCUIT_FAILURE_THRESHOLD, openMs: CIRCUIT_OPEN_MS,
             logger, isFailure: isConnectivityError,
         });
-        if (this.cloud && this.local) this._wire({ eventsSince, visitorProvisioner, today, employeeMinPrunePct });
+        if (this.cloud && this.local) this._wire({ eventsSince, visitorProvisioner, today, employeeMinPrunePct, eventBatchSize });
     }
 
-    _wire({ eventsSince, visitorProvisioner, today, employeeMinPrunePct }) {
+    _wire({ eventsSince, visitorProvisioner, today, employeeMinPrunePct, eventBatchSize }) {
         const { cloud, local, logger } = this;
         this.identity = null;
         const ctx = {
@@ -87,7 +88,7 @@ class CloudSyncService {
 
         const since = eventsSince ? new Date(eventsSince) : null;
         if (since && !Number.isNaN(since.getTime())) {
-            this.eventPusher = new EventPusher({ cloud, local, ctx, logger, since });
+            this.eventPusher = new EventPusher({ cloud, local, ctx, logger, since, batchSize: eventBatchSize });
         } else {
             this.eventPusher = null;
             logger.warn('CloudSync: CLOUD_SYNC_EVENTS_SINCE is not set - events are NOT pushed to the cloud');
@@ -197,7 +198,7 @@ class CloudSyncService {
     async _pushEvents() {
         for (let batch = 0; batch < EVENT_BATCHES_PER_CYCLE; batch++) {
             const stats = await this.eventPusher.push();
-            if (stats.inserted + stats.alreadyInCloud === 0) break;
+            if (stats.scanned === 0) break;
         }
     }
 

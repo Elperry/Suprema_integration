@@ -9,9 +9,15 @@
  *   - An event is identified across PCs by (cloud device id, supremaEventId),
  *     the cloud's unique key. Missing ones are INSERTed without `id`.
  *   - `deviceId` and `userId` are translated to cloud ids. An event whose
- *     device, or whose known local user, has no cloud row yet stays pending.
- *     A device user that is not a local user at all (a visitor, a user
- *     enrolled directly on the terminal) is pushed with userId NULL.
+ *     device, or whose local user, has no cloud row yet stays pending. Local
+ *     users are checked against the local database at push time, not only
+ *     against the identity snapshot, so a user created after the snapshot is
+ *     never mistaken for a stranger. A device user that is not a local user
+ *     at all (a visitor, a user enrolled directly on the terminal) is pushed
+ *     with userId NULL.
+ *   - Pending rows never block newer ones: each push() reads the next page
+ *     after the last id it saw, and starts again from the oldest pending
+ *     event once a page comes back empty.
  *   - A local event is stamped only once the cloud is seen to hold it.
  *   - A cloud copy that disagrees (other user or time) is reported, never
  *     updated: cloud attendance is immutable.
@@ -25,7 +31,7 @@ export class EventPusher {
     /**
      * @param {object}   o
      * @param {object}   o.cloud   CloudStore
-     * @param {object}   o.local   { pendingEvents({since, limit}), markEventsSynced(ids, at) }
+     * @param {object}   o.local   { pendingEvents({since, limit, afterId}), existingUserIds(ids), markEventsSynced(ids, at) }
      * @param {object}   o.ctx     { cloudDeviceId(id), isLocalUser(userId), cloudUserIdForDeviceUser(userId) }
      * @param {Date}     o.since   first event time this PC may push
      */
@@ -39,16 +45,23 @@ export class EventPusher {
         this.logger = logger;
         this.since = since;
         this.batchSize = batchSize;
+        this.cursor = 0;
     }
 
     async push() {
-        const stats = { inserted: 0, alreadyInCloud: 0, pending: 0, mismatches: [] };
-        const events = await this.local.pendingEvents({ since: this.since, limit: this.batchSize });
-        if (events.length === 0) return stats;
+        const stats = { scanned: 0, inserted: 0, alreadyInCloud: 0, pending: 0, mismatches: [] };
+        const events = await this.local.pendingEvents({ since: this.since, limit: this.batchSize, afterId: this.cursor });
+        if (events.length === 0) {
+            this.cursor = 0;
+            return stats;
+        }
+        stats.scanned = events.length;
+        this.cursor = events.reduce((max, event) => Math.max(max, Number(event.id)), this.cursor);
 
+        const localUsers = await this._localUsers(events);
         const byDevice = new Map();
         for (const event of events) {
-            const row = this._toCloud(event);
+            const row = this._toCloud(event, localUsers);
             if (!row) {
                 stats.pending++;
                 continue;
@@ -116,14 +129,22 @@ export class EventPusher {
         return new Map(rows.map(row => [String(row.supremaEventId), row]));
     }
 
+    /** Device user ids in this page that are users in the local database now. */
+    async _localUsers(events) {
+        const ids = [...new Set(events.map(event => deviceUserOf(event)).filter(id => /^\d{1,9}$/.test(id)))];
+        if (ids.length === 0) return new Set();
+        const found = await this.local.existingUserIds(ids);
+        return new Set(found.map(String));
+    }
+
     /** Cloud-shaped event, or null when it must stay pending. */
-    _toCloud(event) {
+    _toCloud(event, localUsers) {
         const deviceId = this.ctx.cloudDeviceId(event.deviceId);
         if (deviceId === null || deviceId === undefined) return null;
 
         let userId = null;
-        const deviceUser = event.userId === null || event.userId === undefined ? '' : String(event.userId).trim();
-        if (deviceUser !== '' && this.ctx.isLocalUser(deviceUser)) {
+        const deviceUser = deviceUserOf(event);
+        if (deviceUser !== '' && (localUsers.has(deviceUser) || this.ctx.isLocalUser(deviceUser))) {
             const cloudUser = this.ctx.cloudUserIdForDeviceUser(deviceUser);
             if (cloudUser === null || cloudUser === undefined) return null;
             userId = String(cloudUser);
@@ -147,6 +168,10 @@ export class EventPusher {
             this.logger.warn(`[CloudSync:events] cloud copies differ (left untouched): ${JSON.stringify(stats.mismatches.slice(0, 5))}`);
         }
     }
+}
+
+function deviceUserOf(event) {
+    return event.userId === null || event.userId === undefined ? '' : String(event.userId).trim();
 }
 
 function sameEvent(cloudRow, localRow) {
