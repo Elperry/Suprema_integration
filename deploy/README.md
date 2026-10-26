@@ -133,11 +133,18 @@ node scripts/cloud-event-backlog.mjs --since=<stop time − 14 days, ISO UTC>
 **Start.**
 
 ```bash
-sudo cp deploy/systemd/*.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now suprema-gateway suprema-backend
+cd /opt/suprema
+sudo bash deploy/install-services.sh --dry-run        # shows the units and every action, changes nothing
+sudo bash deploy/install-services.sh --disable-old
 journalctl -u suprema-backend -f
 ```
+
+`deploy/install-services.sh` is the only source of the unit files.
+- It writes `suprema-backend.service` from the release folder, `/etc/suprema/backend.env` and the PC's `node`.
+- It reuses an existing gateway unit (any unit that runs `device_gateway_linux_x64`, such as `device_gateway.service`). It creates `suprema-gateway.service` only when there is none.
+- It refuses to start without `DATABASE_URL`, `API_TOKEN` or `node_modules`.
+- `--disable-old` stops and disables units that run this app the old way (`npm run dev:*`, nodemon, vite; for example `backend-dev` and `frontend-dev`). Without the flag it lists them and stops, because they would fight the service for the port.
+- It is safe to re-run after an update: changed units are rewritten, the old file is kept as `.bak-<time>`, and the backend restarts. It waits until `/health` answers 200.
 
 ## 2. Verify
 
