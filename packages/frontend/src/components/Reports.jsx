@@ -56,7 +56,7 @@ export default function Reports() {
   const exportReport = (format) => {
     const cleanParams = Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v !== undefined))
     const qs = new URLSearchParams({ ...cleanParams, format }).toString()
-    const base = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const base = import.meta.env.VITE_API_URL || ''
     const pathMap = {
       users: '/api/reports/users',
       usersInDevice: '/api/reports/users-in-device',

@@ -193,7 +193,7 @@ export default function Events() {
 
   const connectSSE = () => {
     if (sseRef.current) sseRef.current.close()
-    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const baseUrl = import.meta.env.VITE_API_URL || ''
     const es = new EventSource(`${baseUrl}/api/events/stream`)
     sseRef.current = es
     es.onopen = () => setSseConnected(true)

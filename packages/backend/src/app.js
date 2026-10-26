@@ -8,10 +8,10 @@
 
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
 import morgan from 'morgan';
 import { v4 as uuidv4 } from 'uuid';
 import { createApiAuth, redactResponses, parseOrigins } from './middleware/apiSecurity.js';
+import { securityHeaders } from './middleware/securityHeaders.js';
 import { createRateLimiter } from './middleware/rateLimiter.js';
 import { mountFrontend } from './middleware/frontend.js';
 import { fileURLToPath } from 'node:url';
@@ -69,7 +69,7 @@ function buildServicesObject(container) {
 // ─── Middleware ───────────────────────────────────────────────────────────────
 
 function setupMiddleware(app, config, logger) {
-    app.use(helmet());
+    app.use(securityHeaders());
 
     app.use(cors({
         origin: parseOrigins(config.server.corsOrigin),

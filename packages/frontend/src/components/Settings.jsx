@@ -21,7 +21,7 @@ const defaultSyncSettings = {
 };
 
 const defaultConnectionSettings = {
-  apiBaseUrl: 'http://localhost:3000',
+  apiBaseUrl: window.location.origin,
   timeout: 30000,
   retryAttempts: 3,
   retryDelay: 1000,
